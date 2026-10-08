@@ -17,7 +17,7 @@ export default function BlogLayout({ children }: { children: ReactNode }) {
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
           <Link to="/" className="flex items-center gap-2.5 rounded-lg" aria-label="STODIA, ir al inicio">
             <img src="/brand/stodia-mark.svg" alt="" height={36} className="h-9 w-auto" />
-            <span className="text-lg font-extrabold tracking-[0.16em] text-ink">STODIA</span>
+            <img src="/brand/stodia-wordmark.svg" alt="" width={117} height={36} className="h-9 w-auto" />
           </Link>
           <nav aria-label="Principal" className="flex items-center gap-1 print:hidden">
             <Link to="/" className={`${link} hidden sm:inline-flex`}>Inicio</Link>

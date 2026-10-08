@@ -30,7 +30,8 @@ export default function ServerSetup() {
 
   return (
     <div className="flex min-h-full flex-col items-center justify-center bg-[#0B1B4A] px-5 py-8 pt-[max(2rem,env(safe-area-inset-top))]">
-      <img src="/brand/stodia-mark.svg" alt="STODIA" className="mb-4 h-20 w-auto" />
+      <img src="/brand/stodia-mark.svg" alt="" className="h-20 w-auto" />
+      <img src="/brand/stodia-wordmark.svg" alt="STODIA" className="mb-4 mt-2 h-12 w-auto" />
       <form onSubmit={submit} noValidate className="w-full max-w-md rounded-3xl bg-white/95 p-6 shadow-2xl">
         <h1 className="text-xl font-bold text-ink">Conectar con tu institución</h1>
         <p className="mb-5 mt-1 text-sm text-slate-500">Escribe la dirección del servidor STODIA que te dio tu institución.</p>

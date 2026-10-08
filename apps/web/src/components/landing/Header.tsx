@@ -35,7 +35,7 @@ export default function Header({ scrolled }: { scrolled: boolean }) {
       <div className={`mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 transition-all duration-300 sm:px-6 ${scrolled ? 'h-14' : 'h-[68px]'}`}>
         <Link to="/" className="flex items-center gap-2.5 rounded-lg" aria-label="STODIA, ir al inicio" onClick={close}>
           <img src="/brand/stodia-mark.svg" alt="" height={36} className="h-9 w-auto" />
-          <span className="text-lg font-extrabold tracking-[0.16em] text-ink">STODIA</span>
+          <img src="/brand/stodia-wordmark.svg" alt="" width={117} height={36} className="h-9 w-auto" />
         </Link>
 
         <nav aria-label="Principal" className="hidden items-center gap-1 lg:flex">
