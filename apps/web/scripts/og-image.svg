@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0F172A"/><stop offset="1" stop-color="#1E3A8A"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FDE047"/><stop offset="1" stop-color="#D97706"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="1040" cy="120" r="260" fill="#2563EB" opacity="0.28"/>
+  <circle cx="1120" cy="560" r="180" fill="#38BDF8" opacity="0.18"/>
+  <circle cx="90" cy="600" r="150" fill="#FACC15" opacity="0.12"/>
+  <!-- marca -->
+  <g transform="translate(90 90) scale(0.9)">
+    <rect width="150" height="150" rx="34" fill="#0B1220" stroke="#38BDF8" stroke-opacity="0.35" stroke-width="3"/>
+    <g transform="translate(-14 -6) scale(0.82)">
+      <path d="M 160 114 A 32 32 0 0 0 96 114 L 160 178 A 32 32 0 0 1 96 178" fill="none" stroke="#38BDF8" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+      <polygon points="128,50 154,62 128,74 102,62" fill="url(#gold)"/>
+    </g>
+  </g>
+  <text x="270" y="190" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="64" font-weight="800" letter-spacing="10" fill="#FFFFFF">STODIA</text>
+  <text x="90" y="340" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="68" font-weight="800" fill="#FFFFFF">Gestión escolar</text>
+  <text x="90" y="425" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="68" font-weight="800" fill="#FFFFFF">que sí se usa</text>
+  <path d="M 92 446 C 260 468 420 436 600 454" fill="none" stroke="#FACC15" stroke-width="12" stroke-linecap="round"/>
+  <text x="90" y="520" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="30" fill="#CBD5E1">Inscripción, notas, asistencia, cobros, comedor y portal de tutores.</text>
+  <text x="90" y="568" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="26" fill="#93C5FD">Para colegios de República Dominicana · En tu propio servidor</text>
+</svg>

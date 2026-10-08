@@ -1,0 +1,22 @@
+node_modules
+dist
+.env
+*.db
+*.db-journal
+data/
+.vite
+*.log
+.env.bak*
+
+# Android / Capacitor
+apps/web/android/build
+apps/web/android/app/build
+apps/web/android/.gradle
+apps/web/android/local.properties
+apps/web/android/capacitor-cordova-android-plugins
+apps/web/android/app/src/main/assets/public
+/dist
+
+# Claves privadas de licencia (nunca versionar)
+*.pem
+license-private*

@@ -1,0 +1,22 @@
+{
+  "name": "stodia",
+  "private": true,
+  "packageManager": "pnpm@9.12.3",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev:web": "pnpm --filter @stodia/web dev",
+    "dev:api": "pnpm --filter @stodia/api dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "desktop": "pnpm --filter @stodia/desktop start",
+    "license:keygen": "pnpm --filter @stodia/api exec tsx ../../scripts/license/cli.ts keygen",
+    "license:issue": "pnpm --filter @stodia/api exec tsx ../../scripts/license/cli.ts issue",
+    "license:inspect": "pnpm --filter @stodia/api exec tsx ../../scripts/license/cli.ts inspect",
+    "mobile:sync": "pnpm --filter @stodia/web build && pnpm --filter @stodia/web exec cap sync android",
+    "mobile:apk": "pnpm mobile:sync && cd apps/web/android && gradlew.bat assembleDebug",
+    "mobile:run": "pnpm --filter @stodia/web exec cap run android"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@prisma/client", "@prisma/engines", "prisma", "esbuild", "electron"]
+  }
+}

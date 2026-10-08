@@ -1,0 +1,13 @@
+{
+  "name": "@stodia/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shell Electron mínimo para STODIA (sin empaquetado todavía).",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.2.0"
+  }
+}

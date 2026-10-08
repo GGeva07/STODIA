@@ -1,0 +1,49 @@
+# Una instancia por cliente. Variables en .env (generado por install.ps1 / install.sh).
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: file:/data/stodia.db
+      JWT_SECRET: ${JWT_SECRET:-}
+      SEED_DEMO: ${SEED_DEMO:-false}
+      SEED_PASSWORD: ${SEED_PASSWORD:-}   # solo con SEED_DEMO=true (el admin real usa ADMIN_PASSWORD)
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_NAME: ${ADMIN_NAME:-Administrador}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      INSTITUTION_NAME: ${INSTITUTION_NAME:-}
+      TAX_ID: ${TAX_ID:-}
+      ADDRESS: ${ADDRESS:-}
+      CITY: ${CITY:-}
+      PHONE: ${PHONE:-}
+      CONTACT_EMAIL: ${CONTACT_EMAIL:-}
+      CURRENCY: ${CURRENCY:-DOP}
+      TIMEZONE: ${TIMEZONE:-America/Santo_Domingo}
+      TZ: ${TIMEZONE:-America/Santo_Domingo}
+      LICENSE_KEY: ${LICENSE_KEY:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}        # origen(es) de la web, p. ej. http://192.168.1.10:8080 (la app móvil siempre se permite)
+      SUPERVISOR_PIN: ${SUPERVISOR_PIN:-}  # solo valor inicial; luego se cambia en Configuración
+    volumes:
+      - stodia-data:/data
+    ports:
+      - "${API_PORT:-3000}:3000"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      API_URL: ${API_URL:-http://localhost:3000}
+      INSTITUTION_NAME: ${INSTITUTION_NAME:-}
+      API_PROXY_TARGET: http://api:3000   # habilita /api/ en el mismo origen (opcional: usar API_URL=/api)
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+volumes:
+  stodia-data:

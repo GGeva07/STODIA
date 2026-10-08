@@ -1,0 +1,54 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import type { LoginRequest, LoginResponse, SessionUser } from '@stodia/shared';
+import { api, tokenStore, UNAUTHORIZED_EVENT } from './api';
+
+const USER_KEY = 'stodia.user';
+
+interface SessionCtx {
+  user: SessionUser | null;
+  login: (c: LoginRequest) => Promise<SessionUser>;
+  logout: () => void;
+}
+
+const Ctx = createContext<SessionCtx | null>(null);
+
+function readUser(): SessionUser | null {
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw && tokenStore.get() ? (JSON.parse(raw) as SessionUser) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function SessionProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<SessionUser | null>(readUser);
+
+  const logout = useCallback(() => {
+    tokenStore.clear();
+    localStorage.removeItem(USER_KEY);
+    setUser(null);
+  }, []);
+
+  const login = useCallback(async (c: LoginRequest) => {
+    const res = await api.post<LoginResponse>('/auth/login', c);
+    tokenStore.set(res.token);
+    localStorage.setItem(USER_KEY, JSON.stringify(res.user));
+    setUser(res.user);
+    return res.user;
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener(UNAUTHORIZED_EVENT, logout);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, logout);
+  }, [logout]);
+
+  const value = useMemo(() => ({ user, login, logout }), [user, login, logout]);
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+}
+
+export function useSession() {
+  const v = useContext(Ctx);
+  if (!v) throw new Error('useSession fuera de SessionProvider');
+  return v;
+}

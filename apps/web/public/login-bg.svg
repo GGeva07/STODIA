@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1B4A"/>
+      <stop offset="0.55" stop-color="#1E3A8A"/>
+      <stop offset="1" stop-color="#4338CA"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.72" cy="0.38" r="0.55">
+      <stop offset="0" stop-color="#60A5FA" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#60A5FA" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.12" cy="0.9" r="0.5">
+      <stop offset="0" stop-color="#818CF8" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#818CF8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="hill1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1E3A8A" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#0B1B4A"/>
+    </linearGradient>
+    <linearGradient id="bld" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#DBEAFE" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#93C5FD" stop-opacity="0.85"/>
+    </linearGradient>
+    <pattern id="dots" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#fff" fill-opacity="0.09"/>
+    </pattern>
+    <pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M80 0H0V80" fill="none" stroke="#fff" stroke-opacity="0.04"/>
+    </pattern>
+  </defs>
+  <rect width="1600" height="900" fill="url(#sky)"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+  <rect width="1600" height="900" fill="url(#dots)"/>
+  <rect width="1600" height="900" fill="url(#glow)"/>
+  <rect width="1600" height="900" fill="url(#glow2)"/>
+
+  <!-- geometric shapes -->
+  <g fill="none" stroke="#fff" stroke-opacity="0.14" stroke-width="2">
+    <circle cx="1280" cy="170" r="120"/>
+    <circle cx="1280" cy="170" r="180" stroke-opacity="0.08"/>
+    <rect x="140" y="120" width="90" height="90" rx="18" transform="rotate(14 185 165)"/>
+    <path d="M420 250l46 80h-92z"/>
+  </g>
+  <g fill="#fff" fill-opacity="0.07">
+    <circle cx="1480" cy="420" r="46"/>
+    <rect x="60" y="460" width="70" height="70" rx="16" transform="rotate(-12 95 495)"/>
+    <path d="M980 90l34 60h-68z"/>
+  </g>
+  <!-- stars/sparks -->
+  <g fill="#BFDBFE" fill-opacity="0.7">
+    <circle cx="900" cy="140" r="3"/><circle cx="1120" cy="80" r="2"/><circle cx="640" cy="90" r="2.5"/>
+    <circle cx="1450" cy="260" r="3"/><circle cx="760" cy="300" r="2"/><circle cx="300" cy="400" r="2"/>
+  </g>
+
+  <!-- back hills -->
+  <path d="M0 700C220 640 420 660 640 690S1060 720 1300 670 1500 650 1600 670V900H0Z" fill="url(#hill1)" fill-opacity="0.7"/>
+
+  <!-- school building (centered right) -->
+  <g transform="translate(860 430)">
+    <g opacity="0.55">
+      <!-- main block -->
+      <rect x="40" y="130" width="440" height="190" rx="4" fill="url(#bld)"/>
+      <!-- wings -->
+      <rect x="-120" y="190" width="170" height="130" rx="4" fill="url(#bld)"/>
+      <rect x="470" y="190" width="170" height="130" rx="4" fill="url(#bld)"/>
+      <!-- pediment -->
+      <path d="M170 130L260 50L350 130Z" fill="#fff" fill-opacity="0.95"/>
+      <rect x="236" y="-12" width="48" height="62" fill="#fff"/>
+      <path d="M232 -12L260 -48L288 -12Z" fill="#2563EB"/>
+      <circle cx="260" cy="12" r="14" fill="#2563EB"/>
+      <path d="M260 12V4M260 12H266" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+      <!-- columns -->
+      <g fill="#fff" fill-opacity="0.95">
+        <rect x="180" y="140" width="12" height="130"/><rect x="224" y="140" width="12" height="130"/>
+        <rect x="284" y="140" width="12" height="130"/><rect x="328" y="140" width="12" height="130"/>
+      </g>
+      <!-- door -->
+      <rect x="244" y="220" width="32" height="100" rx="16" fill="#1E3A8A"/>
+      <!-- windows -->
+      <g fill="#1E3A8A" fill-opacity="0.75">
+        <rect x="70" y="170" width="34" height="46" rx="4"/><rect x="118" y="170" width="34" height="46" rx="4"/>
+        <rect x="368" y="170" width="34" height="46" rx="4"/><rect x="416" y="170" width="34" height="46" rx="4"/>
+        <rect x="70" y="244" width="34" height="46" rx="4"/><rect x="118" y="244" width="34" height="46" rx="4"/>
+        <rect x="368" y="244" width="34" height="46" rx="4"/><rect x="416" y="244" width="34" height="46" rx="4"/>
+        <rect x="-96" y="220" width="30" height="42" rx="4"/><rect x="-52" y="220" width="30" height="42" rx="4"/>
+        <rect x="500" y="220" width="30" height="42" rx="4"/><rect x="544" y="220" width="30" height="42" rx="4"/><rect x="588" y="220" width="30" height="42" rx="4"/>
+      </g>
+      <!-- steps -->
+      <rect x="170" y="320" width="180" height="10" fill="#fff" fill-opacity="0.9"/>
+      <rect x="150" y="330" width="220" height="10" fill="#fff" fill-opacity="0.75"/>
+    </g>
+  </g>
+
+  <!-- ground -->
+  <path d="M0 790C300 760 600 780 900 775S1400 750 1600 770V900H0Z" fill="#0B1B4A"/>
+  <path d="M0 830C400 805 800 825 1200 815S1500 805 1600 812V900H0Z" fill="#081338"/>
+
+  <!-- stacked books (right foreground) -->
+  <g transform="translate(1330 700)" opacity="0.9">
+    <rect x="0" y="62" width="190" height="26" rx="5" fill="#2563EB"/>
+    <rect x="8" y="64" width="174" height="4" fill="#fff" fill-opacity="0.35"/>
+    <rect x="14" y="36" width="170" height="26" rx="5" fill="#6366F1"/>
+    <rect x="22" y="38" width="154" height="4" fill="#fff" fill-opacity="0.35"/>
+    <rect x="4" y="10" width="176" height="26" rx="5" fill="#60A5FA"/>
+    <rect x="12" y="12" width="160" height="4" fill="#fff" fill-opacity="0.45"/>
+  </g>
+  <!-- open book (left foreground) -->
+  <g transform="translate(120 720)" opacity="0.85">
+    <path d="M0 20Q70 -6 140 20V84Q70 58 0 84Z" fill="#DBEAFE"/>
+    <path d="M140 20Q210 -6 280 20V84Q210 58 140 84Z" fill="#BFDBFE"/>
+    <path d="M140 20V84" stroke="#1E3A8A" stroke-opacity="0.4" stroke-width="2"/>
+    <g stroke="#1E3A8A" stroke-opacity="0.25" stroke-width="3" stroke-linecap="round">
+      <path d="M22 38Q70 22 118 38M22 54Q70 38 118 54M22 70Q70 54 118 70"/>
+      <path d="M162 38Q210 22 258 38M162 54Q210 38 258 54M162 70Q210 54 258 70"/>
+    </g>
+  </g>
+  <!-- pencil -->
+  <g transform="translate(700 800) rotate(-8)" opacity="0.85">
+    <rect x="0" y="0" width="150" height="14" rx="3" fill="#FBBF24"/>
+    <path d="M150 0L178 7L150 14Z" fill="#FDE68A"/>
+    <path d="M170 4.5L178 7L170 9.5Z" fill="#1E293B"/>
+    <rect x="0" y="0" width="16" height="14" rx="3" fill="#F472B6"/>
+  </g>
+  <!-- trees silhouettes -->
+  <g fill="#0B1B4A" fill-opacity="0.9">
+    <circle cx="760" cy="700" r="46"/><rect x="755" y="720" width="10" height="70"/>
+    <circle cx="1560" cy="690" r="40"/><rect x="1555" y="710" width="10" height="70"/>
+  </g>
+</svg>

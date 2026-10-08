@@ -1,0 +1,421 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String @id @default(cuid())
+  usuario      String @unique
+  nombre       String
+  rol          String
+  passwordHash String
+  estado       String @default("Activo")
+}
+
+model Tutor {
+  id         String   @id
+  nombre     String
+  cedula     String
+  parentesco String
+  tipo       String
+  tel        String
+  email      String?
+  rnc        String?
+  usuario    String?
+  estado     String   @default("Activo")
+  alumnos    Alumno[]
+}
+
+model Alumno {
+  id        String  @id
+  code      String  @unique
+  nombres   String
+  apellidos String
+  fnac      String
+  grado     String
+  sec       String
+  tanda     String
+  cuenta    String
+  estado    String
+  alg       String  @default("")
+  dir       String  @default("")
+  tel       String  @default("")
+  tutorId   String?
+  tutor     Tutor?  @relation(fields: [tutorId], references: [id])
+  roster    AcadRoster?
+}
+
+// Catálogos maestros genéricos (CAT_DEF): `data` = JSON serializado del registro.
+model Catalogo {
+  id     String @id
+  tipo   String
+  data   String
+  estado String @default("Activo")
+
+  @@index([tipo])
+}
+
+// ---- Móvil (portal tutor + pase de lista) ----
+model MobCargo {
+  id       String  @id
+  alumnoId String
+  concepto String
+  vence    String
+  monto    Float
+  estado   String // Vencida | Por vencer | Pendiente
+  pagado   Boolean @default(false)
+
+  @@index([alumnoId])
+}
+
+model MobNota {
+  id       String @id
+  alumnoId String
+  materia  String
+  valor    Float
+
+  @@index([alumnoId])
+}
+
+model MobWallet {
+  alumnoId String @id
+  saldo    Float
+  limite   Float
+}
+
+model MobAcceso {
+  id       String   @id @default(cuid())
+  alumnoId String
+  hora     String
+  resultado String // ok | alert | no
+  creado   DateTime @default(now())
+
+  @@index([alumnoId])
+}
+
+model MobAsistencia {
+  id        String  @id @default(cuid())
+  fecha     String
+  seccion   String
+  alumnoId  String
+  estado    String // P | T | AJ | AI
+  notificar Boolean @default(true)
+
+  @@unique([fecha, seccion, alumnoId])
+}
+
+// ---- Operación: comedor, planes de alimentación, comunicaciones ----
+model AliPlan {
+  id       String @id
+  name     String
+  modelo   String // sub | wal
+  meals    String // JSON boolean[4]
+  precio   Float?
+  freq     String
+  dias     String
+  mora     Boolean
+  recarga  Float?
+  limite   Float?
+  canal    String
+  saldo    String
+  diets    String // JSON boolean[4]
+  estado   String @default("Activo")
+  inscritos Int    @default(0)
+}
+
+model AliMenu {
+  orden Int    @id
+  dia   String
+  plato String
+  algs  String // JSON string[]
+}
+
+// Carnet de comedor (EST-0412). wallet/spent = monedero virtual y consumo del día.
+model ComCarnet {
+  code      String @id
+  name      String
+  grado     String
+  plan      String
+  ok        Boolean
+  allergies String // JSON string[]
+  restr     String
+  limit     Float
+  motivo    String @default("")
+  wallet    Float
+  spent     Float
+}
+
+model ComLectura {
+  id    String   @id @default(cuid())
+  t     String
+  n     String
+  s     String // ok | alert | no
+  creado DateTime @default(now())
+}
+
+model CmnMensaje {
+  id     Int    @id @default(autoincrement())
+  batch  String @default("")
+  t      String
+  to     String
+  canal  String
+  asunto String
+  estado String // En cola | Entregado | Fallido
+  by     String
+}
+
+// ---------- Finanzas (POS/Cobros, Kiosko, Inventario, Planes de Pago, Becas) ----------
+model FinCobroItem {
+  id       String  @id
+  tutorCed String  @default("00100239401")
+  kid      String
+  con      String
+  al       String
+  vence    String
+  monto    Float
+  est      String
+  tipo     String
+  paid     Boolean @default(false)
+  abono    Boolean @default(false)
+  orden    Int     @default(0)
+}
+
+model FinRecibo {
+  id        String  @id
+  ncf       String
+  tutor     String
+  hora      String
+  monto     Float
+  est       String  @default("Activo")
+  metodo    String
+  abono     Boolean @default(false)
+  saldo     Float   @default(0)
+  nc        String?
+  change    Float   @default(0)
+  items     String  @default("[]")
+  pays      String  @default("[]")
+  createdAt DateTime @default(now())
+}
+
+model FinCounter {
+  key   String @id
+  value Int
+}
+
+model FinPlan {
+  id      String @id
+  name    String
+  estado  String @default("Activo")
+  alumnos Int    @default(0)
+  data    String
+}
+
+model FinBeca {
+  id        String @id
+  periodo   String
+  est       String
+  grado     String
+  tipo      String
+  regla     String
+  conceptos String
+  exp       String
+  estado    String
+  aprob     String
+  createdAt DateTime @default(now())
+}
+
+model FinProducto {
+  id    String  @id
+  code  String  @unique
+  name  String
+  cat   String
+  price Float
+  tax   Boolean @default(false)
+  stock Int?
+  icon  String
+}
+
+model FinMovimiento {
+  id        Int      @id @default(autoincrement())
+  t         String
+  tipo      String
+  name      String
+  q         String
+  ref       String
+  createdAt DateTime @default(now())
+}
+
+model FinVenta {
+  id        String   @id
+  ncf       String
+  total     Float
+  metodo    String
+  doc       String
+  createdAt DateTime @default(now())
+}
+
+// ---- Sistema (licencia, configuración, auditoría) ----
+model SisAudit {
+  id       String @id @default(cuid())
+  t        String // 'YYYY-MM-DD HH:mm:ss' UTC
+  usr      String
+  accion   String // Insert | Update | Delete
+  tabla    String
+  registro String
+  prev     String @default("")
+  next     String @default("")
+  ip       String @default("")
+
+  @@index([t])
+}
+
+// Clave/valor JSON: licencia, perfil, assets, ncf, ecf, ciclos, access
+model SisConfig {
+  clave String @id
+  valor String
+}
+
+// ---------- Académico (Acad*) ----------
+// Nómina de una sección (mock del prototipo: STU_ATT).
+model AcadRoster {
+  id          String           @id
+  // id de la sección del catálogo; solo manda para nómina sin Alumno enlazado (la de un Alumno sale de su grado/sección).
+  seccion     String
+  orden       Int
+  nombre      String
+  // Vínculo con Alumno cuando la demo los trata como el mismo alumno (p. ej. Juan 0412). Nulo = solo figura en la nómina del prototipo.
+  alumnoId    String?          @unique
+  alumno      Alumno?          @relation(fields: [alumnoId], references: [id])
+  notas       AcadNota[]
+  asistencias AcadAsistencia[]
+
+  @@index([seccion])
+}
+
+model AcadNota {
+  id       String     @id @default(cuid())
+  rosterId String
+  roster   AcadRoster @relation(fields: [rosterId], references: [id], onDelete: Cascade)
+  materia  String
+  periodo  String
+  c1       Float?
+  c2       Float?
+  c3       Float?
+  c4       Float?
+  ex       Float?
+
+  @@unique([rosterId, materia, periodo])
+}
+
+model AcadAsistencia {
+  id        String     @id @default(cuid())
+  rosterId  String
+  roster    AcadRoster @relation(fields: [rosterId], references: [id], onDelete: Cascade)
+  fecha     String
+  estado    String
+  notificar Boolean    @default(true)
+
+  @@unique([rosterId, fecha])
+}
+
+// Asignación docente x sección x materia (ids del catálogo). Una por (sección, materia).
+// aulas = JSON de ids de aula (catálogo) posibles (vacío = aula base de la sección; la primera es la predeterminada).
+model AcadAsignacion {
+  id        String @id @default(cuid())
+  docenteId String
+  seccionId String
+  materiaId String
+  aulas     String @default("[]")
+
+  @@unique([seccionId, materiaId])
+  @@index([docenteId])
+}
+
+// seccion = id de la sección del catálogo; slot = 'dia-bloque' (ej. '0-1') con materia = id de materia del catálogo.
+// Filas especiales slot='_aula:<materiaId>' guardan el aula elegida (id de aula) para materias con varias aulas posibles.
+model AcadHorario {
+  id      String @id @default(cuid())
+  seccion String
+  slot    String
+  materia String
+
+  @@unique([seccion, slot])
+}
+
+model AcadExtra {
+  id         String @id
+  name       String
+  cat        String
+  kind       String
+  instructor String
+  lugar      String
+  dias       String
+  hora       String
+  grados     String
+  cupo       Int
+  inscritos  Int    @default(0)
+  costo      Float  @default(0)
+  ini        String @default("")
+  sem        Int    @default(0)
+  estado     String @default("Abierta")
+}
+
+// ---------- Personas (Directorio, Expediente 360, Inscripción) ----------
+model PersExpediente {
+  alumnoId String @id
+  data     String @default("{}") // ficha JSON (ExpFicha)
+}
+
+model PersDocumento {
+  id       String @id
+  alumnoId String
+  n        String
+  f        String
+  est      String // Validado | Pendiente | En revisión
+  orden    Int    @default(0)
+
+  @@index([alumnoId])
+}
+
+model PersServicio {
+  id       String @id
+  alumnoId String
+  kind     String // rec | once
+  catKey   String
+  name     String
+  icon     String @default("")
+  spec     String @default("")
+  cost     Float
+  corte    String @default("")
+  est      String @default("Activo") // Activo | Baja · dd/mm/aaaa
+  alert    String @default("")
+  fecha    String @default("")
+  st       String @default("") // once: cobrado | cargado | prog
+  mes      String @default("")
+  recibo   String @default("")
+
+  @@index([alumnoId])
+}
+
+model PersCupo {
+  id      String @id
+  tanda   String
+  seccion String
+  cap     Int
+  used    Int    @default(0)
+}
+
+model PersInscripcion {
+  id        String   @id
+  alumnoId  String
+  ncf       String
+  factura   Float
+  plan      String
+  cuotas    Int
+  firma     String
+  createdAt DateTime @default(now())
+}

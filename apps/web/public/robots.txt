@@ -1,0 +1,39 @@
+# STODIA - robots.txt
+# Dominio placeholder (https://stodia.com.do): se reescribe al compilar con VITE_SITE_URL.
+User-agent: *
+Allow: /
+Allow: /terminos
+Allow: /privacidad
+Allow: /cookies
+Allow: /derechos-arco
+
+# Rutas de la aplicación (requieren sesión; no aportan valor SEO)
+Disallow: /login
+Disallow: /m/
+Disallow: /servidor
+Disallow: /sin-acceso
+Disallow: /api/
+Disallow: /config
+Disallow: /dashboard
+Disallow: /notas
+Disallow: /asistencia
+Disallow: /horarios
+Disallow: /extra
+Disallow: /directorio
+Disallow: /expediente
+Disallow: /tutores
+Disallow: /inscripcion
+Disallow: /pos
+Disallow: /planes
+Disallow: /kiosko
+Disallow: /inventario
+Disallow: /becas
+Disallow: /comedor
+Disallow: /alimentacion
+Disallow: /portal
+Disallow: /comunica
+Disallow: /catalogos
+Disallow: /auditoria
+Disallow: /licencia
+
+Sitemap: https://stodia.com.do/sitemap.xml
