@@ -1,0 +1,6 @@
+{
+  "installCommand": "npm --prefix landing-site install",
+  "buildCommand": "npm --prefix landing-site run build",
+  "outputDirectory": "landing-site/dist",
+  "framework": "vite"
+}

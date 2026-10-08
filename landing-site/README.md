@@ -13,4 +13,4 @@ Variables opcionales (archivo `.env.local`):
 
 ## Vercel
 
-Importa el repositorio y configura **Root Directory** como `landing-site`. Para evitar que Vercel use el lockfile pnpm del monorepo, fija **Install Command** a `npm install`; usa **Build Command** `npm run build` y directorio de salida `dist`. No se necesita instalar ni compilar el workspace padre o `apps/web`. Configura `VITE_SITE_URL` si el dominio público difiere del default y `VITE_APP_URL` si la app principal tiene otro host/login.
+Importa el repositorio. Puedes configurar **Root Directory** como `landing-site` y Vercel usará la configuración de esta carpeta (`npm install`, `npm run build`, salida `dist`). Si dejas como raíz el repositorio, el [vercel.json](../vercel.json) instala y compila solo esta landing mediante `npm --prefix landing-site`; no instala ni compila el workspace pnpm ni `apps/web`. En cualquiera de las dos opciones, configura `VITE_SITE_URL` si el dominio público difiere del default y `VITE_APP_URL` si la app principal tiene otro host/login.
