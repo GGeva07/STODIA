@@ -11,6 +11,8 @@ const ASIS: Record<string, [string, string]> = { P: ['Presente', 'bg-ok-bg text-
 const TABS = [['inicio', 'Inicio', 'ph-house'], ['notas', 'Notas', 'ph-graduation-cap'], ['comedor', 'Comedor', 'ph-fork-knife']] as const;
 type Tab = (typeof TABS)[number][0];
 
+/** Datos de tarjeta de prueba: solo existen en el build de desarrollo (import.meta.env.DEV); nunca en producción. */
+const DEV_CARD = import.meta.env.DEV ? { num: '4111 1111 1111 1111', exp: '08/29', cvv: '•••' } : { num: '', exp: '', cvv: '' };
 const dkey = (v: string) => v.split('/').reverse().join('-');
 const balance = (k: MobHijo) => k.cargos.filter(c => c.estado !== 'Pendiente').reduce((a, c) => a + c.monto, 0);
 
@@ -67,7 +69,10 @@ export default function TutorApp() {
             <Comedor
               kid={kid}
               menu={data.menu}
-              onRecarga={v => run(api.put(`/movil/tutor/wallet/${kid.id}`, { recarga: v }), `Recarga de ${fmt(v)} aplicada al monedero de ${kid.nombre.split(' ')[0]}`)}
+              recargas={data.recargas ?? []}
+              onRecarga={v => api.put<{ intencion?: string }>(`/movil/tutor/wallet/${kid.id}`, { recarga: v })
+                .then(r => { flash(r.intencion ? `Solicitud de recarga de ${fmt(v)} registrada · págala en administración y se acredita al verificarla` : `Recarga de ${fmt(v)} aplicada al monedero de ${kid.nombre.split(' ')[0]}`); return load(); })
+                .catch(e => flash(e.message))}
               onLimite={v => run(api.put(`/movil/tutor/wallet/${kid.id}`, { limite: v }), 'Límite actualizado')}
             />
           )}
@@ -87,22 +92,48 @@ export default function TutorApp() {
         {pay && kid && (
           <div className="absolute inset-0 z-30 flex items-end bg-ink/40" onClick={() => setPay(false)}>
             <div className="w-full space-y-3 rounded-t-3xl bg-white p-5 pb-8" onClick={e => e.stopPropagation()}>
-              <div className="flex items-center justify-between">
-                <span className="text-[17px] font-semibold">Pago con tarjeta</span>
-                <button onClick={() => setPay(false)} aria-label="Cerrar" className="h-8 w-8 rounded-full bg-slate-100"><i className="ph ph-x" /></button>
-              </div>
-              <label className="flex flex-col gap-1 text-xs text-slate-600">Número de tarjeta<input defaultValue="4111 1111 1111 1111" inputMode="numeric" className="h-[46px] rounded-[10px] border border-slate-300 px-3 font-mono text-[15px] text-ink" /></label>
-              <div className="flex gap-2">
-                <label className="flex flex-1 flex-col gap-1 text-xs text-slate-600">Vence<input defaultValue="08/29" className="h-[46px] w-full rounded-[10px] border border-slate-300 px-3 font-mono text-[15px] text-ink" /></label>
-                <label className="flex flex-1 flex-col gap-1 text-xs text-slate-600">CVV<input defaultValue="•••" className="h-[46px] w-full rounded-[10px] border border-slate-300 px-3 font-mono text-[15px] text-ink" /></label>
-              </div>
-              <button
-                className="h-[52px] w-full rounded-xl bg-accent text-[15px] font-semibold text-white"
-                onClick={() => { setPay(false); run(api.post('/movil/tutor/pagar', { alumnoId: kid.id }), 'Pago en línea aprobado · ' + fmt(balance(kid))); }}
-              >
-                Pagar {fmt(balance(kid))}
-              </button>
-              <span className="block text-center text-[11px] text-slate-500">Conexión cifrada TLS 1.3 · Recibo electrónico con NCF por correo</span>
+              {data?.pago?.modo === 'demo' ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[17px] font-semibold">Pago con tarjeta</span>
+                    <button onClick={() => setPay(false)} aria-label="Cerrar" className="h-8 w-8 rounded-full bg-slate-100"><i className="ph ph-x" /></button>
+                  </div>
+                  {/* Tarjeta de prueba solo en desarrollo; en un build de producción el formulario sale vacío. */}
+                  <label className="flex flex-col gap-1 text-xs text-slate-600">Número de tarjeta<input defaultValue={DEV_CARD.num} placeholder="0000 0000 0000 0000" inputMode="numeric" className="h-[46px] rounded-[10px] border border-slate-300 px-3 font-mono text-[15px] text-ink" /></label>
+                  <div className="flex gap-2">
+                    <label className="flex flex-1 flex-col gap-1 text-xs text-slate-600">Vence<input defaultValue={DEV_CARD.exp} placeholder="MM/AA" className="h-[46px] w-full rounded-[10px] border border-slate-300 px-3 font-mono text-[15px] text-ink" /></label>
+                    <label className="flex flex-1 flex-col gap-1 text-xs text-slate-600">CVV<input defaultValue={DEV_CARD.cvv} placeholder="CVV" className="h-[46px] w-full rounded-[10px] border border-slate-300 px-3 font-mono text-[15px] text-ink" /></label>
+                  </div>
+                  <button
+                    className="h-[52px] w-full rounded-xl bg-accent text-[15px] font-semibold text-white"
+                    onClick={() => { setPay(false); run(api.post('/movil/tutor/pagar', { alumnoId: kid.id }), 'Pago en línea aprobado · ' + fmt(balance(kid))); }}
+                  >
+                    Pagar {fmt(balance(kid))}
+                  </button>
+                  <span className="block text-center text-[11px] text-slate-500">Conexión cifrada TLS 1.3 · Recibo electrónico con NCF por correo</span>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[17px] font-semibold">Registra tu pago en administración</span>
+                    <button onClick={() => setPay(false)} aria-label="Cerrar" className="h-8 w-8 rounded-full bg-slate-100"><i className="ph ph-x" /></button>
+                  </div>
+                  <div className="whitespace-pre-line rounded-xl bg-slate-50 p-3.5 text-sm leading-relaxed text-slate-700">
+                    {data?.pago?.instrucciones || 'Comunícate con administración del colegio para coordinar tu pago (efectivo, transferencia o tarjeta en caja).'}
+                  </div>
+                  <div className="flex justify-between text-[13px]"><span className="text-slate-600">Monto a pagar</span><b className="font-mono">{fmt(balance(kid))}</b></div>
+                  {kid.pagosPendientes?.some(p => p.tipo === 'cargos') && (
+                    <p className="rounded-lg bg-warn-bg px-3 py-2 text-xs text-warn-fg">Ya avisaste un pago el {kid.pagosPendientes.find(p => p.tipo === 'cargos')!.creado.slice(0, 10)}: administración lo está verificando.</p>
+                  )}
+                  <button
+                    className="h-[52px] w-full rounded-xl bg-accent text-[15px] font-semibold text-white"
+                    onClick={() => { setPay(false); run(api.post('/movil/tutor/pagar', { alumnoId: kid.id }), 'Aviso enviado · tu balance se actualiza cuando administración verifique el pago'); }}
+                  >
+                    Ya realicé mi pago · avisar
+                  </button>
+                  <span className="block text-center text-[11px] text-slate-500">Tu balance no cambia hasta que administración confirme el pago.</span>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -117,13 +148,15 @@ function Inicio({ kid, onPay }: { kid: MobHijo; onPay: () => void }) {
   const note =
     bal === 0 ? ['Estás al día. ¡Gracias!', 'text-green-300']
     : due.some(c => c.estado === 'Vencida') ? ['Incluye cuotas vencidas con recargo por mora', 'text-red-300']
-    : ['Próximo vencimiento: ' + due[0].vence, 'text-amber-300'];
+    : ['Próximo vencimiento: ' + due[0]?.vence, 'text-amber-300'];
+  const enVerif = kid.pagosPendientes?.filter(p => p.tipo === 'cargos') ?? [];
   return (
     <>
       <div className="flex flex-col gap-1.5 rounded-2xl bg-ink p-[18px] text-canvas">
         <span className="text-[13px] text-slate-400">Balance pendiente · {kid.nombre.split(' ')[0]}</span>
         <span className="font-mono text-[28px] font-semibold tracking-tight">{fmt(bal)}</span>
         <span className={`text-xs ${note[1]}`}>{note[0]}</span>
+        {enVerif.length > 0 && <span className="text-xs text-amber-300">Pago de {fmt(enVerif.reduce((a, p) => a + p.monto, 0))} en verificación por administración</span>}
         <button disabled={bal === 0} onClick={onPay} className="mt-2 h-12 rounded-xl bg-accent text-[15px] font-semibold text-white disabled:opacity-40">Pagar ahora</button>
       </div>
       <div className="text-[13px] font-semibold text-slate-600">Cuotas</div>
@@ -171,32 +204,46 @@ function Notas({ kid }: { kid: MobHijo }) {
   );
 }
 
-function Comedor({ kid, menu, onRecarga, onLimite }: { kid: MobHijo; menu: MobTutorData['menu']; onRecarga: (v: number) => void; onLimite: (v: number) => void }) {
-  const [lim, setLim] = useState(kid.wallet.limite);
-  useEffect(() => setLim(kid.wallet.limite), [kid.id, kid.wallet.limite]);
-  const alg = kid.alergias.toLowerCase();
-  const commit = () => { if (lim !== kid.wallet.limite) onLimite(lim); };
+const sinAcento = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+function Comedor({ kid, menu, recargas, onRecarga, onLimite }: { kid: MobHijo; menu: MobTutorData['menu']; recargas: number[]; onRecarga: (v: number) => void; onLimite: (v: number) => void }) {
+  const w = kid.wallet;
+  const [lim, setLim] = useState(w?.limite ?? 0);
+  useEffect(() => setLim(w?.limite ?? 0), [kid.id, w?.limite]);
+  const alg = sinAcento(kid.alergias);
+  const commit = () => { if (w && lim !== w.limite) onLimite(lim); };
+  const pendRec = kid.pagosPendientes?.filter(p => p.tipo === 'recarga') ?? [];
   return (
     <>
       <div className="space-y-2.5 rounded-2xl border border-slate-200 bg-white p-4">
         <span className="text-[13px] text-slate-500">Monedero de {kid.nombre.split(' ')[0]}</span>
-        <div className="font-mono text-[26px] font-semibold">{fmt(kid.wallet.saldo)}</div>
-        <div className="flex gap-1.5">
-          {[500, 1000, 2000].map(v => (
-            <button key={v} onClick={() => onRecarga(v)} className="h-10 flex-1 rounded-[10px] border border-blue-200 bg-blue-50 font-mono text-[13px] font-semibold text-info-fg">+{v.toLocaleString('en-US')}</button>
-          ))}
-        </div>
-        <div className="flex justify-between pt-1 text-[13px]"><span>Límite de gasto diario</span><b className="font-mono">{fmt(lim)}</b></div>
-        <input type="range" min={100} max={1000} step={50} value={lim} onChange={e => setLim(Number(e.target.value))} onPointerUp={commit} onKeyUp={commit} className="h-8 w-full accent-accent" />
+        <div className="font-mono text-[26px] font-semibold">{fmt(w?.saldo ?? 0)}</div>
+        {!w && <p className="text-xs text-slate-500">Aún no hay monedero activo. Tu primera recarga lo activa.</p>}
+        {recargas.length > 0 && (
+          <div className="flex gap-1.5">
+            {recargas.map(v => (
+              <button key={v} onClick={() => onRecarga(v)} className="h-10 flex-1 rounded-[10px] border border-blue-200 bg-blue-50 font-mono text-[13px] font-semibold text-info-fg">+{v.toLocaleString('en-US')}</button>
+            ))}
+          </div>
+        )}
+        {pendRec.length > 0 && <p className="rounded-lg bg-warn-bg px-3 py-2 text-xs text-warn-fg">Recarga en verificación: {fmt(pendRec.reduce((a, p) => a + p.monto, 0))}. Se acredita cuando administración la confirme.</p>}
+        {w && (
+          <>
+            <div className="flex justify-between pt-1 text-[13px]"><span>Límite de gasto diario</span><b className="font-mono">{fmt(lim)}</b></div>
+            <input type="range" min={100} max={1000} step={50} value={lim} onChange={e => setLim(Number(e.target.value))} onPointerUp={commit} onKeyUp={commit} className="h-8 w-full accent-accent" />
+          </>
+        )}
       </div>
       <div className="text-[13px] font-semibold text-slate-600">Menú de la semana</div>
+      {menu.length === 0 && <p className="text-sm text-slate-500">El menú de esta semana aún no ha sido publicado.</p>}
       {menu.map(m => {
-        const warn = !!m.alergeno && alg.includes(m.alergeno.slice(0, 4));
+        const hit = m.algs.filter(a => alg.includes(sinAcento(a).slice(0, 4)));
+        const warn = hit.length > 0;
         return (
           <div key={m.dia} className={`space-y-1 rounded-xl border bg-white px-3.5 py-3 ${warn ? 'border-red-300' : 'border-slate-200'}`}>
             <div className="flex justify-between">
               <span className="text-xs font-semibold text-slate-500">{m.dia}</span>
-              {warn && <span className="text-[11px] font-semibold text-bad-fg">⚠ Contiene {m.alergeno}</span>}
+              {warn && <span className="text-[11px] font-semibold text-bad-fg">⚠ Contiene {hit.map(a => a.toLowerCase()).join(', ')}</span>}
             </div>
             <span className="text-sm">{m.plato}</span>
           </div>

@@ -37,24 +37,79 @@ docker compose up -d --build
 
 ## Instalación en un cliente
 
-El proveedor ejecuta `install.ps1` (Windows) o `sh install.sh` (Linux/macOS) en el equipo del cliente. Pide, con valor
-por defecto y validación: URL pública de la API `[http://localhost:3000]`, nombre de la institución, RNC (9 dígitos),
-dirección, ciudad/provincia, teléfono, correo de contacto, nombre completo del administrador, usuario admin `[admin]`,
-contraseña del admin (oculta, dos veces, mínimo 8; vacía = se genera una aleatoria y se muestra **una sola vez** al final),
-clave de licencia (`STODIA1.*`, trae el plan; se valida formato y, con Node instalado, firma y vigencia), puerto web `[8080]`, zona horaria
-`[America/Santo_Domingo]` y moneda `[DOP]`. Escribe `.env` (permisos 600, con `JWT_SECRET` aleatorio y `SEED_DEMO=false`),
-ejecuta `docker compose up -d --build` e imprime un resumen (URL web, URL API, usuario; la contraseña solo si fue generada).
+Requisitos: Docker con Compose v2 (opcional: Node 20 para validar la firma de la licencia antes de instalar).
+El proveedor ejecuta `install.ps1` (Windows) o `sh install.sh` (Linux/macOS) en el equipo del cliente, desde la raíz del repo.
 
-Instalación desatendida: `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Config respuestas.env` o
-`sh install.sh --config respuestas.env` (claves = las de `.env.example`; las no indicadas toman su valor por defecto,
-una contraseña vacía se genera; si falta un dato obligatorio o es inválido, aborta).
+**Preguntas** (con valor por defecto y validación; mismo orden en ambos scripts): URL pública de la API `[http://localhost:3000]`
+(o `/api` para servirla tras el proxy de la web), institución, RNC (9 dígitos), dirección, ciudad, teléfono, correo de contacto,
+nombre y usuario del admin `[admin]`, **contraseña del admin** (oculta, dos veces, mín. 8; vacía = se genera), **PIN de supervisor**
+(oculto, dos veces, 4–8 caracteres; vacío = 6 dígitos aleatorios), clave de licencia `STODIA1.*` (trae el plan; formato y, con Node, firma y vigencia),
+puerto web `[8080]`, puerto de la API `[3000]`, **URL pública de la web** (origen CORS; por defecto `http://<host de la API>:<puerto web>`; se cambia si difiere),
+zona horaria `[America/Santo_Domingo]`, moneda `[DOP]` y, opcional, **correo saliente** (`¿Configurar correo saliente ahora? (s/n) [n]`: servidor,
+puerto `[587]`, usuario, contraseña oculta, remitente).
 
-En el primer arranque el API (`src/seed-instalacion.ts`, idempotente, no pisa lo editado luego en la app) crea el
-Super Admin real (bcrypt), vuelca institución/RNC/dirección/teléfono/correo/moneda/zona horaria en el perfil
-(`SisConfig 'perfil'`) y la clave de licencia (SisConfig `licenciaClave`; plan, módulos, cuotas y vencimiento salen de su payload firmado). Con `SEED_DEMO=false`
-no existen usuarios demo ni la contraseña `stodia123`; el seed demo solo corre con `SEED_DEMO=true` (dev lo deja en true).
-`ADMIN_PASSWORD` en `.env` solo se usa en el primer arranque: puede borrarse después. `/config.json` de la web recibe
-`apiUrl`, `licenseKey` e `institutionName`.
+**Qué hace**: escribe `.env` (permisos 600; en Windows, ACL solo para el usuario actual; `JWT_SECRET` aleatorio, conservado al reinstalar;
+`SEED_DEMO=false`), ejecuta `docker compose up -d --build`, espera `/health` y, si responde, **borra `ADMIN_PASSWORD` y `SUPERVISOR_PIN`
+del `.env`** (el seed ya los consumió) y recrea solo el contenedor de la API para que tampoco queden en su entorno. Si `/health` no responde no los
+borra y lo avisa: bórralos a mano (valores vacíos) y ejecuta `docker compose up -d`. El resumen final muestra la contraseña y el PIN
+**solo si se generaron, una única vez**. Con `API_URL=/api` pone `TRUST_PROXY=true` y publica la API solo en `127.0.0.1`.
+
+**Desatendido**: `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Config respuestas.env` o `sh install.sh --config respuestas.env`
+(claves = las de `.env.example`; las no indicadas toman su valor por defecto; contraseña/PIN vacíos se generan; un dato obligatorio
+faltante o inválido aborta). Con comillas simples se admiten espacios y ` #` en los valores. El correo se configura solo si `SMTP_HOST` trae valor.
+**Borra el archivo de respuestas al terminar** (contiene secretos; `respuestas*.env` está en `.gitignore`).
+
+En el primer arranque el API (`src/seed-instalacion.ts`, idempotente, no pisa lo editado luego en la app) crea el Super Admin real (bcrypt),
+el perfil de la institución (`SisConfig 'perfil'`), la clave de licencia (`licenciaClave`; plan, módulos, cuotas y vencimiento salen de su payload
+firmado) y el PIN de supervisor (hash scrypt). Con `SEED_DEMO=false` no existen usuarios demo. `/config.json` de la web recibe `apiUrl` e `institutionName`.
+
+### Variables de entorno (`.env`)
+
+| Variable | Uso |
+|---|---|
+| `API_URL` | URL de la API vista por el navegador (`http://host:3000` o `/api`) |
+| `INSTITUTION_NAME`, `TAX_ID`, `ADDRESS`, `CITY`, `PHONE`, `CONTACT_EMAIL` | Perfil inicial de la institución |
+| `ADMIN_USER`, `ADMIN_NAME`, `ADMIN_PASSWORD` | Super Admin inicial (la contraseña solo el 1.er arranque; se borra) |
+| `SUPERVISOR_PIN` | PIN de supervisor inicial (solo el 1.er arranque; luego se cambia en Configuración) |
+| `LICENSE_KEY` | Licencia firmada `STODIA1.*` (obligatoria; el seed la exige al arrancar, no la borres) |
+| `WEB_PORT`, `API_PORT`, `API_BIND` | Puertos publicados en el host; `API_BIND=127.0.0.1` con `/api` |
+| `CORS_ORIGIN` | Origen(es) de la web permitidos (coma); la app móvil siempre se permite |
+| `TRUST_PROXY` | `false` por defecto; `true` (o N saltos) solo si la API va tras el proxy nginx de la web (`API_URL=/api`) |
+| `TIMEZONE`, `CURRENCY` | Zona horaria (también `TZ` del contenedor) y moneda |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Correo saliente (opcional) |
+| `JWT_SECRET` | Aleatorio, obligatorio en producción |
+| `SEED_DEMO` | `false` en producción (el compose lo fija) |
+| `STODIA_HEALTH_TIMEOUT` | Solo instalador: segundos de espera a `/health` (120) |
+
+### Actualizar la versión sin perder datos
+
+Los datos viven en el volumen `stodia-data` (`/data/stodia.db`), que no se toca al reconstruir.
+
+```bash
+sh ./backup.sh                 # 1) respaldo (Windows: .\backup.ps1)
+git pull                       # 2) nueva versión (o copiar el release sobre la carpeta; conserva .env)
+docker compose up -d --build   # 3) reconstruye; el arranque hace prisma db push + seed idempotente
+curl http://localhost:3000/health
+```
+
+No uses `docker compose down -v` (borra el volumen). Reejecutar el instalador también es seguro: respalda el `.env` anterior (`.env.bak.*`),
+conserva `JWT_SECRET` y el seed no pisa lo ya creado. Para revertir una actualización fallida, restaura el respaldo (abajo) con la versión anterior del código.
+
+### Respaldos y restauración
+
+- **Manual / programado**: `sh ./backup.sh` (Linux/macOS; cron) o `.\backup.ps1` (Windows; Programador de tareas). Copia consistente con `sqlite3 .backup`
+  a `./backups/stodia-AAAAMMDD-HHMMSS.db` y rota a 14 días (`BACKUP_DAYS` / `-Days`). La API debe estar en marcha. Copia `backups/` periódicamente a otro disco/equipo.
+- **Automático diario (opcional)**: `docker compose --profile backup up -d backup` guarda en el volumen (`/data/backups`, 14 días); extrae uno con
+  `docker compose cp backup:/data/backups/<archivo> ./backups/`.
+- **Restaurar** (la API se detiene un momento):
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps -v "$PWD/backups:/b:ro" api sh -c 'cp /b/stodia-AAAAMMDD-HHMMSS.db /data/stodia.db && rm -f /data/stodia.db-journal /data/stodia.db-wal /data/stodia.db-shm'
+docker compose up -d api
+```
+
+  (PowerShell: `-v "${PWD}/backups:/b:ro"`.) El admin vive en la BD restaurada, así que no hace falta `ADMIN_PASSWORD` en `.env`.
 
 ## Convenciones para portar pantallas
 

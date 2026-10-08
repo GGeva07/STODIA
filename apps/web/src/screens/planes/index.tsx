@@ -6,6 +6,7 @@ import { useToastStack } from '../../components/useToastStack';
 import SupervisorGuardModal, { type GuardCfg } from '../../components/finanzas/SupervisorGuardModal';
 import { TONE, errMsg, fmt, norm } from '../../components/finanzas/fin';
 import { B, hoyDMY, runPrint, usePrintBusy, type PBlock, type PDoc } from '../../components/finanzas/print';
+import { useFinCfg } from '../../components/finanzas/finConfig';
 import PlanDrawer, { type DrawerMode } from './PlanDrawer';
 import { FREQ_L, MN, moraLbl, planCalc } from './planCalc';
 
@@ -13,8 +14,6 @@ const TH = 'whitespace-nowrap border-b border-slate-200 bg-slate-50 px-3 py-2.5 
 const TD = 'border-b border-slate-100 px-3 py-0';
 const TABS: [string, string][] = [['all', 'Todos'], ['Activo', 'Activos'], ['Inactivo', 'Inactivos']];
 const MEALS = ['Desayuno', 'Merienda AM', 'Almuerzo', 'Merienda PM'];
-// Rutas de transporte del catálogo de servicios del prototipo (CATALOG, icon ph-bus).
-const RUTAS: [string, string, number][] = [['Ruta Zona A', 'Ruta Zona A · Ambos turnos', 2800], ['Ruta Zona B', 'Ruta Zona B · Solo mañana', 3100]];
 const TAR_OPTS: [string, string, string][] = [['col', 'Matriz de colegiatura', 'por tanda'], ['com', 'Comedor y alimentación', 'planes'], ['tra', 'Transporte', 'por ruta'], ['ext', 'Extracurriculares', 'academias'], ['pol', 'Políticas de facturación', 'mora y pronto pago']];
 const ibtn = 'grid h-[30px] w-[30px] place-items-center rounded-md border border-transparent bg-transparent text-base';
 
@@ -31,11 +30,18 @@ export default function Screen() {
   const [tarOpts, setTarOpts] = useState<Record<string, boolean>>({ col: true, com: true, tra: true, ext: true, pol: true });
   const [ali, setAli] = useState<AliData | null>(null);
   const [ext, setExt] = useState<AcadExtra[]>([]);
+  const cfg = useFinCfg();
+  const [tandas, setTandas] = useState<string[]>([]);
+  const [rutas, setRutas] = useState<[string, string, number][]>([]);
   const pb = usePrintBusy();
   const pbTar = pb('tar', 'Vista previa e imprimir', 'ph ph-printer');
 
   const load = useCallback(() => api.get<PlanPagoFin[]>('/planes').then(setPlans).catch(e => toast(errMsg(e), 'bad')), [toast]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    api.get<{ nombre: string }[]>('/catalogos/tandas').then(r => setTandas(r.map(x => x.nombre))).catch(() => undefined);
+    api.get<{ nombre: string; sectores?: string; tarifa: number; estado: string }[]>('/catalogos/rutas').then(r => setRutas(r.filter(x => x.estado === 'Activo').map(x => ['Ruta ' + x.nombre, x.sectores || 'Ruta ' + x.nombre, Number(x.tarifa)]))).catch(() => undefined);
+  }, []);
 
   const authorize = (title: string, fn: (pin: string) => void) => {
     if (isSuper) fn('');
@@ -62,7 +68,7 @@ export default function Screen() {
   const save = async (f: PlanForm, mode: DrawerMode, pin: string) => {
     if (mode === 'create') {
       const n = await api.post<PlanPagoFin>('/planes', f);
-      const c = planCalc(n);
+      const c = planCalc(n, tandas, cfg.ciclo0);
       setDrawer(null); await load(); toast(`Plan ${n.id} creado · ${c.n} cuotas de ${fmt(c.cuota)}`, 'ok');
       return n;
     }
@@ -87,16 +93,16 @@ export default function Screen() {
       bl.push(B.text('Matriz de colegiatura', true), B.table(['Plan', 'Tanda', 'Monto anual', 'Cuotas', 'Cuota'], rows, ['1fr', '86px', '98px', '66px', '98px'], ['left', 'left', 'right', 'right', 'right']), B.text('Los montos incluyen el descuento propio de cada plan. La inscripción se factura aparte.'));
     }
     if (tarOpts.com) bl.push(B.text('Comedor y alimentación', true), B.table(['Plan', 'Incluye', 'Tarifa'], (ali?.planes ?? []).filter(p => p.estado === 'Activo').map(p => [p.name, p.modelo === 'sub' ? MEALS.filter((_, i) => p.meals[i]).join(' · ') : 'Monedero virtual', p.modelo === 'sub' ? fmt(p.precio) + (p.freq === 'Semestral' ? '/sem' : '/mes') : 'Recarga mín. ' + fmt(p.recarga)]), ['1fr', '1fr', '120px'], ['left', 'left', 'right']));
-    if (tarOpts.tra) bl.push(B.text('Transporte escolar', true), B.table(['Ruta', 'Servicio', 'Tarifa'], RUTAS.map(([l, sp, pr]) => [l, sp, fmt(pr) + '/mes']), ['1fr', '1fr', '110px'], ['left', 'left', 'right']));
+    if (tarOpts.tra) bl.push(B.text('Transporte escolar', true), B.table(['Ruta', 'Servicio', 'Tarifa'], rutas.map(([l, sp, pr]) => [l, sp, fmt(pr) + '/mes']), ['1fr', '1fr', '110px'], ['left', 'left', 'right']));
     if (tarOpts.ext) bl.push(B.text('Actividades y cursos extracurriculares', true), B.table(['Actividad', 'Categoría', 'Horario', 'Costo'], ext.filter(a => a.estado !== 'Cerrada').map(a => [a.name, a.cat, a.dias + ' · ' + a.hora, Number(a.costo) ? fmt(a.costo) + (a.kind === 'curso' ? ' total' : '/mes') : 'Gratuita']), ['1fr', '70px', '1fr', '110px'], ['left', 'left', 'left', 'right']));
     if (tarOpts.pol) bl.push(B.text('Políticas de facturación', true), B.table(['Plan', 'Gracia', 'Cobro por mora', 'Pronto pago'], act.map(p => [p.name, p.gracia + ' días', p.moraTipo === 'pct' ? p.moraVal + '% mensual' : p.moraTipo === 'fijo' ? fmt(p.moraVal) + ' por día' : 'Sin recargo', Number(p.pronto) ? p.pronto + '% hasta el día ' + p.prontoDia : 'No aplica']), ['1fr', '56px', '110px', '120px'], ['left', 'left', 'left', 'left']));
-    bl.push(B.text('Montos expresados en pesos dominicanos (RD$). Tarifas vigentes para el ciclo lectivo 2026–2027 y sujetas a cambios con previo aviso. Los servicios opcionales se contratan al momento de la inscripción.'));
-    return { kind: 'carta', name: 'Tarifario anual 2026–2027', format: 'Carta 8.5 × 11 in', sign: [], pages: [{ title: 'Tarifario anual', sub: 'Ciclo lectivo 2026–2027 · Generado el ' + hoyDMY(), blocks: bl }] };
+    bl.push(B.text('Montos expresados en pesos dominicanos (RD$). Tarifas vigentes para el ciclo lectivo ' + cfg.ciclo + ' y sujetas a cambios con previo aviso. Los servicios opcionales se contratan al momento de la inscripción.'));
+    return { kind: 'carta', name: 'Tarifario anual ' + cfg.ciclo, format: 'Carta 8.5 × 11 in', sign: [], pages: [{ title: 'Tarifario anual', sub: 'Ciclo lectivo ' + cfg.ciclo + ' · Generado el ' + hoyDMY(), blocks: bl }] };
   };
   const printTar = () => { const d = docTarifario(); if (d) { setTarOpen(false); runPrint('tar', d); } };
   const pdfTar = () => {
     if (!Object.values(tarOpts).some(Boolean)) { toast('Selecciona al menos una sección', 'warn'); return; }
-    setTarOpen(false); toast('PDF generado · tarifario_2026-2027.pdf', 'ok');
+    setTarOpen(false); toast('PDF generado · tarifario_' + cfg.ciclo.replace('–', '-') + '.pdf', 'ok');
   };
 
 
@@ -180,13 +186,13 @@ export default function Screen() {
         </div>
       </section>
 
-      {drawer && <PlanDrawer key={(drawer.plan?.id ?? 'new') + drawer.mode} plan={drawer.plan} mode={drawer.mode} pin0={drawer.pin} plans={plans} onClose={() => setDrawer(null)} authorize={authorize} onSave={save} onDelete={del} />}
+      {drawer && <PlanDrawer tandas={tandas} ciclo0={cfg.ciclo0} moraPct={cfg.finanzas.recargoMoraPct} key={(drawer.plan?.id ?? 'new') + drawer.mode} plan={drawer.plan} mode={drawer.mode} pin0={drawer.pin} plans={plans} onClose={() => setDrawer(null)} authorize={authorize} onSave={save} onDelete={del} />}
       {tarOpen && (
         <div className="fixed inset-0 z-[85] grid place-items-center bg-slate-900/50 p-5">
           <div className="w-[480px] max-w-full overflow-hidden rounded-[10px] bg-white shadow-2xl">
             <div className="flex items-start gap-3 px-5 py-[18px]">
               <span className="grid h-10 w-10 flex-none place-items-center rounded-full bg-blue-100 text-xl text-accent"><i className="ph ph-tag" /></span>
-              <div><div className="text-base font-semibold">Tarifario anual · 2026–2027</div><div className="mt-1 text-[13px] text-slate-600" style={{ lineHeight: 1.5 }}>Elige qué secciones incluir. Los montos y políticas se toman de los planes activos y del catálogo.</div></div>
+              <div><div className="text-base font-semibold">Tarifario anual · {cfg.ciclo}</div><div className="mt-1 text-[13px] text-slate-600" style={{ lineHeight: 1.5 }}>Elige qué secciones incluir. Los montos y políticas se toman de los planes activos y del catálogo.</div></div>
             </div>
             <div className="flex flex-col gap-2 px-5 pb-4">
               {TAR_OPTS.map(([k, l, d]) => (

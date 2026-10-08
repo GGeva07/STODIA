@@ -23,11 +23,15 @@ export interface LicenciaInfo {
 }
 export interface LicFeature { id: string; label: string; cat: string; tier: number; on: boolean; incluido: boolean }
 
-export interface CfgPerfil { nombre: string; rnc: string; tel: string; dir: string; email?: string; ciudad?: string; moneda?: string; zonaHoraria?: string }
+export interface CfgPerfil { nombre: string; rnc: string; tel: string; dir: string; email?: string; ciudad?: string; moneda?: string; zonaHoraria?: string;
+  /** Cuentas bancarias / teléfono para que el tutor registre su pago cuando no hay pasarela (se muestra en el portal). */
+  instruccionesPago?: string }
 export interface CfgAssets { logo: boolean; fAcad: boolean; fFin: boolean }
 export interface CfgNcf { pref: string; tipo: string; desde: number; hasta: number; umbral: number; act?: number }
 export interface CfgEcfInfo { archivo?: string; vence?: string }
 export interface CfgCiclo { n: string; estado: 'Activo' | 'Cerrado' | 'Planificado' }
+/** Configuración financiera de la instancia (SisConfig 'finanzas'). 0 = sin configurar. itbis es fracción (0.18); porcentajes en %. */
+export interface CfgFinanzas { matricula: number; inscripcion: number; itbis: number; recargoMoraPct: number; descuentoProntoPct: number; diaCorte: number }
 export interface ConfigGlobal {
   perfil: CfgPerfil;
   assets: CfgAssets;
@@ -35,6 +39,7 @@ export interface ConfigGlobal {
   ecf: boolean;
   ecfInfo: CfgEcfInfo;
   ciclos: CfgCiclo[];
+  finanzas: CfgFinanzas;
   access: Record<string, ScreenId[]>;
   rolesBase: Rol[];
 }

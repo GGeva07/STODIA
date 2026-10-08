@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
-import type { Alumno, ExpDoc, ExpedienteResp } from '@stodia/shared';
+import type { ExpDoc, ExpedienteResp } from '@stodia/shared';
 import { api } from '../../lib/api';
 import { canAccess } from '../../lib/access';
 import { useSession } from '../../lib/session';
@@ -9,12 +9,12 @@ import { btn, card, pill, pillBase, type PillTone } from '../../components/syste
 import { errMsg, fmt } from '../../components/finanzas/fin';
 import { printCarta } from '../../components/personas/printCarta';
 import { hoyDMY } from '../../components/finanzas/print';
+import { usePerfil } from '../../components/finanzas/perfil';
 import Servicios from './Servicios';
 
 const TABS = [['personal', 'Datos personales'], ['academico', 'Historial académico'], ['cuenta', 'Estado de cuenta'], ['servicios', 'Servicios y Contrato'], ['medico', 'Médico y alimenticio'], ['docs', 'Documentación'], ['familia', 'Red familiar']] as const;
 type Tab = (typeof TABS)[number][0];
 const DOC_TONE: Record<ExpDoc['est'], PillTone> = { Validado: 'ok', Pendiente: 'bad', 'En revisión': 'warn' };
-const PLAN_LABEL = { '10': 'Regular · 10 cuotas (Ago–May)', '4': 'Trimestral · 4 pagos', '1': 'Pago único anual' };
 const READONLY = ['Docente', 'Encargado Comedor', 'Tutor'];
 
 const Field = ({ k, children, span }: { k: string; children: ReactNode; span?: boolean }) => (
@@ -25,21 +25,13 @@ const dmy = (iso: string) => iso.split('-').reverse().join('/');
 const edad = (iso: string) => { const d = new Date(iso), n = new Date(); let a = n.getFullYear() - d.getFullYear(); if (n < new Date(n.getFullYear(), d.getMonth(), d.getDate())) a--; return a; };
 const mono = 'font-mono';
 
-/** /expediente → primer alumno disponible (0412 si existe). */
-function Pick() {
-  const [to, setTo] = useState<string | null>(null);
-  useEffect(() => {
-    api.get<Alumno[]>('/directorio').then(l => setTo((l.find(a => a.id === '0412') ?? l[0])?.id ?? '')).catch(() => setTo(''));
-  }, []);
-  if (to === null) return <p className="text-sm text-slate-500">Cargando…</p>;
-  return to ? <Navigate to={to} replace /> : <p className="text-sm text-slate-500">No hay alumnos registrados.</p>;
-}
-
 function Expediente() {
   const { id = '' } = useParams();
   const { user } = useSession();
   const navigate = useNavigate();
   const toast = useToast();
+  const perfil = usePerfil();
+  const colegio = (perfil?.nombre ?? '').toUpperCase(), rncP = perfil?.rnc ?? '';
   const [data, setData] = useState<ExpedienteResp | null>(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<Tab>('personal');
@@ -63,8 +55,11 @@ function Expediente() {
   const caja = !!user && canAccess(user.rol, 'pos');
   const estadoItem = (i: (typeof cuenta)[number]): [string, PillTone] => (i.paid ? ['Pagado', 'ok'] : i.est === 'Vencida' ? ['Vencida', 'bad'] : [i.est, 'mute']);
 
+  const ciclo = data.ref.ciclos[0] ?? '';
+  const planAct = data.ref.planes[ficha.contrato.plan];
+  const planLbl = planAct?.name ?? 'Sin plan asignado';
   const docEstado = () => printCarta([{
-    title: 'Estado de cuenta', sub: `Corte al ${hoyDMY()} · Ciclo 2026–2027`,
+    title: 'Estado de cuenta', sub: `Corte al ${hoyDMY()}${ciclo ? ` · Ciclo ${ciclo}` : ''}`,
     blocks: [
       { t: 'kv', rows: [['Estudiante', nombre], ['Matrícula', a.code], ['Curso', `${curso} · ${a.tanda}`], ['Tutor financiero', tutor ? `${tutor.nombre} · ${tutor.cedula}` : '—']] },
       { t: 'table', head: ['Concepto', 'Vence', 'Estado', 'Monto'], rows: cuenta.map(i => [i.con, i.vence, estadoItem(i)[0], fmt(i.monto)]), widths: ['1fr', '82px', '74px', '100px'], aligns: ['left', 'left', 'left', 'right'] },
@@ -73,14 +68,15 @@ function Expediente() {
   }], ['Firma del cajero', 'Firma de dirección'], `Estado de cuenta · ${a.nombres.split(' ')[0]} ${a.apellidos.split(' ')[0]}`, 'estado');
 
   const docContrato = () => {
-    const p = data.ref.planes[ficha.contrato.plan], b = data.ref.becas[ficha.contrato.beca];
+    const p = planAct, b = data.ref.becas[ficha.contrato.beca] ?? { pct: 0 };
+    if (!p) { toast('Asigna un plan de pago al contrato antes de imprimirlo (pestaña Servicios y Contrato)', 'warn'); return; }
     const net = p.gross * (1 - b.pct);
     printCarta([{
-      title: 'Contrato de servicios educativos', sub: `Ciclo lectivo 2026–2027 · ${ficha.contrato.ctr || a.code}`,
+      title: 'Contrato de servicios educativos', sub: `Ciclo lectivo ${ficha.contrato.ciclo || ciclo} · ${ficha.contrato.ctr || a.code}`,
       blocks: [
-        { t: 'text', s: `Entre COLEGIO LOS PINOS, SRL, RNC 1-31-55678-2, en lo adelante EL COLEGIO, y ${(tutor?.nombre ?? '—').toUpperCase()}, cédula ${tutor?.cedula ?? '—'}, en calidad de tutor financiero, en lo adelante EL TUTOR, se acuerda lo siguiente respecto al estudiante ${nombre.toUpperCase()}, matrícula ${a.code}, inscrito en ${curso}, tanda ${a.tanda.toLowerCase()}.` },
-        { t: 'kv', rows: [['Plan de pago', PLAN_LABEL[ficha.contrato.plan]], ['Cuota base', fmt(p.gross)], ['Descuento / beca', b.pct ? `${b.pct * 100}%` : 'Ninguno'], ['Cuota neta facturable', fmt(net)]] },
-        { t: 'text', s: 'PRIMERO: EL TUTOR se obliga a pagar las cuotas el día 1 de cada mes. SEGUNDO: transcurridos 5 días de gracia, las cuotas vencidas generan un recargo del 3% mensual. TERCERO: la inscripción no es reembolsable. CUARTO: EL TUTOR declara conocer el reglamento interno y autoriza el uso de los datos del estudiante para fines académicos y administrativos conforme a la ley.' },
+        { t: 'text', s: `Entre ${colegio}, RNC ${rncP}, en lo adelante EL COLEGIO, y ${(tutor?.nombre ?? '—').toUpperCase()}, cédula ${tutor?.cedula ?? '—'}, en calidad de tutor financiero, en lo adelante EL TUTOR, se acuerda lo siguiente respecto al estudiante ${nombre.toUpperCase()}, matrícula ${a.code}, inscrito en ${curso}, tanda ${a.tanda.toLowerCase()}.` },
+        { t: 'kv', rows: [['Plan de pago', p.name], ['Cuota base', fmt(p.gross)], ['Descuento / beca', b.pct ? `${Math.round(b.pct * 10000) / 100}%` : 'Ninguno'], ['Cuota neta facturable', fmt(net)]] },
+        { t: 'text', s: `PRIMERO: EL TUTOR se obliga a pagar las cuotas el día ${p.dia} de ${p.freq === 1 ? 'cada mes' : 'cada vencimiento'}. SEGUNDO: ${p.mora ? `transcurridos ${p.gracia} días de gracia, las cuotas vencidas generan un recargo ${p.mora}` : 'las cuotas vencidas no generan recargo por mora'}. TERCERO: la inscripción no es reembolsable. CUARTO: EL TUTOR declara conocer el reglamento interno y autoriza el uso de los datos del estudiante para fines académicos y administrativos conforme a la ley.` },
       ],
     }], ['Tutor financiero', 'Dirección del colegio'], 'Contrato de inscripción', 'contrato');
   };
@@ -90,7 +86,7 @@ function Expediente() {
     printCarta([{
       title: 'Certificación de no adeudo', sub: `Emitida el ${hoyDMY()}`,
       blocks: [
-        { t: 'text', s: `Por medio de la presente, COLEGIO LOS PINOS, SRL, RNC 1-31-55678-2, certifica que el estudiante ${nombre.toUpperCase()}, matrícula ${a.code}, cuyo tutor financiero es ${(tutor?.nombre ?? '—').toUpperCase()}, NO MANTIENE ADEUDOS VENCIDOS con la institución al día de la fecha.` },
+        { t: 'text', s: `Por medio de la presente, ${colegio}, RNC ${rncP}, certifica que el estudiante ${nombre.toUpperCase()}, matrícula ${a.code}, cuyo tutor financiero es ${(tutor?.nombre ?? '—').toUpperCase()}, NO MANTIENE ADEUDOS VENCIDOS con la institución al día de la fecha.` },
         { t: 'text', s: 'Se expide a solicitud de la parte interesada para los fines que estime convenientes.' },
       ],
     }], ['Administración financiera', 'Dirección del colegio'], 'Certificación de no adeudo', 'noadeudo');
@@ -188,7 +184,7 @@ function Expediente() {
           <div className="flex flex-wrap gap-7">
             <div><div className="text-xs text-slate-500">Balance consolidado al día</div><div className={`${mono} text-[22px] font-semibold ${vencido > 0 ? 'text-red-600' : 'text-green-600'}`}>{fmt(vencido)}</div></div>
             <div><div className="text-xs text-slate-500">Tutor financiero</div><div className="mt-1 font-medium">{tutor?.nombre ?? '—'}</div></div>
-            <div><div className="text-xs text-slate-500">Plan de pago</div><div className="mt-1 font-medium">{PLAN_LABEL[ficha.contrato.plan]}</div></div>
+            <div><div className="text-xs text-slate-500">Plan de pago</div><div className={`mt-1 font-medium ${planAct ? '' : 'text-slate-500'}`}>{planLbl}</div></div>
             <div><div className="text-xs text-slate-500">Becas activas</div><div className={`mt-1 font-medium ${data.becasActivas.length ? '' : 'text-slate-500'}`}>{data.becasActivas.join(' · ') || 'Ninguna'}</div></div>
           </div>
           <section className={card}>
@@ -284,7 +280,8 @@ function Expediente() {
 export default function Screen() {
   return (
     <Routes>
-      <Route index element={<Pick />} />
+      {/* Sin alumno seleccionado no hay expediente: se elige desde el Directorio. */}
+      <Route index element={<Navigate to="/directorio" replace />} />
       <Route path=":id" element={<Expediente />} />
     </Routes>
   );

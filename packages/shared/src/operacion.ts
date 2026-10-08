@@ -5,7 +5,7 @@ export interface ComCarnetDto {
   restr: string; limit: number; motivo: string; wallet: number; spent: number;
 }
 export interface ComLecturaDto { t: string; n: string; s: 'ok' | 'alert' | 'no' }
-export interface ComedorEstado { carnets: ComCarnetDto[]; log: ComLecturaDto[] }
+export interface ComedorEstado { carnets: ComCarnetDto[]; log: ComLecturaDto[]; encabezado: string; consumos: { l: string; p: number }[] }
 export interface ComEscaneoRes { carnet: ComCarnetDto; log: ComLecturaDto[] }
 
 export interface AliPlanDto {
@@ -15,20 +15,34 @@ export interface AliPlanDto {
 }
 export type AliPlanInput = Omit<AliPlanDto, 'id' | 'inscritos'>;
 export interface AliMenuDto { dia: string; plato: string; algs: string[]; afectados: Record<string, number> }
-export interface AliData { planes: AliPlanDto[]; menu: AliMenuDto[]; alumnosConAlergia: number }
+/** Catálogos de Alimentación (Catalogo 'comidas' | 'dietas' | 'alergias'); las posiciones de meals/diets de un plan siguen el orden de estos catálogos. */
+export interface AliCatalogos { comidas: string[]; dietas: string[]; alergias: string[] }
+export interface AliData { planes: AliPlanDto[]; menu: AliMenuDto[]; alumnosConAlergia: number; semana: { desde: string; hasta: string; label: string }; catalogos: AliCatalogos }
 
 export type CmnCanal = 'Correo' | 'Push' | 'SMS' | 'WhatsApp';
 export interface CmnFiltro { grado: string; tanda: string; cuenta: string }
 export interface CmnDestinatarios {
+  /** Primeros nombres (muestra acotada); el conteo real va en `total`. */
   tutores: string[];
+  total?: number;
   muestra: { tutor: string; alumno: string; saldo: number } | null;
 }
 export interface CmnMensajeDto {
   id: number; batch: string; t: string; to: string; canal: CmnCanal;
-  asunto: string; estado: 'En cola' | 'Entregado' | 'Fallido'; by: string;
+  asunto: string; estado: CmnEstado; by: string;
+  /** Último error real del proveedor (vacío si no hubo). */
+  error?: string; intentos?: number;
 }
+export type CmnEstado = 'En cola' | 'Enviando' | 'Entregado' | 'Fallido' | 'Canal no configurado';
+/** Config de canales de comunicación (SisConfig 'canales'). La contraseña SMTP nunca se devuelve: solo passSet. */
+export interface CmnCanalesCfg {
+  email: { activo: boolean; host: string; port: number; user: string; passSet: boolean; from: string; fuente: 'bd' | 'env' };
+  sms: { activo: false; soportado: false }; whatsapp: { activo: false; soportado: false }; push: { activo: false; soportado: false };
+  demo: boolean; demoDisponible: boolean;
+}
+export interface CmnCanalesInput { email?: { activo?: boolean; host?: string; port?: number; user?: string; pass?: string; from?: string }; demo?: boolean }
 export interface CmnEnviarReq extends CmnFiltro { canales: CmnCanal[]; asunto: string; mensaje: string }
-export interface CmnEnviarRes { batch: string; total: number }
+export interface CmnEnviarRes { batch: string; total: number; enCola: number; sinCanal: number }
 
 export interface DashboardData {
   fecha: string; ciclo: string;

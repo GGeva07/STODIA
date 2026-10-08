@@ -41,9 +41,20 @@ export async function probeServer(url: string): Promise<{ name?: string }> {
   }
 }
 
-/** App nativa sin servidor guardado y con /config.json apuntando a localhost: hay que pedirlo. */
-export const needsServerSetup = () =>
-  isNative && !getStoredApiUrl() && (!config.apiUrl || /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(config.apiUrl));
+const isPhoneBrowser = () => {
+  try { return window.matchMedia('(pointer: coarse) and (max-width: 1100px)').matches; } catch { return false; }
+};
+
+/**
+ * Hay que pedir el servidor antes del login cuando no hay uno guardado y:
+ *  - es la app nativa con /config.json apuntando a localhost, o
+ *  - /config.json trae askServer: true, o askServer: 'mobile' y el dispositivo es táctil/pequeño.
+ */
+export const needsServerSetup = () => {
+  if (getStoredApiUrl()) return false;
+  if (config.askServer === true || (config.askServer === 'mobile' && isPhoneBrowser())) return true;
+  return isNative && (!config.apiUrl || /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(config.apiUrl));
+};
 
 export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
   try {

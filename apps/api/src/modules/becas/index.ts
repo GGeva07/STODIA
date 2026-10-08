@@ -15,6 +15,26 @@ const plugin: FastifyPluginAsync = async app => {
   app.get<{ Querystring: { periodo?: string } }>('/', auth, async req =>
     (await prisma.finBeca.findMany({ where: req.query.periodo ? { periodo: req.query.periodo } : {}, orderBy: { createdAt: 'asc' } })).map(toBeca));
 
+
+  /** Catálogos del formulario de becas: tipos (Catalogo 'becas', compartido con expediente) y conceptos afectables. */
+  app.get('/catalogos', auth, async () => {
+    const nombres = async (tipo: string) => {
+      const rows = await prisma.catalogo.findMany({ where: { tipo, estado: 'Activo' }, orderBy: { id: 'asc' } });
+      return rows.map(r => String((JSON.parse(r.data) as { nombre?: string }).nombre ?? '').trim()).filter(Boolean);
+    };
+    return { tipos: await nombres('becas'), conceptos: await nombres('conceptosBeca') };
+  });
+
+  /** Estudiantes activos para el formulario de becas (búsqueda por nombre, carnet o id). Máx. 50. */
+  app.get<{ Querystring: { q?: string } }>('/estudiantes', auth, async req => {
+    const q = (req.query.q ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+    const all = await prisma.alumno.findMany({ where: { estado: 'Activo' }, orderBy: [{ apellidos: 'asc' }, { nombres: 'asc' }], select: { id: true, code: true, nombres: true, apellidos: true, grado: true, sec: true } });
+    return all
+      .filter(a => !q || `${a.nombres} ${a.apellidos} ${a.code} ${a.id}`.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().includes(q))
+      .slice(0, 50)
+      .map(a => ({ id: a.id, label: `${a.nombres} ${a.apellidos} · ${a.grado} ${a.sec}` }));
+  });
+
   app.post<{ Body: BecaNueva }>('/', auth, async (req, reply) => {
     const b = req.body;
     if (!b.exp?.trim()) return reply.code(400).send({ error: 'El expediente de soporte es obligatorio' });

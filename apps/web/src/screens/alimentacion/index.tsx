@@ -1,21 +1,19 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import type { AliData, AliMenuDto, AliPlanDto, AliPlanInput } from '@stodia/shared';
+import type { AliCatalogos, AliData, AliMenuDto, AliPlanDto, AliPlanInput } from '@stodia/shared';
 import { api } from '../../lib/api';
 import { useSession } from '../../lib/session';
 import { useToastStack } from '../../components/useToastStack';
+import { td } from '../../components/system/styles';
 
-const MEALS = ['Desayuno', 'Merienda AM', 'Almuerzo', 'Merienda PM'];
-const DIETS = ['Sin gluten', 'Sin lácteos', 'Sin maní / frutos secos', 'Vegetariano'];
-const ALGS = ['Maní', 'Frutos secos', 'Lactosa', 'Gluten', 'Huevo', 'Mariscos'];
 const fmt = (n: number | string) => 'RD$ ' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Error inesperado');
 
-const BLANK: AliPlanInput = {
-  name: '', modelo: 'sub', meals: [false, false, true, false], precio: '', freq: 'Mensual', dias: 'Lunes a Viernes', mora: 'si',
-  recarga: '500', limite: '300', canal: 'Portal y Caja', saldo: 'Se transfiere', diets: [false, false, false, false], estado: 'Activo',
-};
+const blank = (cat: AliCatalogos): AliPlanInput => ({
+  name: '', modelo: 'sub', meals: cat.comidas.map(c => /almuerzo/i.test(c)), precio: '', freq: 'Mensual', dias: 'Lunes a Viernes', mora: 'si',
+  recarga: '500', limite: '300', canal: 'Portal y Caja', saldo: 'Se transfiere', diets: cat.dietas.map(() => false), estado: 'Activo',
+});
 const TH = 'whitespace-nowrap border-b border-slate-200 bg-slate-50 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-600';
-const TD = 'border-b border-slate-100 px-3';
+const TD = td;
 const INPUT = 'h-9 w-full rounded-md border px-2.5 text-[13px] text-ink outline-none focus:border-accent';
 
 function Pill({ bg, fg, w, children }: { bg: string; fg: string; w: number; children: string }) {
@@ -42,6 +40,7 @@ export default function Screen() {
   if (!data) return <>{toasts}<p className="text-sm text-slate-500">Cargando…</p></>;
 
   const { planes, menu } = data;
+  const { comidas: MEALS, dietas: DIETS, alergias: ALGS } = data.catalogos;
   const subs = planes.filter(p => p.modelo === 'sub' && p.estado === 'Activo');
   const stats: [string, string | number, string][] = [
     ['Suscritos a comedor', subs.reduce((a, p) => a + p.inscritos, 0), '#0F172A'],
@@ -51,7 +50,7 @@ export default function Screen() {
   ];
 
   const openAd = (p: AliPlanDto | null, mode: 'view' | 'edit' | 'create') =>
-    setAd({ id: p?.id ?? null, mode, inscritos: p?.inscritos ?? 0, err: '', f: p ? { ...p, meals: p.meals.slice(), diets: p.diets.slice() } : { ...BLANK, meals: BLANK.meals.slice(), diets: BLANK.diets.slice() } });
+    setAd({ id: p?.id ?? null, mode, inscritos: p?.inscritos ?? 0, err: '', f: p ? { ...p, meals: p.meals.slice(), diets: p.diets.slice() } : blank(data.catalogos) });
 
   const del = async (p: AliPlanDto) => {
     if (p.inscritos > 0) { toast(`No se puede eliminar: ${p.inscritos} alumnos inscritos. Márcalo Inactivo para cerrar nuevas inscripciones.`, 'bad'); return; }
@@ -190,7 +189,7 @@ export default function Screen() {
       {tab === 'menu' && (
         <div className="flex flex-col gap-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2.5">
-            <span className="text-[13px] text-slate-600">Semana del 5 al 9 de octubre de 2026 · visible para tutores en el portal</span>
+            <span className="text-[13px] text-slate-600">{data.semana.label} · visible para tutores en el portal</span>
             <span className="flex items-center gap-1.5 text-xs text-slate-500"><i className="ph-fill ph-warning text-red-600" />Se cruzan los alérgenos con los alumnos inscritos</span>
           </div>
           <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
@@ -214,7 +213,7 @@ export default function Screen() {
                       </div>
                     ) : (
                       <>
-                        <span className="text-[13px]">{d.plato}</span>
+                        <span className="text-[13px]">{d.plato || <span className="text-slate-400">Sin definir · edítalo para publicarlo</span>}</span>
                         <div className="flex flex-wrap gap-1">{d.algs.map(a => <span key={a} className="inline-flex h-5 items-center whitespace-nowrap rounded-full bg-red-100 px-[7px] text-[11px] font-semibold text-red-700">Contiene {a}</span>)}</div>
                       </>
                     )}

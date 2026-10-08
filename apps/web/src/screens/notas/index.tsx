@@ -4,14 +4,15 @@ import { api } from '../../lib/api';
 import SegTabs from '../../components/SegTabs';
 import AsigSelect from '../../components/academico/AsigSelect';
 import { useToast } from '../../components/system/UiProvider';
-import { errMsg, printHtml } from '../../components/finanzas/fin';
+import { errMsg } from '../../components/finanzas/fin';
+import { runPrint, usePrintBusy } from '../../components/finanzas/print';
+import { docBoletines, docSabana } from '../../components/academico/printDocs';
 import { pill, type PillTone } from '../../components/system/styles';
 
 const DENS = [{ k: '36', label: 'Compacta' }, { k: '48', label: 'Regular' }, { k: '60', label: 'Cómoda' }];
 const valid = (v: string) => v !== '' && !isNaN(Number(v)) && Number(v) >= 0 && Number(v) <= 100;
 const letter = (v: number) => (v >= 90 ? 'A' : v >= 80 ? 'B' : v >= 70 ? 'C' : 'F');
 const LTONE: Record<string, PillTone> = { A: 'ok', B: 'info', C: 'warn', F: 'bad', '—': 'mute' };
-const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
 
 type Comps = AcadNotasMatriz['comps'];
 /** Promedio de competencias, final (rúbrica: 70% + 30% examen en la demo) y letra, igual que gCalc del prototipo; los pesos salen de la rúbrica. */
@@ -29,6 +30,7 @@ function calc(g: string[], comps: Comps) {
 
 export default function Screen() {
   const toast = useToast();
+  const pb = usePrintBusy();
   const [m, setM] = useState<AcadNotasMatriz | null>(null);
   const [pick, setPick] = useState<{ asig?: string; periodo?: string }>({});
   const [grades, setGrades] = useState<string[][]>([]);
@@ -109,16 +111,10 @@ export default function Screen() {
   const total = m.rows.length;
   const f1 = (v: number | null) => (v != null ? v.toFixed(1) : '—');
 
-  const printSabana = () => {
-    const rows = m.rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.nombre)}</td>${grades[i].map(v => `<td>${v || '—'}</td>`).join('')}<td>${f1(calcs[i].prom)}</td><td>${f1(calcs[i].fin)}</td><td>${calcs[i].L}</td></tr>`).join('');
-    printHtml(`<h1>Sábana de calificaciones</h1><h2>${esc(m.materia)} · ${m.seccion} · ${m.periodoLabel}</h2><table><tr><th>#</th><th>Estudiante</th>${m.comps.map(c => `<th>${c.k}</th>`).join('')}<th>Prom</th><th>Final</th><th>Letra</th></tr>${rows}</table><hr/><div class="r"><span>Promedio de sección</span><b>${bases.length ? (bases.reduce((a, b) => a + b, 0) / bases.length).toFixed(1) : '—'}</b></div><div class="r"><span>Aprobados (≥ ${m.minimo})</span><b>${bases.filter(v => v >= m.minimo).length} / ${total}</b></div>`, '190mm');
-    setMenu(false);
-  };
-  const printBoletines = () => {
-    const pages = m.rows.map((r, i) => `<div style="page-break-after:always"><h1>Boletín de calificaciones</h1><h2>${esc(m.materia)} · ${m.seccion} · ${m.periodoLabel}</h2><p>Estudiante: <b>${esc(r.nombre)}</b><br/>Docente: ${esc(m.docente)}</p><table><tr><th>Competencia</th><th>Nombre</th><th>Nota</th></tr>${m.comps.map((c, j) => `<tr><td>${c.k}</td><td>${c.n}</td><td>${grades[i][j] || '—'}</td></tr>`).join('')}</table><hr/><div class="r"><span>Promedio ${rango}</span><b>${f1(calcs[i].prom)}</b></div><div class="r"><span>Nota final</span><b>${calcs[i].fin != null ? f1(calcs[i].fin) : 'Pendiente de examen'}</b></div><div class="r"><span>Calificación</span><b>${calcs[i].L}</b></div></div>`).join('');
-    printHtml(pages, '190mm');
-    setMenu(false);
-  };
+  const filas = () => m.rows.map((r, i) => ({ nombre: r.nombre, g: grades[i], prom: calcs[i].prom, fin: calcs[i].fin, L: calcs[i].L, base: calcs[i].base }));
+  const printSabana = () => { setMenu(false); runPrint('sabana', docSabana(m, filas())); };
+  const printBoletines = () => { setMenu(false); runPrint('boletines', docBoletines(m, filas())); };
+  const pbS = pb('sabana', 'Sábana del Grado', 'ph ph-table'), pbB = pb('boletines', 'Boletines Individuales', 'ph ph-files');
 
   const th = 'border-b border-slate-200 px-2.5 py-1.5 text-right';
   return (
@@ -136,8 +132,8 @@ export default function Screen() {
             {menu && (
               <div className="absolute right-0 top-10 z-40 w-[270px] rounded-lg border border-slate-200 bg-white p-1.5 shadow-[0_12px_32px_rgba(15,23,42,0.18)]">
                 <div className="px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-slate-500">¿Qué deseas imprimir?</div>
-                <button onClick={printSabana} className="flex h-[34px] w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] hover:bg-slate-100"><i className="ph ph-table text-base text-slate-600" />Sábana de calificaciones</button>
-                <button onClick={printBoletines} className="flex h-[34px] w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] hover:bg-slate-100"><i className="ph ph-files text-base text-slate-600" />Boletines individuales</button>
+                <button onClick={printSabana} className="flex h-[34px] w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] hover:bg-slate-100"><i className={pbS.icon + ' text-base text-slate-600'} style={{ animation: pbS.spin }} />{pbS.label}</button>
+                <button onClick={printBoletines} className="flex h-[34px] w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] hover:bg-slate-100"><i className={pbB.icon + ' text-base text-slate-600'} style={{ animation: pbB.spin }} />{pbB.label}</button>
               </div>
             )}
           </div>

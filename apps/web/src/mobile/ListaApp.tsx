@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { MarcaAsistencia, MobListaData } from '@stodia/shared';
 import { api } from '../lib/api';
-import { printHtml } from '../components/finanzas/fin';
+import { runPrint } from '../components/finanzas/print';
+import { docLista } from '../components/academico/printDocs';
 import AsigSelect from '../components/academico/AsigSelect';
 
 type Marca = MarcaAsistencia | null;
@@ -18,7 +19,6 @@ const COUNTS: [string, Marca, string][] = [
 ];
 const short = (n: string) => { const [ap, no = ''] = n.split(', '); return `${no.split(' ')[0]} ${ap.split(' ')[0]}`.trim(); };
 const longDate = (iso: string) => new Date(iso + 'T12:00:00').toLocaleDateString('es-DO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
 const ini = (n: string) => { const [ap, no = ''] = n.split(', '); return ((no[0] ?? '') + ap[0]).toUpperCase(); };
 
 /** Pase de Lista en tableta (prototipo L447-490). Marco de dispositivo solo en escritorio muy ancho. */
@@ -37,11 +37,7 @@ export default function ListaApp() {
   }, [asig]);
 
   const counts = useMemo(() => COUNTS.map(([l, k, c]) => ({ l, c, n: att.filter(x => x === k).length })), [att]);
-  const printLista = () => {
-    if (!data) return;
-    const rows = data.alumnos.map((a, i) => `<tr><td>${i + 1}</td><td>${esc(a.nombre)}</td>${'<td style="text-align:center">☐</td>'.repeat(5)}</tr>`).join('');
-    printHtml(`<h1>Lista de asistencia</h1><h2>${data.seccion.replace('-', ' ')} · ${data.tanda ?? ''} · ${longDate(data.fecha)}</h2><table><tr><th>#</th><th>Estudiante</th><th>Lun</th><th>Mar</th><th>Mié</th><th>Jue</th><th>Vie</th></tr>${rows}</table><p>Marcar: P presente · T tardanza · AJ ausencia justificada · AI ausencia injustificada.</p>`, '190mm');
-  };
+  const printLista = () => { if (data) runPrint('lista', docLista(data, data.alumnos.map(a => a.nombre))); };
   const rotate = (i: number) => setAtt(a => a.map((x, j) => (j === i ? NEXT[String(x)] : x)));
 
   const save = async () => {

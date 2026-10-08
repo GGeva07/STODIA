@@ -60,6 +60,7 @@ model Catalogo {
 }
 
 // ---- Móvil (portal tutor + pase de lista) ----
+// DEPRECADO: ya no se lee ni se siembra; el portal del tutor sale de FinCobroItem (lib/cxc.ts).
 model MobCargo {
   id       String  @id
   alumnoId String
@@ -164,14 +165,37 @@ model CmnMensaje {
   to     String
   canal  String
   asunto String
-  estado String // En cola | Entregado | Fallido
+  estado String // En cola | Enviando | Entregado | Fallido | Canal no configurado
   by     String
+  cuerpo   String @default("")
+  destino  String @default("") // dirección real (correo) resuelta al encolar
+  error    String @default("") // último error real del proveedor
+  intentos Int    @default(0)
+}
+
+// Intención de pago del portal del tutor cuando no hay pasarela activa: queda pendiente hasta que el cajero verifica el pago.
+model MobPagoIntencion {
+  id          String    @id @default(cuid())
+  alumnoId    String
+  tutor       String
+  tipo        String // cargos | recarga
+  monto       Float
+  detalle     String    @default("[]") // JSON: ids de FinCobroItem incluidos
+  estado      String    @default("pendiente") // pendiente | confirmada | rechazada
+  creado      DateTime  @default(now())
+  resuelto    DateTime?
+  resueltoPor String    @default("")
+  nota        String    @default("")
+  reciboId    String    @default("")
+
+  @@index([estado])
+  @@index([alumnoId])
 }
 
 // ---------- Finanzas (POS/Cobros, Kiosko, Inventario, Planes de Pago, Becas) ----------
 model FinCobroItem {
   id       String  @id
-  tutorCed String  @default("00100239401")
+  tutorCed String?
   kid      String
   con      String
   al       String

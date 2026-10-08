@@ -8,6 +8,8 @@
     "db:push": "prisma db push --skip-generate",
     "seed": "tsx src/seed.ts",
     "seed:dev": "tsx src/seed-dev.ts",
+    "seed:demo-grande": "tsx src/seed-demo-grande.ts",
+    "seed:demo-grande:quitar": "tsx src/seed-demo-grande.ts --quitar",
     "build": "tsup",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
@@ -21,12 +23,14 @@
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
     "fastify-plugin": "^4.5.1",
+    "nodemailer": "^10.0.16",
     "prisma": "^5.22.0"
   },
   "devDependencies": {
     "@stodia/shared": "workspace:*",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20.16.0",
+    "@types/nodemailer": "^8.0.2",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.3"

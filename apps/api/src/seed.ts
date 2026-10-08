@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { config } from './config';
 import { prisma } from './db';
-import { seedMovil } from './seed-movil';
+import { seedMovil, seedDemoModos } from './seed-movil';
 import { seedOperacion } from './seed-operacion';
 import { CAT_SEED, DIR0, SEED_USERS, norm } from './seed-data';
 import { seedSupervisorPin } from './lib/supervisor';
@@ -68,12 +68,14 @@ async function main() {
     });
   }
   await seedMovil();
+  await seedDemoModos();
   await seedOperacion();
   await (await import('./seed-finanzas')).default();
   await (await import('./seed-academico')).default();
   await (await import('./seed-sistema')).default();
   await (await import('./seed-personas')).default();
   await seedSupervisorPin(true);
+  if (process.env.DEMO_SCALE === 'large') await (await import('./seed-demo-grande')).sembrarDemoGrande(); // solo SEED_DEMO=true (este camino)
   console.log(`seed ok: ${SEED_USERS.length} usuarios, ${DIR0.length} alumnos, ${byTutor.size} tutores`);
 }
 

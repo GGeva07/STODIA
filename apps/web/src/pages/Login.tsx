@@ -1,12 +1,22 @@
 import { useState, type FormEvent } from 'react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { isNative } from '../lib/native';
-import { DEMO_USERS, homeFor } from '../lib/access';
+import { DEMO_USERS, canAccess, homeFor } from '../lib/access';
 import { getConfig } from '../lib/api';
 import { useSession } from '../lib/session';
 
 /** En la app nativa el Docente entra directo a la lista móvil. */
 const homeOf = (rol: Parameters<typeof homeFor>[0]) => (isNative && rol === 'Docente' ? '/m/lista' : homeFor(rol));
+
+/** Solo vuelve a la ruta pedida antes del login si el rol puede verla; si no, va a su inicio. */
+function allowedFrom(rol: Parameters<typeof homeFor>[0], from?: string): string | undefined {
+  if (!from || from === '/' || from.startsWith('/login')) return undefined;
+  if (from.startsWith('/m/tutor')) return rol === 'Tutor' ? from : undefined;
+  if (from.startsWith('/m/lista')) return rol === 'Docente' ? from : undefined;
+  if (rol === 'Tutor') return undefined;
+  const seg = from.split(/[/?#]/)[1] as Parameters<typeof canAccess>[1];
+  return canAccess(rol, seg) ? from : undefined;
+}
 
 // Fondo: si el cliente suelta public/login-bg.jpg o .webp se muestra encima del SVG por defecto
 // (una capa inexistente simplemente no se pinta).
@@ -25,7 +35,7 @@ export default function Login() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  if (user) return <Navigate to={from ?? homeOf(user.rol)} replace />;
+  if (user) return <Navigate to={allowedFrom(user.rol, from) ?? homeOf(user.rol)} replace />;
 
   const institution = getConfig().institutionName;
 
@@ -36,7 +46,7 @@ export default function Login() {
     setError('');
     try {
       const u = await login({ usuario: usuario.trim(), password });
-      nav(from ?? homeOf(u.rol), { replace: true });
+      nav(allowedFrom(u.rol, from) ?? homeOf(u.rol), { replace: true });
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'No se pudo iniciar sesión. Verifica tu usuario y contraseña e inténtalo de nuevo.');
     } finally {

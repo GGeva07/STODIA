@@ -8,9 +8,7 @@ import { errMsg, fmt } from '../../components/finanzas/fin';
 import SideDrawer from '../../components/finanzas/SideDrawer';
 
 const thw = th.replace('whitespace-nowrap ', '');
-const MONTHS = [8, 9, 10, 11, 12, 1, 2, 3, 4, 5];
-const MNAME: Record<number, string> = { 1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre' };
-const monthsFrom = (m: number) => 10 - MONTHS.indexOf(m);
+const MNAME: Record<number, string> = { 1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre' };
 const selCls = 'h-9 rounded-md border border-slate-300 bg-white px-2 text-[13px] text-ink disabled:bg-slate-50';
 const Chip = ({ children }: { children: string }) => <span className="inline-flex h-[22px] items-center rounded-full bg-mute-bg px-2 text-[11px] font-semibold text-slate-700">{children}</span>;
 const Section = ({ title, aside, children }: { title: string; aside?: string; children: ReactNode }) => (
@@ -33,15 +31,21 @@ export default function Servicios({ data, reload, canWrite }: { data: Expediente
 
   const ro = cycle !== ref.ciclos[0] || !canWrite;
   const auditoria = cycle !== ref.ciclos[0];
-  const plan = ref.planes[ficha.contrato.plan], be = ref.becas[ficha.contrato.beca];
-  const disc = Math.round(plan.gross * be.pct * 100) / 100, net = plan.gross - disc;
+  const MONTHS = ref.meses;
+  const monthsFrom = (m: number) => MONTHS.length - MONTHS.indexOf(m);
+  const plan = ref.planes[ficha.contrato.plan] as (typeof ref.planes)[string] | undefined;
+  const be = ref.becas[ficha.contrato.beca] ?? { nombre: '', pct: 0, tag: '', aprobacion: false };
+  const gross = plan?.gross ?? 0, disc = Math.round(gross * be.pct * 100) / 100, net = gross - disc;
+  const hoyIdx = Math.max(0, MONTHS.indexOf(ref.mesActual));
+  const mesesInicio = MONTHS.slice(hoyIdx, hoyIdx + 4);
   const recs = servicios.filter(s => s.kind === 'rec'), onces = servicios.filter(s => s.kind === 'once');
   const act = recs.filter(s => s.est === 'Activo');
   const addM = act.reduce((a, s) => a + s.cost, 0);
-  const monthly = (ficha.contrato.plan === '10' ? net : 0) + addM;
-  const cycleTot = net * plan.n + act.reduce((a, s) => a + s.cost * 10, 0) + onces.reduce((a, o) => a + o.cost, 0);
+  const monthly = (plan?.freq === 1 ? net : 0) + addM;
+  const cycleTot = net * (plan?.n ?? 0) + act.reduce((a, s) => a + s.cost * MONTHS.length, 0) + onces.reduce((a, o) => a + o.cost, 0);
   const curso = `${alumno.grado} ${alumno.sec}`;
-  const yr = (m: number) => (m >= 8 ? 2026 : 2027);
+  const yr = (m: number) => (m >= MONTHS[0] ? ref.anio0 : ref.anio0 + 1);
+  const finMes = () => { const [y, m] = ref.hoy.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
 
   const run = async (fn: () => Promise<unknown>, ok: string, tone: 'ok' | 'warn' | 'info' = 'ok') => {
     try { await fn(); await reload(); toast(ok, tone); } catch (e) { toast(errMsg(e), 'bad'); }
@@ -66,8 +70,8 @@ export default function Servicios({ data, reload, canWrite }: { data: Expediente
       `${c.cc.rec ? monthsFrom(c.mes) + ' cuotas generadas' : '1 cargo generado'} en CxC · primera visible en la terminal de cobros`);
   };
 
-  const endM = baja ? Number(baja.date.slice(5, 7)) : 10;
-  const futN = baja ? Math.max(0, monthsFrom(MONTHS.includes(endM) ? endM : 10) - 1) : 0;
+  const endM = baja ? Number(baja.date.slice(5, 7)) : ref.mesActual;
+  const futN = baja ? Math.max(0, monthsFrom(MONTHS.includes(endM) ? endM : MONTHS[hoyIdx]) - 1) : 0;
 
   const onceInfo = (o: ExpServicio): { est: string; tone: PillTone; label: string; fg: string; go: () => void } => {
     if (o.st === 'cobrado') return { est: `Cobrado · Recibo ${o.recibo}`, tone: 'mute', label: 'Ver recibo', fg: 'text-accent', go: () => toast(`Recibo ${o.recibo} emitido en caja`, 'info') };
@@ -85,33 +89,34 @@ export default function Servicios({ data, reload, canWrite }: { data: Expediente
           <span className="text-xs text-slate-600">Compromiso mensual recurrente <b className="font-mono text-ink">{fmt(monthly)}</b></span>
           <span className="text-xs text-slate-600">Total contratado para el ciclo <b className="font-mono text-ink">{fmt(cycleTot)}</b></span>
         </div>
-        <button disabled={ro} onClick={() => setDrawer({ key: ref.catalogo[0].k, spec: ref.catalogo[0].spec, mes: 10 })} className={`${btnPrimary} ${ro ? 'opacity-45' : ''}`}><i className="ph ph-plus" />Asignar Nuevo Servicio / Concepto</button>
+        <button disabled={ro || !ref.catalogo.length} onClick={() => setDrawer({ key: ref.catalogo[0].k, spec: ref.catalogo[0].spec, mes: ref.mesActual })} className={`${btnPrimary} ${ro || !ref.catalogo.length ? 'opacity-45' : ''}`}><i className="ph ph-plus" />Asignar Nuevo Servicio / Concepto</button>
       </div>
-      {auditoria && <div className="flex items-center gap-2 rounded-md bg-mute-bg px-3 py-2 text-xs text-slate-700"><i className="ph ph-eye" />Modo auditoría · contrato 2025–2026 en solo lectura.</div>}
+      {ref.avisos.length > 0 && !auditoria && <div className="flex flex-col gap-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{ref.avisos.map(t => <span key={t} className="flex items-center gap-2"><i className="ph ph-warning" />{t}</span>)}</div>}
+      {auditoria && <div className="flex items-center gap-2 rounded-md bg-mute-bg px-3 py-2 text-xs text-slate-700"><i className="ph ph-eye" />Modo auditoría · contrato {cycle} en solo lectura.</div>}
 
       <Section title="Plan de colegiatura base y descuentos institucionales" aside={ficha.contrato.ctr}>
         <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-5 p-4">
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-slate-500">Esquema de pago asignado</span>
             <select value={ficha.contrato.plan} disabled={ro} onChange={e => setContrato({ plan: e.target.value }, 'Esquema actualizado · la cartera futura se reprogramará al guardar el contrato', 'info')} className={selCls}>
-              <option value="10">Plan Regular 10 Cuotas: Ago – May</option><option value="4">Plan Trimestral: 4 pagos</option><option value="1">Pago Único Anual Contado (−10%)</option>
+              {!plan && <option value="">Sin plan asignado</option>}{Object.entries(ref.planes).map(([k, p]) => <option key={k} value={k}>{p.name}</option>)}
             </select>
-            <span className="text-xs text-slate-600">Cuota bruta <b className="font-mono text-ink">{fmt(plan.gross)}</b></span>
+            <span className="text-xs text-slate-600">Cuota bruta <b className="font-mono text-ink">{fmt(gross)}</b></span>
           </div>
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-slate-500">Beca o convenio</span>
-            <select value={ficha.contrato.beca} disabled={ro} onChange={e => setContrato({ beca: e.target.value }, e.target.value === 'academica' || e.target.value === 'empleado' ? 'Beca enviada a aprobación del Director Financiero; no impacta CxC hasta aprobarse' : 'Beca actualizada', e.target.value === 'academica' || e.target.value === 'empleado' ? 'warn' : 'info')} className={selCls}>
-              <option value="none">Sin beca ni convenio</option><option value="hermano">10% – Beca Plan Hermano</option><option value="academica">25% – Beca Académica</option><option value="empleado">50% – Hijo de Empleado</option>
+            <select value={ficha.contrato.beca} disabled={ro} onChange={e => { const needs = !!ref.becas[e.target.value]?.aprobacion; void setContrato({ beca: e.target.value }, needs ? 'Beca enviada a aprobación del Director Financiero; no impacta CxC hasta aprobarse' : 'Beca actualizada', needs ? 'warn' : 'info'); }} className={selCls}>
+              <option value="none">Sin beca ni convenio</option>{Object.entries(ref.becas).map(([k, b]) => <option key={k} value={k}>{Math.round(b.pct * 10000) / 100}% – {b.nombre}</option>)}
             </select>
             <div className="flex flex-wrap items-center gap-2">
-              {be.tag && <span className={`inline-flex h-5 items-center rounded-full px-2 text-[11px] font-semibold ${ficha.contrato.beca === 'hermano' ? 'bg-ok-bg text-ok-fg' : 'bg-warn-bg text-warn-fg'}`}>{be.tag}</span>}
+              {be.tag && <span className={`inline-flex h-5 items-center rounded-full px-2 text-[11px] font-semibold ${be.aprobacion ? 'bg-warn-bg text-warn-fg' : 'bg-ok-bg text-ok-fg'}`}>{be.tag}</span>}
               {disc > 0 && <span className="font-mono text-xs font-medium text-green-600">− {fmt(disc)} por cuota</span>}
             </div>
           </div>
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-slate-500">Monto neto facturable</span>
-            <span className="font-mono text-[22px] font-bold tracking-[-0.02em] text-ink">{fmt(net)} <span className="text-[13px] font-medium text-slate-500">{plan.unit}</span></span>
-            <span className="flex items-center gap-1.5 text-xs text-green-700"><i className="ph-fill ph-check-circle" />{plan.n} {plan.n === 1 ? 'cuota programada' : 'cuotas programadas'} en cartera masiva</span>
+            <span className="font-mono text-[22px] font-bold tracking-[-0.02em] text-ink">{fmt(net)} <span className="text-[13px] font-medium text-slate-500">{plan?.unit ?? ''}</span></span>
+            {plan ? <span className="flex items-center gap-1.5 text-xs text-green-700"><i className="ph-fill ph-check-circle" />{plan.n} {plan.n === 1 ? 'cuota programada' : 'cuotas programadas'} en cartera masiva</span> : <span className="flex items-center gap-1.5 text-xs text-amber-700"><i className="ph ph-warning" />Sin plan de pago asignado</span>}
           </div>
         </div>
       </Section>
@@ -150,7 +155,7 @@ export default function Servicios({ data, reload, canWrite }: { data: Expediente
                       {on && !ro && (
                         <span className="inline-flex justify-end gap-3">
                           <button onClick={() => setEdit({ id: s.id, draft: s.spec })} className="border-0 bg-transparent p-0 text-[13px] font-medium text-accent hover:underline">Editar</button>
-                          <button onClick={() => setBaja({ s, date: '2026-10-31', chk: false })} className="border-0 bg-transparent p-0 text-[13px] font-medium text-red-600 hover:underline">Dar de baja</button>
+                          <button onClick={() => setBaja({ s, date: finMes(), chk: false })} className="border-0 bg-transparent p-0 text-[13px] font-medium text-red-600 hover:underline">Dar de baja</button>
                         </span>
                       )}
                     </td>
@@ -207,7 +212,7 @@ export default function Servicios({ data, reload, canWrite }: { data: Expediente
             </label>
             <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">{dc.rec ? 'Inicio del servicio (primer cargo)' : 'Fecha de cargo'}
               <select value={drawer.mes} onChange={e => setDrawer({ ...drawer, mes: Number(e.target.value) })} className="h-[38px] rounded-md border border-slate-300 bg-white px-2 text-[13px] text-ink">
-                {[10, 11, 12, 1].map(m => <option key={m} value={m}>1 de {MNAME[m].toLowerCase()} de {yr(m)}</option>)}
+                {mesesInicio.map(m => <option key={m} value={m}>1 de {MNAME[m].toLowerCase()} de {yr(m)}</option>)}
               </select>
             </label>
             <div className="flex items-baseline justify-between rounded-md border border-slate-200 bg-slate-50 p-3"><span className="text-xs text-slate-600">{dc.rec ? 'Costo recurrente mensual' : 'Monto del cargo único'}</span><span className="font-mono text-base font-semibold">{fmt(dc.price)}</span></div>
@@ -243,7 +248,7 @@ export default function Servicios({ data, reload, canWrite }: { data: Expediente
           </div>
           <div className="flex flex-col gap-3 px-5 pb-4">
             <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Fecha de finalización efectiva *
-              <input type="date" value={baja.date} min="2026-10-06" max="2027-05-31" onChange={e => setBaja({ ...baja, date: e.target.value })} className="h-[38px] rounded-md border border-slate-300 px-2.5 font-mono text-sm text-ink outline-none" />
+              <input type="date" value={baja.date} min={ref.hoy} max={ref.finCiclo} onChange={e => setBaja({ ...baja, date: e.target.value })} className="h-[38px] rounded-md border border-slate-300 px-2.5 font-mono text-sm text-ink outline-none" />
             </label>
             <label className={`flex cursor-pointer items-start gap-2.5 rounded-md border p-3 text-[13px] leading-[1.45] ${baja.chk ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-white'}`}>
               <input type="checkbox" checked={baja.chk} onChange={() => setBaja({ ...baja, chk: !baja.chk })} className="mt-0.5 h-4 w-4 accent-red-600" />

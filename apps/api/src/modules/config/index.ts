@@ -1,8 +1,8 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
-import type { CfgAssets, CfgPerfil, ConfigGlobal, Rol, ScreenId } from '@stodia/shared';
+import type { CfgFinanzas, CfgAssets, CfgPerfil, ConfigGlobal, Rol, ScreenId } from '@stodia/shared';
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
-import { cfgGet, cfgSet } from '../../lib/sisconfig';
+import { CFG_DEFAULTS, cfgGet, cfgSet } from '../../lib/sisconfig';
 
 const ROLES_BASE: Rol[] = ['Super Admin', 'Director Académico', 'Docente', 'Cajero', 'Encargado Comedor', 'Tutor'];
 const NCF_TIPO: Record<string, string> = { B01: 'Crédito fiscal', B02: 'Consumo', B04: 'Nota de crédito', B14: 'Regímenes especiales' };
@@ -13,14 +13,34 @@ const plugin: FastifyPluginAsync = async app => {
   const sa = { onRequest: [app.authenticate, app.requireRole('Super Admin')] };
 
   app.get('/', { onRequest: [app.authenticate] }, async (): Promise<ConfigGlobal> => {
-    const [perfil, assets, ncf, ecf, ecfInfo, ciclos, access] = await Promise.all([cfgGet('perfil'), cfgGet('assets'), cfgGet('ncf'), cfgGet('ecf'), cfgGet('ecfInfo'), cfgGet('ciclos'), cfgGet('access')]);
-    return { perfil, assets, ncf, ecf, ecfInfo, ciclos, access, rolesBase: ROLES_BASE };
+    const [perfil, assets, ncf, ecf, ecfInfo, ciclos, access, finanzas] = await Promise.all([cfgGet('perfil'), cfgGet('assets'), cfgGet('ncf'), cfgGet('ecf'), cfgGet('ecfInfo'), cfgGet('ciclos'), cfgGet('access'), cfgGet('finanzas')]);
+    return { perfil, assets, ncf, ecf, ecfInfo, ciclos, finanzas: { ...CFG_DEFAULTS.finanzas, ...finanzas }, access, rolesBase: ROLES_BASE };
+  });
+
+  /** Configuración financiera de la instancia: cualquier usuario autenticado lee; solo Super Admin escribe. */
+  app.get('/finanzas', { onRequest: [app.authenticate] }, async (): Promise<CfgFinanzas> => ({ ...CFG_DEFAULTS.finanzas, ...(await cfgGet('finanzas')) }));
+
+  app.put<{ Body: Partial<CfgFinanzas> }>('/finanzas', sa, async (req, reply) => {
+    const b = req.body ?? {}, cur = { ...CFG_DEFAULTS.finanzas, ...(await cfgGet('finanzas')) }, next: CfgFinanzas = { ...cur };
+    const lim: Record<keyof CfgFinanzas, [number, number, string]> = {
+      matricula: [0, 100_000_000, 'La matrícula'], inscripcion: [0, 100_000_000, 'La inscripción'], itbis: [0, 1, 'El ITBIS (fracción, p. ej. 0.18)'],
+      recargoMoraPct: [0, 100, 'El recargo por mora (%)'], descuentoProntoPct: [0, 100, 'El descuento por pronto pago (%)'], diaCorte: [0, 28, 'El día de corte'],
+    };
+    for (const k of Object.keys(lim) as (keyof CfgFinanzas)[]) {
+      if (b[k] === undefined || b[k] === null || (b[k] as unknown) === '') continue;
+      const v = Number(b[k]), [lo, hi, nombre] = lim[k];
+      if (!Number.isFinite(v) || v < lo || v > hi) return bad(reply, `${nombre} debe estar entre ${lo} y ${hi}`);
+      next[k] = k === 'diaCorte' ? Math.round(v) : Math.round(v * 10000) / 10000;
+    }
+    await cfgSet('finanzas', next);
+    await audit(req.user, 'Update', { tabla: 'TenantConfig', id: 'finanzas', prev: JSON.stringify(cur), next: JSON.stringify(next), ip: req.ip });
+    return next;
   });
 
   app.put<{ Body: CfgPerfil }>('/perfil', sa, async (req, reply) => {
     const b = req.body ?? ({} as CfgPerfil);
     if (!b.nombre?.trim() || String(b.rnc ?? '').replace(/\D/g, '').length !== 9) return bad(reply, 'Razón social obligatoria y RNC de 9 dígitos');
-    await cfgSet('perfil', { ...(await cfgGet('perfil')), nombre: b.nombre.trim(), rnc: b.rnc, tel: b.tel ?? '', dir: b.dir ?? '' });
+    await cfgSet('perfil', { ...(await cfgGet('perfil')), nombre: b.nombre.trim(), rnc: b.rnc, tel: b.tel ?? '', dir: b.dir ?? '', ...(b.ciudad !== undefined ? { ciudad: b.ciudad } : {}) });
     await audit(req.user, 'Update', { tabla: 'TenantConfig', id: 'perfil', next: `${b.nombre} · RNC ${b.rnc}`, ip: req.ip });
     return cfgGet('perfil');
   });

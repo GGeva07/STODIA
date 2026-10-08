@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CobroCuenta, CobroItem, CobroPagoReq, ReciboFin } from '@stodia/shared';
+import type { CobroCuenta, CobroItem, CobroMetodo, CobroPagoReq, MobPagoIntencionDto, ReciboFin } from '@stodia/shared';
 import { api } from '../../lib/api';
 import { useSession } from '../../lib/session';
 import { useToastStack } from '../../components/useToastStack';
@@ -7,12 +7,14 @@ import SupervisorGuardModal, { type GuardCfg } from '../../components/finanzas/S
 import SideDrawer from '../../components/finanzas/SideDrawer';
 import { TONE, errMsg, fmt } from '../../components/finanzas/fin';
 import { useWide } from '../../components/finanzas/useWide';
+import { useFinCfg } from '../../components/finanzas/finConfig';
+import PagosPorVerificar from './PagosPorVerificar';
+import { useCaja } from '../../components/finanzas/caja';
 import { B, docTirilla, hoyDMY, runPrint, usePrintBusy, type PDoc } from '../../components/finanzas/print';
 
-const REFS: Record<string, string | null> = { 'Efectivo': null, 'Tarjeta de Crédito': 'Autorización', 'Tarjeta de Débito': 'Autorización', 'Transferencia': 'Ref. bancaria', 'Cheque': 'No. cheque' };
-const DEMO_Q = '001-0023940-1';
-const KIDS: [string, string, string][] = [['all', 'Todos los conceptos', ''], ['juan', 'Juan Mendoza', '(5to A)'], ['sofia', 'Sofía Mendoza', '(2do B)']];
-const KID_NAME: Record<string, string> = { juan: 'Juan', sofia: 'Sofía' };
+const METODOS0: CobroMetodo[] = [{ nombre: 'Efectivo', ref: null }];
+/** Solo desarrollo: VITE_DEV_AUTOLOAD=<cédula|carnet|nombre> carga esa cuenta al abrir la terminal (en producción la terminal abre vacía). */
+const DEV_AUTOLOAD: string = import.meta.env.DEV ? (import.meta.env.VITE_DEV_AUTOLOAD ?? '') : '';
 const EMPTY_PAY: CobroPagoReq[] = [{ m: 'Efectivo', a: '', r: '' }];
 const Kbd = ({ k, children }: { k: string; children: string }) => (
   <span className="flex items-center gap-1"><span className="rounded border border-slate-300 bg-white px-1.5 py-0.5 font-mono text-[11px] font-medium text-slate-700">{k}</span>{children}</span>
@@ -27,11 +29,22 @@ export default function Screen() {
   const wide = useWide();
   const isSuper = user?.rol === 'Super Admin';
   const searchRef = useRef<HTMLInputElement>(null);
+  const cajaInfo = useCaja();
+  const [metodos, setMetodos] = useState<CobroMetodo[]>(METODOS0);
+  const REFS = useMemo<Record<string, string | null>>(() => Object.fromEntries(metodos.map(m => [m.nombre, m.ref])), [metodos]);
+  useEffect(() => { api.get<CobroMetodo[]>('/cobros/metodos').then(setMetodos).catch(() => undefined); }, []);
+  // Pagos por verificar (intenciones del portal del tutor).
+  const [intens, setIntens] = useState<MobPagoIntencionDto[]>([]);
+  const [intOpen, setIntOpen] = useState(false);
+  const [vinc, setVinc] = useState<MobPagoIntencionDto | null>(null);
+  const loadIntens = useCallback(() => { api.get<MobPagoIntencionDto[]>('/movil/pagos/intenciones?estado=pendiente').then(setIntens).catch(() => setIntens([])); }, []);
+  useEffect(() => { loadIntens(); }, [loadIntens]);
 
-  const [q, setQ] = useState(DEMO_Q);
+  const [q, setQ] = useState('');
+  const fcfg = useFinCfg(), prontoPct = fcfg.finanzas.descuentoProntoPct;
   const [cuenta, setCuenta] = useState<CobroCuenta | null>(null);
   const [notFound, setNotFound] = useState(false);
-  const [sel, setSel] = useState<Record<string, boolean>>({ c09: true, m09: true, c10: true, k10: true });
+  const [sel, setSel] = useState<Record<string, boolean>>({});
   const [focus, setFocus] = useState(0);
   const [kid, setKid] = useState('all');
   const [discount, setDiscount] = useState<'none' | 'pronto' | 'exo'>('none');
@@ -44,17 +57,21 @@ export default function Screen() {
   const [busy, setBusy] = useState(false);
   const lastAct = useRef(Date.now());
 
-  const search = useCallback(async (term: string, quiet = false) => {
+  const search = useCallback(async (term: string, quiet = false, link?: MobPagoIntencionDto) => {
     try {
-      const c = await api.get<CobroCuenta>('/cobros/cuenta?q=' + encodeURIComponent(term));
-      setCuenta(c); setNotFound(false); setFocus(0);
-      if (!quiet) toast('Cuenta cargada en 128 ms', 'info');
+      const t0 = performance.now();
+      const c = await api.get<CobroCuenta>('/cobros/cuenta?q=' + encodeURIComponent(term.trim()));
+      setCuenta(c); setNotFound(false); setFocus(0); setKid('all'); setPays(EMPTY_PAY); setDiscount('none'); setExoPin('');
+      setVinc(link ?? null);
+      const pre = link?.tipo === 'cargos' ? link.detalle.map(d => d.id).filter(id => c.items.some(i => i.id === id)) : [];
+      setSel(Object.fromEntries(pre.length ? pre.map(id => [id, true]) : c.items.filter(i => i.est === 'Vencida').map(i => [i.id, true]))); // arranca con lo vencido marcado (o con los cargos de la intención)
+      if (!quiet) toast('Cuenta cargada en ' + Math.max(1, Math.round(performance.now() - t0)) + ' ms', 'info');
     } catch {
       setCuenta(null); setNotFound(true);
     }
   }, [toast]);
 
-  useEffect(() => { void search(DEMO_Q, true); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (DEV_AUTOLOAD) { setQ(DEV_AUTOLOAD); void search(DEV_AUTOLOAD, true); } }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const items = cuenta?.items ?? [];
   const recibos = cuenta?.recibos ?? [];
@@ -64,7 +81,7 @@ export default function Screen() {
     const s = items.filter(i => sel[i.id]);
     const sub = s.reduce((a, i) => a + i.monto, 0);
     let desc = 0;
-    if (discount === 'pronto') desc = s.filter(i => i.tipo === 'col' && i.est === 'Pendiente').reduce((a, i) => a + i.monto * 0.05, 0);
+    if (discount === 'pronto') desc = s.filter(i => i.tipo === 'col' && i.est === 'Pendiente').reduce((a, i) => a + i.monto * (prontoPct / 100), 0);
     if (discount === 'exo') desc = s.filter(i => i.tipo === 'mora').reduce((a, i) => a + i.monto, 0);
     const total = Math.round((sub - desc) * 100) / 100;
     const ps = pays.map(p => ({ ...p, amt: pays.length === 1 && p.a === '' ? total : parseFloat(p.a) || 0 }));
@@ -83,10 +100,13 @@ export default function Screen() {
     else if (change > 0) { msg = 'Cambio a devolver ' + fmt(change); }
     const canPay = s.length > 0 && total > 0 && paid > 0.001 && !missingRef && nonCash <= total + 0.001;
     return { sel: s, sub, desc, total, pays: ps, change, remaining, abono, msg, tone, canPay };
-  }, [items, sel, discount, pays]);
+  }, [items, sel, discount, pays, prontoPct, REFS]);
 
   const venc = items.filter(i => i.est === 'Vencida').reduce((a, i) => a + i.monto, 0);
-  const mora = items.some(i => i.est === 'Vencida' && i.kid === 'juan');
+  const mora = items.some(i => i.est === 'Vencida');
+  const mesesMora = Math.max(0, ...Object.values(items.filter(i => i.est === 'Vencida' && i.tipo === 'col').reduce<Record<string, number>>((m, i) => ({ ...m, [i.kid]: (m[i.kid] ?? 0) + 1 }), {})));
+  const KIDS: [string, string, string][] = [['all', 'Todos los conceptos', ''], ...(cuenta?.hijos ?? []).map(h => [h.kid, h.nombre, '(' + h.grado + ' ' + h.sec + ')'] as [string, string, string])];
+  const kidName = (k: string) => cuenta?.hijos.find(h => h.kid === k)?.corto ?? '';
 
   const setPay = (i: number, k: keyof CobroPagoReq, v: string) =>
     setPays(ps => ps.map((p, j) => (j === i ? { ...p, [k]: k === 'a' ? v.replace(/[^\d.]/g, '') : v } : p)));
@@ -98,12 +118,13 @@ export default function Screen() {
     if (!c.canPay) { toast(c.msg, 'bad'); return; }
     setBusy(true);
     try {
-      const rec = await api.post<ReciboFin>('/cobros/procesar', { ids: c.sel.map(i => i.id), discount, pays, pin: exoPin });
-      const fresh = await api.get<CobroCuenta>('/cobros/cuenta?q=' + DEMO_Q);
+      const rec = await api.post<ReciboFin>('/cobros/procesar', { ids: c.sel.map(i => i.id), discount, pays, pin: exoPin, cedula: cuenta?.cedula, ...(vinc?.tipo === 'cargos' ? { intencionId: vinc.id } : {}) });
+      const fresh = await api.get<CobroCuenta>('/cobros/cuenta?q=' + encodeURIComponent(cuenta!.cedula));
       setCuenta(fresh); setSel({}); setPays(EMPTY_PAY); setDiscount('none'); setExoPin(''); setFocus(0); setReceipt(rec);
+      if (vinc?.tipo === 'cargos' && !rec.abono) { setVinc(null); loadIntens(); }
       toast(rec.abono ? `${rec.id} · Abono ${fmt(rec.monto)} aplicado · saldo pendiente ${fmt(rec.saldo)}` : `${rec.id} procesado · ${fmt(rec.monto)}`, rec.abono ? 'warn' : 'ok');
     } catch (e) { toast(errMsg(e), 'bad'); } finally { setBusy(false); }
-  }, [c, discount, pays, exoPin, expired, busy, toast]);
+  }, [c, discount, pays, exoPin, expired, busy, toast, cuenta, vinc, loadIntens]);
 
   // Atajos de teclado del prototipo + bloqueo por inactividad (15 min).
   const toggle = (id: string, idx: number) => { setSel(s => ({ ...s, [id]: !s[id] })); setFocus(idx); };
@@ -129,7 +150,7 @@ export default function Screen() {
   }, []);
 
   const newCobro = () => {
-    setQ(''); setCuenta(null); setNotFound(false); setPays(EMPTY_PAY); setDiscount('none'); setKid('all');
+    setQ(''); setCuenta(null); setVinc(null); setNotFound(false); setPays(EMPTY_PAY); setDiscount('none'); setKid('all');
     setTimeout(() => searchRef.current?.focus(), 0);
   };
 
@@ -150,8 +171,8 @@ export default function Screen() {
     const act = recibos.filter(r => r.est !== 'Anulado'), by: Record<string, number> = {};
     act.forEach(r => { by[r.metodo] = (by[r.metodo] || 0) + r.monto; });
     const tot: [string, string, boolean?][] = [...Object.entries(by).map(([k, v]) => ['Total ' + k, fmt(v)] as [string, string]), ['TOTAL NETO COBRADO', fmt(act.reduce((a, r) => a + r.monto, 0)), true]];
-    return { kind: 'carta', name: 'Cuadre de caja', format: 'Carta 8.5 × 11 in', sign: ['Firma del cajero', 'Firma de dirección'], pages: [{ title: 'Cuadre de caja', sub: 'Caja 02 · Turno matutino · ' + hoyDMY(), blocks: [
-      B.kv([['Cajero', user?.nombre ?? 'Ana Rosario'], ['Sucursal', 'Principal'], ['Recibos emitidos', String(recibos.length)], ['Anulados', String(recibos.length - act.length)]]),
+    return { kind: 'carta', name: 'Cuadre de caja', format: 'Carta 8.5 × 11 in', sign: ['Firma del cajero', 'Firma de dirección'], pages: [{ title: 'Cuadre de caja', sub: cajaInfo.cajaLabel + ' · ' + hoyDMY(), blocks: [
+      B.kv([['Cajero', user?.nombre ?? ''], ['Sucursal', cajaInfo.sucursal], ['Recibos emitidos', String(recibos.length)], ['Anulados', String(recibos.length - act.length)]]),
       B.table(['Recibo', 'NCF', 'Tutor', 'Método', 'Hora', 'Monto', 'Estado'], recibos.map(r => [r.id, r.ncf, r.tutor, r.metodo, r.hora, fmt(r.monto), r.est === 'Anulado' ? 'Anulado' : (r.abono ? 'Abono' : 'Activo')]), ['62px', '92px', '1fr', '70px', '40px', '90px', '52px'], ['left', 'left', 'left', 'left', 'left', 'right', 'left']),
       B.total(tot)] }] };
   };
@@ -182,9 +203,10 @@ export default function Screen() {
       <div className="flex flex-none flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <h1 className="m-0 text-lg font-semibold tracking-tight">Terminal de Cobros</h1>
-          <span className="flex items-center gap-1.5 text-xs text-slate-600"><span className="h-2 w-2 rounded-full bg-green-600" />Caja 02 · Turno Matutino</span>
+          <span className="flex items-center gap-1.5 text-xs text-slate-600"><span className="h-2 w-2 rounded-full bg-green-600" />{cajaInfo.cajaLabel}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          {intens.length > 0 && <button onClick={() => setIntOpen(true)} className="flex h-[30px] items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 text-xs font-semibold text-amber-800 hover:bg-amber-100"><i className="ph ph-hourglass-medium" />Pagos por verificar ({intens.length})</button>}
           <Kbd k="F1">Buscar</Kbd><Kbd k="↑↓">Mover</Kbd><Kbd k="Espacio">Marcar</Kbd><Kbd k="F12">Cobrar</Kbd>
           <button onClick={newCobro} className="ml-1.5 flex h-[30px] items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-semibold text-white hover:bg-accent-dark"><i className="ph ph-plus" />Nuevo Cobro</button>
         </div>
@@ -212,9 +234,10 @@ export default function Screen() {
                 <div className="flex flex-wrap items-center gap-2.5">
                   <span className="text-sm font-semibold">{cuenta.tutor}</span>
                   <span className="font-mono text-xs text-slate-500">{cuenta.cedula}</span>
+                  {vinc && <span className="inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800" title="Al emitir el recibo se confirma el pago reportado por el tutor"><i className="ph ph-link" />Pago del portal · {fmt(vinc.monto)}<button onClick={() => setVinc(null)} aria-label="Desvincular" className="ml-0.5 text-amber-700 hover:text-amber-900"><i className="ph ph-x" /></button></span>}
                   <span className="inline-flex h-[19px] w-[126px] flex-none items-center justify-center whitespace-nowrap rounded border px-[5px] text-[10px] font-semibold leading-none"
                     style={mora ? { background: '#FEE2E2', color: '#B91C1C', borderColor: '#FECACA' } : { background: '#DCFCE7', color: '#15803D', borderColor: '#BBF7D0' }}>
-                    {mora ? 'EN MORA · 2 MESES' : 'AL DÍA'}
+                    {mora ? 'EN MORA' + (mesesMora ? ' · ' + mesesMora + (mesesMora === 1 ? ' MES' : ' MESES') : '') : 'AL DÍA'}
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-3 font-medium text-slate-700">
@@ -279,7 +302,7 @@ export default function Screen() {
                   {vis.length === 0 && (
                     <div className="flex items-center gap-3.5 px-4 py-7">
                       <span className="grid h-11 w-11 place-items-center rounded-full bg-ok-bg text-[22px] text-green-600"><i className="ph ph-check-circle" /></span>
-                      <div><div className="text-sm font-semibold">Sin conceptos pendientes</div><div className="text-[13px] text-slate-600">No hay cuotas abiertas para este filtro en el ciclo 2026–2027.</div></div>
+                      <div><div className="text-sm font-semibold">Sin conceptos pendientes</div><div className="text-[13px] text-slate-600">No hay cuotas abiertas para este filtro en el ciclo {fcfg.ciclo}.</div></div>
                     </div>
                   )}
                 </div>
@@ -287,11 +310,11 @@ export default function Screen() {
                   <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600">Descuento
                     <select value={discount} onChange={e => onDiscount(e.target.value)} className="h-7 rounded-[5px] border border-slate-300 bg-white px-1.5 text-xs text-ink">
                       <option value="none">Ninguno</option>
-                      <option value="pronto">Pronto pago −5% (cuotas futuras)</option>
+                      {prontoPct > 0 && <option value="pronto">Pronto pago −{prontoPct}% (cuotas futuras)</option>}
                       <option value="exo">Exonerar mora (supervisor)</option>
                     </select>
                   </label>
-                  <span className="text-[11px] text-slate-500">Beca Plan Hermano −10% ya aplicada a la colegiatura de Sofía.</span>
+                  {(cuenta.becas ?? []).map(b => <span key={b} className="text-[11px] text-slate-500">{b}</span>)}
                 </div>
               </>
             ) : (
@@ -299,11 +322,11 @@ export default function Screen() {
                 <span className="grid h-[52px] w-[52px] place-items-center rounded-full bg-blue-50 text-[26px] text-accent"><i className="ph ph-identification-badge" /></span>
                 <div className="text-[15px] font-semibold">{notFound ? `Sin coincidencias para «${q}»` : 'Busca un tutor o alumno'}</div>
                 <div className="text-[13px] leading-normal text-slate-600">
-                  {notFound ? 'Verifica la cédula o RNC. También puedes buscar por matrícula (EST-0412) o por nombre.' : 'Escanea el carnet o escribe cédula, RNC o matrícula. Presiona / para enfocar la búsqueda.'}
+                  {notFound ? 'Verifica la cédula o RNC. También puedes buscar por carnet, por nombre del tutor o del alumno.' : 'Escanea el carnet o escribe cédula, RNC o matrícula. Presiona / para enfocar la búsqueda.'}
                 </div>
-                <button onClick={() => { setQ(DEMO_Q); void search(DEMO_Q, true); }} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark">
-                  <i className="ph ph-user-focus" />Cargar cuenta de Carlos Mendoza
-                </button>
+                {DEV_AUTOLOAD && <button onClick={() => { setQ(DEV_AUTOLOAD); void search(DEV_AUTOLOAD, true); }} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark">
+                  <i className="ph ph-user-focus" />Cargar cuenta de prueba (DEV)
+                </button>}
               </div>
             )}
           </section>
@@ -318,7 +341,7 @@ export default function Screen() {
             <div className="mt-2.5 flex max-h-[200px] flex-col gap-[7px] overflow-auto text-xs">
               {c.sel.map(i => (
                 <div key={i.id} className="flex justify-between gap-2.5 text-slate-600">
-                  <span className="overflow-hidden text-ellipsis whitespace-nowrap">{i.con} ({KID_NAME[i.kid]})</span>
+                  <span className="overflow-hidden text-ellipsis whitespace-nowrap">{i.con} ({kidName(i.kid)})</span>
                   <span className="whitespace-nowrap font-mono text-xs font-medium text-ink">{fmt(i.monto)}</span>
                 </div>
               ))}
@@ -412,11 +435,13 @@ export default function Screen() {
         </aside>
       </div>
 
+      {intOpen && <PagosPorVerificar items={intens} receiptId={receipt?.id} onClose={() => setIntOpen(false)} onChanged={loadIntens} toast={toast}
+        onCargar={it => { setIntOpen(false); setQ(it.tutor); void search(it.tutor, true, it); }} />}
       {histOpen && (
         <SideDrawer width={760} z={65} onClose={() => setHistOpen(false)}>
           <div className="flex items-center justify-between gap-2.5 border-b border-slate-200 px-[18px] py-3.5">
             <div>
-              <div className="text-[15px] font-semibold">Historial de turno · Caja 02</div>
+              <div className="text-[15px] font-semibold">Historial de turno{cajaInfo.caja ? ' · ' + cajaInfo.caja : ''}</div>
               <div className="text-xs text-slate-500">Anular requiere clave de supervisor (el cajero no tiene permiso D)</div>
             </div>
             <div className="flex items-center gap-2">
@@ -467,7 +492,7 @@ export default function Screen() {
             </div>
             <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
               <button onClick={() => setReceipt(null)} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">Cerrar</button>
-              <button onClick={() => toast('Recibo enviado por correo a c.mendoza@correo.do', 'ok')} className="flex h-[34px] items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-[13px] font-medium hover:bg-slate-100"><i className="ph ph-envelope-simple" />Enviar por Correo</button>
+              <button onClick={() => (cuenta?.email ? toast('Recibo enviado por correo a ' + cuenta.email, 'ok') : toast('El tutor no tiene correo registrado', 'warn'))} className="flex h-[34px] items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-[13px] font-medium hover:bg-slate-100"><i className="ph ph-envelope-simple" />Enviar por Correo</button>
               <button onClick={() => runPrint('rcpt', docTirilla(receipt, user?.nombre))} className="flex h-9 items-center gap-1.5 rounded-md border border-accent bg-white px-3.5 text-[13px] font-semibold text-accent hover:bg-blue-50"><i className={pbr.icon} style={{ animation: pbr.spin }} />{pbr.label}</button>
             </div>
           </div>

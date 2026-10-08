@@ -4,26 +4,27 @@ import { api } from '../../lib/api';
 import { useToastStack } from '../../components/useToastStack';
 
 const fmt = (n: number) => 'RD$ ' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const BUYS: [string, number][] = [['Merienda', 120], ['Jugo natural', 80], ['Sándwich', 175]];
 const LOG_ICON = { ok: ['ph-fill ph-check-circle', '#16A34A'], alert: ['ph-fill ph-warning', '#D97706'], no: ['ph-fill ph-x-circle', '#DC2626'] } as const;
-const ORDER = ['EST-0412', 'EST-0398', 'EST-0455', 'EST-0501']; // orden de los chips del prototipo
 const LBL = 'text-xs font-semibold uppercase tracking-wide text-slate-500';
 
 export default function Screen() {
   const { toast, toasts } = useToastStack();
   const [carnets, setCarnets] = useState<Record<string, ComCarnetDto>>({});
   const [log, setLog] = useState<ComLecturaDto[]>([]);
-  const [scan, setScan] = useState('EST-0412');
+  const [scan, setScan] = useState('');
   const [input, setInput] = useState('');
-  const [ms, setMs] = useState(142);
+  const [ms, setMs] = useState<number | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [enc, setEnc] = useState('');
+  const [consumos, setConsumos] = useState<ComedorEstado['consumos']>([]);
   const ref = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.get<ComedorEstado>('/comedor').then(e => {
       setCarnets(Object.fromEntries(e.carnets.map(c => [c.code, c])));
-      setLog(e.log);
-      if (e.carnets[0] && !e.carnets.some(c => c.code === 'EST-0412')) setScan(e.carnets[0].code);
-    }).catch(e => toast(e.message, 'bad'));
+      setLog(e.log); setEnc(e.encabezado); setConsumos(e.consumos); setLoaded(true);
+      setScan(s => s || e.carnets[0]?.code || '');
+    }).catch(e => { toast(e.message, 'bad'); setLoaded(true); });
   }, [toast]);
   const ready = !!carnets[scan];
   useEffect(() => { if (ready) ref.current?.focus(); }, [ready]);
@@ -54,7 +55,25 @@ export default function Screen() {
   };
 
   const K = carnets[scan];
-  if (!K) return <>{toasts}<p className="text-sm text-slate-500">Cargando…</p></>;
+  if (!K) {
+    if (!loaded) return <>{toasts}<p className="text-sm text-slate-500">Cargando…</p></>;
+    return (
+      <div className="flex flex-col gap-3.5">
+        {toasts}
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Punto de Verificación · Comedor</h1>
+          <p className="mt-1 text-[13px] text-slate-600">{enc || 'Escanea el carnet del estudiante o escribe su código'}</p>
+        </div>
+        <section className="flex max-w-[560px] flex-col gap-2.5 rounded-lg border border-slate-200 bg-white p-4">
+          <div className="text-[13px] text-slate-600">Aún no hay carnets de comedor registrados. Escanea el carnet de un estudiante (o escribe su código) y se creará su ficha sin plan activo hasta que se le asigne uno.</div>
+          <input
+            ref={ref} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void doScan(input); }} placeholder="EST-0000"
+            className="h-[42px] rounded-md border border-slate-300 px-3 font-mono text-base font-medium text-ink outline-none focus:border-accent focus:ring-[3px] focus:ring-accent-soft"
+          />
+        </section>
+      </div>
+    );
+  }
   const w = K.name.split(' ');
   const ini = ((w[0]?.[0] ?? '') + (w[1]?.[0] ?? '')).toUpperCase();
   const pct = Math.min(100, Math.round((K.spent / K.limit) * 100));
@@ -67,10 +86,10 @@ export default function Screen() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Punto de Verificación · Comedor</h1>
-          <p className="mt-1 text-[13px] text-slate-600">Comedor Central · Turno almuerzo 12:00–13:30 · Escáner QR / NFC conectado</p>
+          <p className="mt-1 text-[13px] text-slate-600">{enc || 'Escanea el carnet del estudiante o escribe su código'}</p>
         </div>
         <span className="flex items-center gap-1.5 text-xs text-slate-600">
-          Respuesta <b className="font-mono" style={{ color: ms < 300 ? '#15803D' : '#DC2626' }}>{ms} ms</b>
+          Respuesta <b className="font-mono" style={{ color: ms == null || ms < 300 ? '#15803D' : '#DC2626' }}>{ms == null ? '—' : ms + ' ms'}</b>
         </span>
       </div>
 
@@ -120,7 +139,7 @@ export default function Screen() {
             </label>
             <div className="text-xs text-slate-500">Simular lectura:</div>
             <div className="flex flex-wrap gap-1.5">
-              {Object.keys(carnets).sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99)).map(code => (
+              {Object.keys(carnets).map(code => (
                 <button key={code} onClick={() => void doScan(code)} className="h-[30px] rounded-md border border-slate-300 bg-white px-2.5 font-mono text-xs font-medium text-ink hover:bg-slate-100">{code}</button>
               ))}
             </div>
@@ -131,7 +150,8 @@ export default function Screen() {
             <div className="text-xs text-slate-600">Consumido hoy <span className="font-mono">{fmt(K.spent)}</span> de <span className="font-mono">{fmt(K.limit)}</span> (límite fijado por el tutor)</div>
             <div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full" style={{ width: pct + '%', background: K.spent / K.limit >= 0.8 ? '#D97706' : '#16A34A' }} /></div>
             <div className="flex flex-wrap gap-1.5">
-              {BUYS.map(([l, p]) => (
+              {consumos.length === 0 && <span className="text-xs text-slate-500">Sin productos de consumo configurados.</span>}
+              {consumos.map(({ l, p }) => (
                 <button key={l} onClick={() => void buy(p)} className="h-8 rounded-md border border-slate-300 bg-white px-2.5 text-xs text-ink hover:bg-slate-100">{l} · <span className="font-mono">{fmt(p)}</span></button>
               ))}
             </div>

@@ -2,6 +2,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { AliData, AliMenuDto, AliPlanDto, AliPlanInput } from '@stodia/shared';
 import { prisma } from '../../db';
 import { norm } from '../../seed-data';
+import { DIAS_SEMANA, catalogosAli, ensureMenuSemanal, semanaDe } from '../../lib/ali-catalogos';
+import { partesEnZona, zonaHoraria } from '../../lib/cxc';
 
 type Row = Awaited<ReturnType<typeof prisma.aliPlan.findMany>>[number];
 const toDto = (p: Row): AliPlanDto => ({
@@ -31,17 +33,22 @@ const plugin: FastifyPluginAsync = async app => {
   const write = { onRequest: [app.authenticate, app.requireRole('Super Admin', 'Encargado Comedor')] };
 
   app.get('/', read, async (): Promise<AliData> => {
-    const [planes, menu, alumnos] = await Promise.all([
+    await ensureMenuSemanal();
+    const [planes, menu, alumnos, catalogos, tz] = await Promise.all([
       prisma.aliPlan.findMany({ orderBy: { id: 'asc' } }), prisma.aliMenu.findMany({ orderBy: { orden: 'asc' } }), prisma.alumno.findMany({ select: { alg: true } }),
+      catalogosAli(), zonaHoraria(),
     ]);
+    // La semana se calcula de la fecha real (zona del colegio): lunes a viernes; el menú es la plantilla semanal vigente.
+    const sem = semanaDe(partesEnZona(tz));
     const conAlergia = alumnos.filter(a => a.alg);
     const m: AliMenuDto[] = menu.map(d => {
       const algs: string[] = JSON.parse(d.algs);
       const afectados: Record<string, number> = {};
       for (const a of algs) { const n = conAlergia.filter(x => norm(x.alg).includes(norm(a))).length; if (n) afectados[a] = n; }
-      return { dia: d.dia, plato: d.plato, algs, afectados };
+      const nombre = d.dia.replace(/\s*\d+\s*$/, '') || DIAS_SEMANA[d.orden] || d.dia;
+      return { dia: sem.diaMes[d.orden] ? `${nombre} ${sem.diaMes[d.orden]}` : nombre, plato: d.plato, algs, afectados };
     });
-    return { planes: planes.map(toDto), menu: m, alumnosConAlergia: conAlergia.length };
+    return { planes: planes.map(toDto), menu: m, alumnosConAlergia: conAlergia.length, semana: { desde: sem.desde, hasta: sem.hasta, label: sem.label }, catalogos };
   });
 
   app.post<{ Body: AliPlanInput }>('/planes', write, async (req, reply) => {
@@ -72,7 +79,9 @@ const plugin: FastifyPluginAsync = async app => {
     const orden = Number(req.params.orden);
     const plato = String(req.body.plato ?? '').trim();
     if (!plato) return reply.code(400).send({ error: 'El plato no puede quedar vacío' });
-    // TODO: notificar el cambio en el portal de tutores cuando exista ese canal.
+    // El portal del tutor lee AliMenu directamente: el cambio se publica de inmediato.
+    await ensureMenuSemanal();
+    if (!(orden >= 0 && orden < DIAS_SEMANA.length)) return reply.code(404).send({ error: 'Día no encontrado' });
     await prisma.aliMenu.update({ where: { orden }, data: { plato, algs: JSON.stringify(req.body.algs ?? []) } });
     return { ok: true };
   });

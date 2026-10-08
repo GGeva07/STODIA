@@ -2,11 +2,13 @@ import { useState } from 'react';
 import type { PlanForm, PlanPagoFin } from '@stodia/shared';
 import SideDrawer from '../../components/finanzas/SideDrawer';
 import { fmt } from '../../components/finanzas/fin';
-import { EMPTY_PLAN, TANDAS, planCalc } from './planCalc';
+import { emptyPlan, planCalc } from './planCalc';
 
 export type DrawerMode = 'create' | 'view' | 'edit';
 interface Props {
   plan: PlanPagoFin | null; mode: DrawerMode; pin0?: string; plans: PlanPagoFin[];
+  /** Tandas del catálogo, año de inicio del ciclo activo y recargo por mora de la configuración financiera. */
+  tandas: string[]; ciclo0?: number; moraPct?: number;
   onClose: () => void;
   /** Pide autorización (Super Admin directo; otros con clave) y luego ejecuta fn(pin). */
   authorize: (title: string, fn: (pin: string) => void) => void;
@@ -17,13 +19,13 @@ interface Props {
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const lbl = 'flex flex-col gap-1 text-xs font-medium text-slate-600';
 
-export default function PlanDrawer({ plan, mode: mode0, pin0 = '', plans, onClose, authorize, onSave, onDelete }: Props) {
+export default function PlanDrawer({ plan, mode: mode0, pin0 = '', plans, tandas: TANDAS, ciclo0, moraPct, onClose, authorize, onSave, onDelete }: Props) {
   const [mode, setMode] = useState<DrawerMode>(mode0);
   const [pin, setPin] = useState(pin0);
-  const [f, setF] = useState<PlanForm>(() => (plan ? { ...plan, tm: { ...(plan.tm ?? {}) } } : { ...EMPTY_PLAN, tm: { ...EMPTY_PLAN.tm } }));
+  const [f, setF] = useState<PlanForm>(() => (plan ? { ...plan, tm: { ...(plan.tm ?? {}) } } : emptyPlan(moraPct)));
   const [err, setErr] = useState('');
   const ro = mode === 'view';
-  const c = planCalc(f);
+  const c = planCalc(f, TANDAS, ciclo0);
   const set = (k: keyof PlanForm) => (e: { target: { value: string } }) => {
     const v = e.target.value;
     setF(p => ({ ...p, [k]: v, ...(k === 'freq' && v === '0' ? { n: '1' } : {}) }) as PlanForm);

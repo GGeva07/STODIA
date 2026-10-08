@@ -10,7 +10,7 @@ export interface AcadNotasMatriz {
   seccion: string; materia: string; periodo: string; periodoLabel: string; docente: string;
   /** Competencias de la rúbrica del catálogo: `w` = peso en % (EX = examen). */
   comps: { k: string; n: string; w: number }[]; rows: AcadNotasFila[];
-  nivel: string; minimo: number; rubrica: string;
+  nivel: string; minimo: number; rubrica: string; tanda?: string;
   asigId: string; asignaciones: AcadAsigOpt[]; periodos: AcadPeriodo[];
 }
 export interface AcadNotaGuardada { t: string; usr: string; ip: string; prev: string; next: string }

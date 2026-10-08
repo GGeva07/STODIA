@@ -6,9 +6,11 @@ import { useToast, useUi } from '../../components/system/UiProvider';
 import { ACCESS, NAV, setAccessOverride } from '../../lib/access';
 import { api } from '../../lib/api';
 import SupervisorPin from './SupervisorPin';
+import Canales from './Canales';
+import { loadFinCfg } from '../../components/finanzas/finConfig';
 
-type Tab = 'inst' | 'fiscal' | 'ciclos' | 'rbac';
-const TABS: [Tab, string][] = [['inst', 'Perfil institucional'], ['fiscal', 'Gestión fiscal (DGII)'], ['ciclos', 'Ciclos lectivos'], ['rbac', 'Roles y permisos']];
+type Tab = 'inst' | 'fiscal' | 'finanzas' | 'ciclos' | 'rbac';
+const TABS: [Tab, string][] = [['inst', 'Perfil institucional'], ['fiscal', 'Gestión fiscal (DGII)'], ['finanzas', 'Finanzas'], ['ciclos', 'Ciclos lectivos'], ['rbac', 'Roles y permisos']];
 const label = 'flex flex-col gap-1 text-xs font-medium text-slate-600';
 
 type Reload = () => Promise<void>;
@@ -265,6 +267,35 @@ function Rbac({ cfg, reload }: TabProps) {
   );
 }
 
+function Finanzas({ cfg, reload }: TabProps) {
+  const toast = useToast();
+  const run = useAction(reload);
+  const f = cfg.finanzas;
+  const [v, setV] = useState({ matricula: String(f.matricula || ''), inscripcion: String(f.inscripcion || ''), itbis: String(+(f.itbis * 100).toFixed(2)), recargoMoraPct: String(f.recargoMoraPct || ''), descuentoProntoPct: String(f.descuentoProntoPct || ''), diaCorte: String(f.diaCorte || '') });
+  const set = (k: keyof typeof v) => (e: React.ChangeEvent<HTMLInputElement>) => setV({ ...v, [k]: e.target.value.replace(/[^\d.]/g, '') });
+  const save = () => {
+    const n = (s: string) => parseFloat(s) || 0;
+    if (n(v.itbis) > 100 || n(v.recargoMoraPct) > 100 || n(v.descuentoProntoPct) > 100) return toast('Los porcentajes no pueden superar 100', 'bad');
+    if (n(v.diaCorte) > 28) return toast('El día de corte debe estar entre 1 y 28', 'bad');
+    void run(async () => { await api.put('/config/finanzas', { matricula: n(v.matricula), inscripcion: n(v.inscripcion), itbis: n(v.itbis) / 100, recargoMoraPct: n(v.recargoMoraPct), descuentoProntoPct: n(v.descuentoProntoPct), diaCorte: n(v.diaCorte) }); await loadFinCfg(true); }, 'Configuración financiera guardada · aplica a cobros, inscripción y kiosko');
+  };
+  const F: [keyof typeof v, string, string][] = [
+    ['matricula', 'Matrícula (RD$)', 'Se cobra una vez por alumno en la inscripción.'], ['inscripcion', 'Inscripción (RD$)', 'Cargo de inscripción anual.'],
+    ['itbis', 'ITBIS (%)', 'Se aplica en el kiosko a los artículos gravados.'], ['recargoMoraPct', 'Recargo por mora (%)', 'Valor por defecto al crear planes de pago.'],
+    ['descuentoProntoPct', 'Descuento por pronto pago (%)', 'Se ofrece en la terminal de cobros; 0 = no se ofrece.'], ['diaCorte', 'Día de corte', 'Día del mes (1–28) en que se cierra la facturación.'],
+  ];
+  return (
+    <section className={`${card} flex max-w-[860px] flex-col gap-4 p-[18px]`}>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(240px,100%),1fr))] gap-3">
+        {F.map(([k, l, h]) => (
+          <label key={k} className={label}>{l}<input value={v[k]} onChange={set(k)} inputMode="decimal" className={`${input} text-right font-mono`} /><span className="text-[11px] font-normal text-slate-500">{h}</span></label>
+        ))}
+      </div>
+      <div className="flex justify-end"><button onClick={save} className={btnPrimary}><i className="ph ph-floppy-disk" />Guardar configuración financiera</button></div>
+    </section>
+  );
+}
+
 export default function Screen() {
   const [sp] = useSearchParams();
   const [tab, setTab] = useState<Tab>(() => (TABS.some(t => t[0] === sp.get('tab')) ? (sp.get('tab') as Tab) : 'inst'));
@@ -284,7 +315,7 @@ export default function Screen() {
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={`h-[38px] whitespace-nowrap border-0 bg-transparent px-3.5 text-[13px] font-medium hover:text-ink ${tab === k ? 'text-ink shadow-[inset_0_-2px_0_#2563EB]' : 'text-slate-500'}`}>{l}</button>
         ))}
       </div>
-      {!cfg ? <div className="text-sm text-slate-500">Cargando…</div> : tab === 'inst' ? <div className="flex flex-col gap-3.5"><Inst key={JSON.stringify(cfg.perfil)} cfg={cfg} reload={reload} /><SupervisorPin /></div> : tab === 'fiscal' ? <Fiscal cfg={cfg} reload={reload} /> : tab === 'ciclos' ? <Ciclos cfg={cfg} reload={reload} /> : <Rbac cfg={cfg} reload={reload} />}
+      {!cfg ? <div className="text-sm text-slate-500">Cargando…</div> : tab === 'inst' ? <div className="flex flex-col gap-3.5"><Inst key={JSON.stringify(cfg.perfil)} cfg={cfg} reload={reload} /><SupervisorPin /><Canales /></div> : tab === 'fiscal' ? <Fiscal cfg={cfg} reload={reload} /> : tab === 'finanzas' ? <Finanzas key={JSON.stringify(cfg.finanzas)} cfg={cfg} reload={reload} /> : tab === 'ciclos' ? <Ciclos cfg={cfg} reload={reload} /> : <Rbac cfg={cfg} reload={reload} />}
     </div>
   );
 }

@@ -2,16 +2,16 @@
  * Datos centralizados de la empresa / sitio público (landing, SEO y páginas legales).
  * Los valores entre corchetes (si quedara alguno) son PLACEHOLDERS: deben reemplazarse antes de publicar.
  *
- * `url` se fija al compilar con VITE_SITE_URL (por defecto https://stodia.com.do, placeholder). El build reescribe el
+ * `url` se fija al compilar con VITE_SITE_URL (por defecto https://stodia.vercel.app, placeholder). El build reescribe el
  * dominio en index.html (canonical, og:*, JSON-LD), robots.txt y sitemap.xml. El correo también se lee de aquí
  * (vite-seo.mjs) para el JSON-LD y el <noscript> de index.html.
  */
-const rawUrl = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://stodia.com.do';
+const rawUrl = (import.meta.env.VITE_SITE_URL as string | undefined) || 'https://stodia.vercel.app';
 
 export const SITE = {
   name: 'STODIA',
   tagline: 'Sistema de gestión escolar para colegios de República Dominicana',
-  /** Dominio público (sin barra final). Placeholder documentado: https://stodia.com.do */
+  /** Dominio público (sin barra final). Placeholder documentado: https://stodia.vercel.app */
   url: rawUrl.replace(/\/+$/, ''),
   email: 'contact@synsetsolutions.com',
   phone: '829-693-2458',

@@ -20,6 +20,7 @@ const DEFS: Record<string, Def> = {
   staff: { user: true, uniq: [['usuario']], fields: [{ k: 'nombre', l: 'Nombre', req: 1 }, { k: 'cargo', l: 'Cargo', req: 1 }, { k: 'usuario', l: 'Usuario', req: 1 }, { k: 'password', l: 'Contraseña', t: 'password' }, { k: 'rol', l: 'Rol', t: 'role', req: 1 }, { k: 'caja', l: 'Caja', t: 'ref', ref: 'cajas' }] },
   aulas: { uniq: [['nombre']], fields: [{ k: 'nombre', l: 'Nombre', req: 1 }, { k: 'tipo', l: 'Tipo', t: 'select', opts: ['Aula', 'Laboratorio', 'Cancha', 'Salón especial'], req: 1 }, { k: 'edif', l: 'Edificio' }, { k: 'pupitres', l: 'Pupitres', t: 'int', req: 1 }] },
   cajas: { uniq: [['codigo']], estados: ['Activa', 'Inactiva'], fields: [{ k: 'codigo', l: 'Código', req: 1 }, { k: 'ubic', l: 'Ubicación', req: 1 }, { k: 'ncf', l: 'Comprobante', t: 'select', opts: ['B02 · Consumo', 'B01 · Crédito fiscal'], req: 1 }] },
+  conceptosBeca: { uniq: [['nombre']], fields: [{ k: 'nombre', l: 'Concepto', req: 1 }] },
   rutas: { uniq: [['nombre'], ['ficha']], fields: [{ k: 'nombre', l: 'Ruta', req: 1 }, { k: 'sectores', l: 'Sectores' }, { k: 'chofer', l: 'Chofer', req: 1 }, { k: 'ficha', l: 'Ficha', req: 1, upper: 1 }, { k: 'asientos', l: 'Asientos', t: 'int', req: 1 }, { k: 'tarifa', l: 'Tarifa', t: 'int', req: 1 }] },
 };
 const norm = (s: unknown) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();

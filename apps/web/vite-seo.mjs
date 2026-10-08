@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export default function seoHtml(siteUrl) {
-  const site = (siteUrl || 'https://stodia.com.do').replace(/\/+$/, '');
+  const site = (siteUrl || 'https://stodia.vercel.app').replace(/\/+$/, '');
   // El correo de contacto se lee de src/lib/site.ts (fuente única).
   const site_ts = readFileSync(resolve('src/lib/site.ts'), 'utf8');
   const pick = k => new RegExp(k + String.raw`:\s*'([^']+)'`).exec(site_ts)?.[1];
@@ -45,10 +45,10 @@ export default function seoHtml(siteUrl) {
       },
     },
     closeBundle() {
-      if (!isBuild || site === 'https://stodia.com.do') return;
+      if (!isBuild || site === 'https://stodia.vercel.app') return;
       for (const f of ['robots.txt', 'sitemap.xml']) {
         const p = resolve(outDir, f);
-        if (existsSync(p)) writeFileSync(p, readFileSync(p, 'utf8').replaceAll('https://stodia.com.do', site));
+        if (existsSync(p)) writeFileSync(p, readFileSync(p, 'utf8').replaceAll('https://stodia.vercel.app', site));
       }
     },
   };

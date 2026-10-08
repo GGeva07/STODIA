@@ -1,22 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { ExpFicha, InsConfigResp, InsReq, InsResp, InsTutorLookup } from '@stodia/shared';
+import type { ExpFicha, InsConfigResp, InsCupo, InsReq, InsResp, InsTutorLookup } from '@stodia/shared';
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { nextSeq } from '../../fin-utils';
 import { digits } from '../../lib/personas';
+import { partesEnZona, zonaHoraria } from '../../lib/cxc';
+import { MES_ES, MNAME, anioDeMes, catalogoServicios, cicloActivo, cuotasDe, docsRequeridos, getFinanzas, insPlan, mesesCiclo, mesesDe, planesPago, totalDe, vencDMY } from '../../lib/pers-fin';
 
-// Constantes del wizard del prototipo (wzCalc).
-const COL = 85000;
-const INS = 15000;
-const SERVICIOS = [
-  { k: 'tra', n: 'Ruta de Transporte · Zona A', name: 'Ruta Zona A', icon: 'ph ph-bus', price: 2800, spec: 'Ruta Zona A · Ambos turnos' },
-  { k: 'com', n: 'Plan de Comedor · Almuerzo', name: 'Plan Almuerzo Completo', icon: 'ph ph-fork-knife', price: 3200, spec: 'Lunes a Viernes 12:30 PM' },
-  { k: 'act', n: 'Actividades extracurriculares', name: 'Actividades extracurriculares', icon: 'ph ph-medal', price: 1200, spec: 'Según inscripción' },
-];
-const DOCS = ['Acta de nacimiento', 'Registro de vacunación', 'Fotos 2×2', 'Récord de conducta anterior'];
-const MONTHS = [8, 9, 10, 11, 12, 1, 2, 3, 4, 5];
-const MNAME: Record<number, string> = { 1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre' };
-const MES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const slug = (n: string) => n.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
 
 const fmtCed = (v: string) => {
   const d = digits(v).slice(0, 11);
@@ -38,14 +29,44 @@ async function lookup(ced: string): Promise<InsTutorLookup & { tel?: string }> {
   return { found: true, id: t.id, nombre: t.nombre, info, tel: t.tel };
 }
 
+/** Grados, tandas y secciones salen de los Catálogos (única fuente: PersCupo ya no se lee). Inscritos = el mayor entre el contador del catálogo y los alumnos reales. */
+async function cargarCupos() {
+  const [rows, alumnos] = await Promise.all([
+    prisma.catalogo.findMany({ where: { tipo: { in: ['grados', 'tandas', 'secciones'] } }, orderBy: { id: 'asc' } }),
+    prisma.alumno.findMany({ where: { estado: { not: 'Retirado' } }, select: { grado: true, sec: true, tanda: true } }),
+  ]);
+  const of = (tipo: string) => rows.filter(r => r.tipo === tipo).map(r => ({ row: r, d: JSON.parse(r.data) as Record<string, unknown> }));
+  const gr = of('grados'), td = of('tandas');
+  const grados = gr.filter(g => g.row.estado === 'Activo').sort((a, b) => Number(a.d.orden) - Number(b.d.orden)).map(g => ({ id: String(g.d.id), label: `${g.d.nivel} · ${g.d.grado}` }));
+  const tandas = td.filter(t => t.row.estado === 'Activo').map(t => String(t.d.nombre));
+  const cupos: InsCupo[] = [];
+  for (const s of of('secciones')) {
+    if (s.row.estado !== 'Activo') continue;
+    const g = gr.find(x => x.d.id === s.d.grado && x.row.estado === 'Activo'), t = td.find(x => x.d.id === s.d.tanda && x.row.estado === 'Activo');
+    if (!g || !t) continue;
+    const real = alumnos.filter(a => a.grado === g.d.grado && a.sec === s.d.seccion && a.tanda === t.d.nombre).length;
+    cupos.push({ id: s.row.id, grado: String(g.d.id), tanda: String(t.d.nombre), seccion: String(s.d.seccion), cap: Number(s.d.cap) || 0, used: Math.max(Number(s.d.insc) || 0, real) });
+  }
+  return { grados, tandas, cupos, gradoNombre: (id: string) => String(gr.find(g => g.d.id === id)?.d.grado ?? '') };
+}
+
 const plugin: FastifyPluginAsync = async app => {
   const guard = { onRequest: [app.authenticate, app.requireRole('Super Admin', 'Cajero')] };
 
   app.get('/config', guard, async (): Promise<InsConfigResp> => {
-    const cupos = await prisma.persCupo.findMany({ orderBy: [{ tanda: 'asc' }, { seccion: 'asc' }] });
+    const [c, planes, fin, ciclo, cat, docs] = await Promise.all([cargarCupos(), planesPago(), getFinanzas(), cicloActivo(), catalogoServicios(), docsRequeridos()]);
+    const activos = planes.filter(p => p.estado === 'Activo');
+    const avisos: string[] = [];
+    if (!activos.length) avisos.push('Configura planes y precios: no hay Planes de Pago activos (Finanzas → Planes de Pago).');
+    if (!ciclo.configurado) avisos.push('Configura el ciclo lectivo activo en Configuración.');
+    if (!c.grados.length || !c.tandas.length) avisos.push('Configura grados y tandas en Catálogos.');
+    else if (!c.cupos.length) avisos.push('Configura las secciones (con su capacidad) en Catálogos.');
     return {
-      cupos, docs: DOCS, ciclo: '2026–2027', colegiatura: COL, inscripcion: INS,
-      servicios: SERVICIOS.map(s => ({ k: s.k, n: s.n, price: s.price })),
+      cupos: c.cupos, docs, ciclo: ciclo.nombre, grados: c.grados, tandas: c.tandas,
+      planes: activos.map(p => insPlan(p, c.tandas, fin, ciclo.y0)),
+      inscripcion: fin.inscripcion,
+      servicios: cat.filter(s => s.rec).map(s => ({ k: s.k, n: s.l, price: s.price })),
+      avisos,
     };
   });
 
@@ -59,7 +80,10 @@ const plugin: FastifyPluginAsync = async app => {
     const b = req.body;
     const fail = (error: string) => reply.code(400).send({ error });
     if (!b?.nombre?.trim() || !b.apellido?.trim() || !b.fnac) return fail('Completa nombres, apellidos y fecha de nacimiento');
-    if (!['10', '4', '1'].includes(b.plan)) return fail('Plan de pago inválido');
+
+    const [planes, fin, ciclo, cat, DOCS, c] = await Promise.all([planesPago(), getFinanzas(), cicloActivo(), catalogoServicios(), docsRequeridos(), cargarCupos()]);
+    const plan = planes.find(p => p.id === b.plan && p.estado === 'Activo');
+    if (!plan) return fail(planes.some(p => p.estado === 'Activo') ? 'Plan de pago inválido' : 'Configura planes y precios antes de inscribir (Finanzas → Planes de Pago)');
 
     const L = await lookup(b.legalCed);
     const F = b.finSame ? L : await lookup(b.finCed);
@@ -67,8 +91,10 @@ const plugin: FastifyPluginAsync = async app => {
     const finName = b.finSame ? legalName : F.found ? F.nombre! : b.finName?.trim();
     if (!legalName || !finName) return fail('Identifica al tutor legal y financiero');
 
-    const cupo = await prisma.persCupo.findFirst({ where: { tanda: b.tanda, seccion: b.sec } });
+    const cupo = c.cupos.find(x => x.id === b.cupo);
     if (!cupo || cupo.used >= cupo.cap) return fail('Selecciona una sección con cupo');
+    const grado = c.gradoNombre(cupo.grado), sec = cupo.seccion, tanda = cupo.tanda;
+    if (totalDe(plan, tanda) <= 0) return fail(`El plan ${plan.name} no tiene monto definido para la tanda ${tanda}`);
 
     // Tutores: vincula los existentes o crea los nuevos (sin duplicar por cédula).
     const all = await prisma.tutor.findMany({ select: { id: true } });
@@ -85,49 +111,58 @@ const plugin: FastifyPluginAsync = async app => {
 
     const ids = (await prisma.alumno.findMany({ select: { id: true } })).map(a => Number(a.id) || 0);
     const id = String(Math.max(...ids, 0) + 1).padStart(4, '0');
-    const code = 'EST-2026-' + id;
-    const grado = b.grado.replace('Primaria · ', '');
-    const now = new Date();
-    const hoy = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+    const code = `EST-${ciclo.y0}-${id}`;
+    const tz = await zonaHoraria();
+    const hoyP = partesEnZona(tz);
+    const hoy = `${String(hoyP.d).padStart(2, '0')}/${String(hoyP.m).padStart(2, '0')}/${hoyP.y}`;
+    const mesNom = MES_ES[hoyP.m - 1];
 
     const ficha: ExpFicha = {
-      carnet: '', ingreso: `${MES_ES[now.getMonth()][0].toUpperCase()}${MES_ES[now.getMonth()].slice(1)} ${now.getFullYear()} · ${grado} ${b.sec}`, geo: '',
+      carnet: '', ingreso: `${mesNom[0].toUpperCase()}${mesNom.slice(1)} ${hoyP.y} · ${grado} ${sec}`, geo: '',
       medico: { sangre: '', seguro: '', poliza: '', condiciones: '', planAlim: '', planAlimExtra: '', emergenciaNombre: '', emergenciaTel: finTutor.tel, alertaDetalle: '' },
       conducta: { obs: [], record: 'Sin observaciones' }, hist: [], tutorLegalId: legalId,
-      contrato: { ciclo: '2026–2027', plan: b.plan, beca: 'none', ctr: 'CTR-2026-' + id, firmado: b.firma === 'digital' ? hoy : '' },
+      contrato: { ciclo: ciclo.nombre, plan: plan.id, beca: 'none', ctr: `CTR-${ciclo.y0}-${id}`, firmado: b.firma === 'digital' ? hoy : '' },
     };
-    const COLM = b.plan === '1' ? COL * 0.9 : b.plan === '4' ? COL / 4 : COL / 10;
-    const cuotas = b.plan === '1' ? [8] : b.plan === '4' ? [8, 11, 2, 5] : MONTHS;
-    const factura = INS + (b.plan === '1' ? COL * 0.9 : 0);
-    const ncf = 'B02' + String(await nextSeq('ncf', 1881)).padStart(8, '0');
-    const venc = (m: number) => `01/${String(m).padStart(2, '0')}/${m >= 8 ? 2026 : 2027}`;
-    const al = `${b.nombre.trim().split(' ')[0]} · ${grado} ${b.sec}`;
+
+    // Cartera: cuotas del plan real (montos por tanda, descuento y meses del plan) + servicios desde el mes actual hasta fin de ciclo.
+    const montos = cuotasDe(plan, tanda), vencs = mesesDe(plan, ciclo.y0);
+    const unico = plan.n === 1;
+    const factura = fin.inscripcion + (unico ? totalDe(plan, tanda) : 0);
+    const ncf = 'B02' + String(await nextSeq('ncf')).padStart(8, '0');
+    const meses = mesesCiclo(planes), idxHoy = Math.max(0, meses.indexOf(hoyP.m));
+    const dia = fin.diaCorte > 0 ? fin.diaCorte : 1;
+    const venc = (m: number) => vencDMY(dia, m, anioDeMes(meses, ciclo.y0, m));
+    const al = `${b.nombre.trim().split(' ')[0]} · ${grado} ${sec}`;
     const base = 2000 + (await prisma.finCobroItem.count());
     const ced = digits(finTutor.cedula);
-    const svc = SERVICIOS.filter((_, i) => b.serv?.[i]);
+    const svc = cat.filter(s => s.rec && b.serv?.includes(s.k));
+    const sname = (l: string) => l.split(' · ').pop()!;
 
     await prisma.$transaction([
       prisma.alumno.create({
-        data: { id, code, nombres: b.nombre.trim(), apellidos: b.apellido.trim(), fnac: b.fnac, grado, sec: b.sec, tanda: b.tanda, cuenta: 'ok', estado: 'Activo', tel: finTutor.tel, tutorId: finId },
+        data: { id, code, nombres: b.nombre.trim(), apellidos: b.apellido.trim(), fnac: b.fnac, grado, sec, tanda, cuenta: 'ok', estado: 'Activo', tel: finTutor.tel, tutorId: finId },
       }),
       prisma.persExpediente.create({ data: { alumnoId: id, data: JSON.stringify(ficha) } }),
       prisma.persDocumento.createMany({
-        data: DOCS.map((n, i) => ({ id: `pdoc-${id}-${i}`, alumnoId: id, n, f: b.docs?.[i] ? 'recibido_' + n.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_') + '.pdf' : 'Sin archivo', est: b.docs?.[i] ? 'En revisión' : 'Pendiente', orden: i })),
+        data: DOCS.map((n, i) => ({ id: `pdoc-${id}-${i}`, alumnoId: id, n, f: b.docs?.[i] ? 'recibido_' + slug(n) + '.pdf' : 'Sin archivo', est: b.docs?.[i] ? 'En revisión' : 'Pendiente', orden: i })),
       }),
       prisma.persServicio.createMany({
-        data: svc.map(s => ({ id: `psv-${s.k}-${id}`, alumnoId: id, kind: 'rec', catKey: s.k, name: s.name, icon: s.icon, spec: s.spec, cost: s.price, corte: 'Día 01 de cada mes' })),
+        data: svc.map(s => ({ id: `psv-${s.k.replace(/\W/g, '')}-${id}`, alumnoId: id, kind: 'rec', catKey: s.k, name: sname(s.l), icon: s.icon, spec: s.spec, cost: s.price, corte: `Día ${String(dia).padStart(2, '0')} de cada mes` })),
       }),
       prisma.finCobroItem.createMany({
         data: [
-          ...cuotas.map((m, i) => ({ id: `ins-${id}-c${m}`, kid: id, con: `Colegiatura ${MNAME[m]} ${m >= 8 ? 2026 : 2027}`, al, vence: venc(m), monto: COLM, est: 'Pendiente', tipo: 'col', orden: base + i, tutorCed: ced })),
-          ...svc.flatMap((s, j) => MONTHS.slice(MONTHS.indexOf(10)).map((m, i) => ({ id: `ins-${id}-${s.k}${m}`, kid: id, con: `${s.name} · ${MNAME[m]}`, al, vence: venc(m), monto: s.price, est: 'Pendiente', tipo: 'srv', orden: base + 100 + j * 20 + i, tutorCed: ced }))),
+          ...vencs.map((v, i) => ({ id: `ins-${id}-c${v.m}`, kid: id, con: `Colegiatura ${MNAME[v.m]} ${v.y}`, al, vence: vencDMY(plan.dia, v.m, v.y), monto: montos[i], est: 'Pendiente', tipo: 'col', orden: base + i, tutorCed: ced })),
+          ...svc.flatMap((s, j) => meses.slice(idxHoy).map((m, i) => ({ id: `ins-${id}-${s.k.replace(/\W/g, '')}${m}`, kid: id, con: `${sname(s.l)} · ${MNAME[m]}`, al, vence: venc(m), monto: s.price, est: 'Pendiente', tipo: 'srv', orden: base + 100 + j * 20 + i, tutorCed: ced }))),
         ],
       }),
-      prisma.persCupo.update({ where: { id: cupo.id }, data: { used: { increment: 1 } } }),
-      prisma.persInscripcion.create({ data: { id: 'ins-' + id, alumnoId: id, ncf, factura, plan: b.plan, cuotas: cuotas.length, firma: b.firma } }),
+      prisma.finPlan.update({ where: { id: plan.id }, data: { alumnos: { increment: 1 } } }),
+      prisma.persInscripcion.create({ data: { id: 'ins-' + id, alumnoId: id, ncf, factura, plan: plan.id, cuotas: vencs.length, firma: b.firma } }),
     ]);
+    // El contador «Inscritos» del catálogo de secciones sube con cada inscripción.
+    const sr = await prisma.catalogo.findUnique({ where: { id: cupo.id } });
+    if (sr) { const d = JSON.parse(sr.data) as Record<string, unknown>; await prisma.catalogo.update({ where: { id: sr.id }, data: { data: JSON.stringify({ ...d, insc: Math.max(Number(d.insc) || 0, cupo.used) + 1 }) } }); }
     await audit(req.user, 'Insert', { tabla: 'Inscripciones', id: code, prev: '—', next: `${ncf} · ${factura}`, ip: req.ip });
-    const res: InsResp = { code, ncf, factura, cuotas: cuotas.length };
+    const res: InsResp = { code, ncf, factura, cuotas: vencs.length };
     return res;
   });
 };

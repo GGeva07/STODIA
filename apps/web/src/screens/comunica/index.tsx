@@ -7,8 +7,8 @@ const fmt = (n: number) => 'RD$ ' + n.toLocaleString('en-US', { minimumFractionD
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Error inesperado');
 const CN: CmnCanal[] = ['Correo', 'Push', 'SMS', 'WhatsApp'];
 const CI: Record<CmnCanal, string> = { Correo: 'ph ph-envelope-simple', Push: 'ph ph-bell', SMS: 'ph ph-chat-text', WhatsApp: 'ph ph-whatsapp-logo' };
-const OF: [string, string][] = [['', 'Todos'], ['En cola', 'En cola'], ['Entregado', 'Entregados'], ['Fallido', 'Fallidos']];
-const TONE = { Entregado: ['#DCFCE7', '#15803D'], Fallido: ['#FEE2E2', '#B91C1C'], 'En cola': ['#FEF3C7', '#B45309'] } as const;
+const OF: [string, string][] = [['', 'Todos'], ['En cola', 'En cola'], ['Entregado', 'Entregados'], ['Fallido', 'Fallidos'], ['Canal no configurado', 'Sin canal']];
+const TONE = { Entregado: ['#DCFCE7', '#15803D'], Fallido: ['#FEE2E2', '#B91C1C'], 'En cola': ['#FEF3C7', '#B45309'], Enviando: ['#DBEAFE', '#1D4ED8'], 'Canal no configurado': ['#F1F5F9', '#475569'] } as const;
 const SEL = 'h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-[13px] text-ink';
 const TH = 'whitespace-nowrap border-b border-slate-200 bg-slate-50 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-600';
 
@@ -41,16 +41,20 @@ export default function Screen() {
   // Cola de envío: el servidor procesa lotes pequeños; no bloquea la interfaz.
   useEffect(() => {
     if (!polling) return;
+    let busy = false;
     const iv = setInterval(async () => {
+      if (busy) return; // un envío SMTP puede tardar varios segundos: no se solapan llamadas
+      busy = true;
       try {
-        const r = await api.post<{ restantes: number; lote: { total: number; hechos: number; fallidos: number } }>('/comunica/procesar' + (batchRef.current ? '?batch=' + batchRef.current : ''));
+        const r = await api.post<{ restantes: number; lote: { total: number; hechos: number; fallidos: number; sinCanal: number } }>('/comunica/procesar' + (batchRef.current ? '?batch=' + batchRef.current : ''));
         setProgress({ hechos: r.lote.hechos, total: r.lote.total });
         void loadBandeja();
         if (r.restantes === 0) {
           setPolling(false);
-          toast('Cola procesada' + (r.lote.fallidos ? ` · ${r.lote.fallidos} envíos fallidos (reintenta desde la bandeja)` : ' · todos entregados'), r.lote.fallidos ? 'warn' : 'ok');
+          const malos = r.lote.fallidos + r.lote.sinCanal;
+          toast('Cola procesada' + (r.lote.fallidos ? ` · ${r.lote.fallidos} envíos fallidos (reintenta desde la bandeja)` : '') + (r.lote.sinCanal ? ` · ${r.lote.sinCanal} sin canal configurado` : '') + (malos ? '' : ' · todos entregados'), malos ? 'warn' : 'ok');
         }
-      } catch (e) { setPolling(false); toast(errMsg(e), 'bad'); }
+      } catch (e) { setPolling(false); toast(errMsg(e), 'bad'); } finally { busy = false; }
     }, 350);
     return () => clearInterval(iv);
   }, [polling, loadBandeja, toast]);
@@ -58,7 +62,7 @@ export default function Screen() {
   const nCan = f.canales.filter(Boolean).length;
   const fill = (t: string) => t
     .replace(/\{tutor\}/g, dest.muestra?.tutor ?? '{tutor}').replace(/\{alumno\}/g, dest.muestra?.alumno ?? '{alumno}').replace(/\{saldo\}/g, dest.muestra ? fmt(dest.muestra.saldo) : '{saldo}');
-  const n = dest.tutores.length;
+  const n = dest.total ?? dest.tutores.length;
   const sample = n ? dest.tutores.slice(0, 2).join(', ') + (n > 2 ? ` y ${n - 2} más` : '') : 'Sin destinatarios';
 
   const send = async () => {
@@ -67,8 +71,9 @@ export default function Screen() {
     if (!n) { toast('El filtro no tiene destinatarios', 'warn'); return; }
     try {
       const r = await api.post<CmnEnviarRes>('/comunica/enviar', { grado: f.grado, tanda: f.tanda, cuenta: f.cuenta, canales: CN.filter((_, i) => f.canales[i]), asunto: f.asunto, mensaje: f.msg });
-      setBatch(r.batch); setProgress({ hechos: 0, total: r.total }); setPolling(true); void loadBandeja();
-      toast(`${r.total} mensajes en cola · puedes seguir trabajando`, 'info');
+      setBatch(r.batch); setProgress({ hechos: 0, total: r.total }); setPolling(r.enCola > 0); void loadBandeja();
+      if (r.sinCanal) toast(`${r.sinCanal} mensajes quedaron como «Canal no configurado» (no se enviaron)${r.enCola ? ` · ${r.enCola} en cola` : ''}`, 'warn');
+      else toast(`${r.total} mensajes en cola · puedes seguir trabajando`, 'info');
     } catch (e) { toast(errMsg(e), 'bad'); }
   };
 
@@ -177,9 +182,9 @@ export default function Screen() {
                     <td className="whitespace-nowrap border-b border-slate-100 px-3 font-mono text-xs text-slate-600">{o.t}</td>
                     <td className="border-b border-slate-100 px-3">{o.to}</td>
                     <td className="border-b border-slate-100 px-3 text-slate-600"><i className={CI[o.canal] + ' mr-1.5'} />{o.canal}</td>
-                    <td className="max-w-[260px] overflow-hidden text-ellipsis whitespace-nowrap border-b border-slate-100 px-3 text-slate-600">{o.asunto}</td>
+                    <td className="max-w-[260px] overflow-hidden text-ellipsis whitespace-nowrap border-b border-slate-100 px-3 text-slate-600">{o.asunto}{o.error && <div title={o.error} className="overflow-hidden text-ellipsis text-[11px] text-red-600">{o.error}</div>}</td>
                     <td className="border-b border-slate-100 px-3">
-                      <span className="inline-flex h-[19px] w-[84px] items-center justify-center rounded-full px-[5px] text-[10px] font-semibold leading-none" style={{ background: TONE[o.estado][0], color: TONE[o.estado][1] }}>{o.estado}</span>
+                      <span title={o.error || o.estado} className={`inline-flex h-[19px] items-center whitespace-nowrap justify-center rounded-full px-[5px] text-[10px] font-semibold leading-none ${o.estado === 'Canal no configurado' ? 'min-w-[128px]' : 'w-[84px]'}`} style={{ background: TONE[o.estado][0], color: TONE[o.estado][1] }}>{o.estado}</span>
                     </td>
                     <td className="border-b border-slate-100 px-3 font-mono text-xs text-slate-600">{o.by}</td>
                   </tr>

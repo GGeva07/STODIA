@@ -26,7 +26,7 @@ const plugin: FastifyPluginAsync = async app => {
     const porRoster = new Map(notas.map(n => [n.rosterId, n]));
     const res: AcadNotasMatriz = {
       ...base, seccion: sel.seccion, materia: sel.materia, periodo, periodoLabel: periodoLabel(periodo), docente: sel.docente,
-      nivel: sel.nivel, minimo: rub.minimo, rubrica: rub.nombre, asigId: sel.id,
+      nivel: sel.nivel, tanda: sel.tanda, minimo: rub.minimo, rubrica: rub.nombre, asigId: sel.id,
       comps: rub.comps.map(({ k, n, w }) => ({ k, n, w })),
       rows: nom.map((n, i) => { const nt = n.rosterId ? porRoster.get(n.rosterId) : undefined; return { id: n.key, nombre: n.nombre, orden: i + 1, g: rub.comps.map(c => str(nt?.[c.field])) }; }),
     };

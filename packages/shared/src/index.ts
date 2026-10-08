@@ -33,6 +33,8 @@ export interface RuntimeConfig {
   apiUrl: string;
   licenseKey: string;
   institutionName?: string;
+  /** Pedir la URL del servidor antes del login cuando no hay una guardada: true = siempre, 'mobile' = solo teléfonos/tabletas. */
+  askServer?: boolean | 'mobile';
 }
 
 // ---------- Catálogos maestros (CAT_DEF) ----------

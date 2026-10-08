@@ -3,7 +3,9 @@ import type { AcadAsisDia, AcadAsisGuardado, AcadMarca } from '@stodia/shared';
 import { api } from '../../lib/api';
 import AsigSelect from '../../components/academico/AsigSelect';
 import { useToast } from '../../components/system/UiProvider';
-import { errMsg, printHtml } from '../../components/finanzas/fin';
+import { errMsg } from '../../components/finanzas/fin';
+import { runPrint } from '../../components/finanzas/print';
+import { docLista } from '../../components/academico/printDocs';
 import { pill, pillBase, type PillTone } from '../../components/system/styles';
 
 type Marca = AcadMarca | null;
@@ -20,7 +22,6 @@ const COUNTS: [string, Marca, PillTone][] = [['Presentes', 'P', 'ok'], ['Tardanz
 const shortName = (s: string) => { const [ap, nm] = s.split(', '); return nm ? `${nm} ${ap.split(' ')[0]}` : s; };
 const ini = (s: string) => { const p = shortName(s).split(' '); return (p[0][0] + (p[1] ? p[1][0] : '')).toUpperCase(); };
 const longDate = (iso: string) => new Date(iso + 'T12:00:00').toLocaleDateString('es-DO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
 
 export default function Screen() {
   const toast = useToast();
@@ -50,10 +51,7 @@ export default function Screen() {
     } catch (e) { toast(errMsg(e), 'bad'); } finally { setBusy(false); }
   };
 
-  const printLista = () => {
-    const rows = d.cards.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c.nombre)}</td>${'<td style="text-align:center">☐</td>'.repeat(5)}</tr>`).join('');
-    printHtml(`<h1>Lista de asistencia</h1><h2>${d.seccion} · ${d.tanda} · ${longDate(d.fecha)}</h2><table><tr><th>#</th><th>Estudiante</th><th>Lun</th><th>Mar</th><th>Mié</th><th>Jue</th><th>Vie</th></tr>${rows}</table><p>Marcar: P presente · T tardanza · AJ ausencia justificada · AI ausencia injustificada.</p>`, '190mm');
-  };
+  const printLista = () => runPrint('lista', docLista(d, d.cards.map(c => c.nombre)));
 
   return (
     <div className="flex flex-col gap-3.5">

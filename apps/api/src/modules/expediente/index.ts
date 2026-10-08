@@ -1,31 +1,16 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { ExpCatalogoItem, ExpDoc, ExpFicha, ExpPersona, ExpServicio, ExpedienteResp } from '@stodia/shared';
+import type { ExpCatalogoItem, ExpDoc, ExpFicha, ExpPersona, ExpServicio, ExpedienteResp, PersPlan } from '@stodia/shared';
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { READONLY_ROLES, digits, kidOf, toAlumno } from '../../lib/personas';
+import { partesEnZona, zonaHoraria } from '../../lib/cxc';
+import { MNAME, anioDeMes, becasCatalogo, catalogoServicios, cicloActivo, docsRequeridos, getFinanzas, mesesCiclo, persPlan, planesPago, resolverPlan, vencDMY } from '../../lib/pers-fin';
 
-// Referencias del prototipo (PL, BE, CATALOG, MONTHS, MNAME).
-const PLANES = { '10': { gross: 8500, n: 10, unit: '/ mes' }, '4': { gross: 21250, n: 4, unit: '/ trimestre' }, '1': { gross: 76500, n: 1, unit: 'único' } };
-const BECAS = { none: { pct: 0, tag: '' }, hermano: { pct: 0.1, tag: 'Aprobada por Dirección' }, academica: { pct: 0.25, tag: 'Pendiente de aprobación' }, empleado: { pct: 0.5, tag: 'Pendiente de aprobación' } };
-const CATALOGO: ExpCatalogoItem[] = [
-  { k: 'mer', l: 'Comedor · Plan Merienda', cat: 'Recurrente opcional', freq: 'Mensual', mora: 'Aplica mora', price: 1800, rec: true, icon: 'ph ph-fork-knife', spec: 'Lunes a Viernes 10:00 AM', food: true },
-  { k: 'trA', l: 'Transporte · Ruta Zona A', cat: 'Recurrente opcional', freq: 'Mensual', mora: 'Aplica mora', price: 2800, rec: true, icon: 'ph ph-bus', spec: 'Ruta Zona A · Ambos turnos' },
-  { k: 'trB', l: 'Transporte · Ruta Zona B', cat: 'Recurrente opcional', freq: 'Mensual', mora: 'Aplica mora', price: 3100, rec: true, icon: 'ph ph-bus', spec: 'Ruta Zona B · Solo mañana' },
-  { k: 'rob', l: 'Actividades · Club de Robótica', cat: 'Recurrente opcional', freq: 'Mensual', mora: 'Aplica mora', price: 1900, rec: true, icon: 'ph ph-robot', spec: 'Miércoles 2:30 PM' },
-  { k: 'cer', l: 'Emisión de Certificación / Récord', cat: 'Esporádico', freq: 'Por demanda', mora: 'Sin mora', price: 500, rec: false, icon: '', spec: 'Certificación de estudios' },
-  { k: 'exs', l: 'Derecho a Examen de Suficiencia', cat: 'Esporádico', freq: 'Por demanda', mora: 'Sin mora', price: 1500, rec: false, icon: '', spec: 'Matemáticas' },
-  { k: 'uni', l: 'Kit de Uniformes (juego adicional)', cat: 'Materiales', freq: 'Eventual', mora: 'Sin mora', price: 2300, rec: false, icon: '', spec: 'Talla 12' },
-];
-const MONTHS = [8, 9, 10, 11, 12, 1, 2, 3, 4, 5];
-const MNAME: Record<number, string> = { 1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre' };
-const DOCS_DEFAULT = ['Acta de nacimiento', 'Registro de vacunación', 'Fotos 2×2', 'Récord de conducta anterior'];
-const CICLO = '2026–2027';
-
-const fichaDefault = (): ExpFicha => ({
+const fichaDefault = (ciclo: string): ExpFicha => ({
   carnet: '', ingreso: '', geo: '',
   medico: { sangre: '', seguro: '', poliza: '', condiciones: '', planAlim: '', planAlimExtra: '', emergenciaNombre: '', emergenciaTel: '', alertaDetalle: '' },
   conducta: { obs: [], record: 'Sin observaciones' }, hist: [],
-  contrato: { ciclo: CICLO, plan: '10', beca: 'none', ctr: '', firmado: '' },
+  contrato: { ciclo, plan: '', beca: 'none', ctr: '', firmado: '' },
 });
 
 const persona = (t: { nombre: string; parentesco: string; cedula: string; tel: string } | null): ExpPersona | null =>
@@ -39,19 +24,29 @@ const plugin: FastifyPluginAsync = async app => {
   const canWrite = (rol: string) => !READONLY_ROLES.includes(rol);
 
   async function loadFicha(alumnoId: string): Promise<ExpFicha> {
-    const r = await prisma.persExpediente.findUnique({ where: { alumnoId } });
-    return r ? { ...fichaDefault(), ...JSON.parse(r.data) } : fichaDefault();
+    const [r, ciclo] = await Promise.all([prisma.persExpediente.findUnique({ where: { alumnoId } }), cicloActivo()]);
+    return r ? { ...fichaDefault(ciclo.nombre), ...JSON.parse(r.data) } : fichaDefault(ciclo.nombre);
   }
   const saveFicha = (alumnoId: string, f: ExpFicha) =>
     prisma.persExpediente.upsert({ where: { alumnoId }, update: { data: JSON.stringify(f) }, create: { alumnoId, data: JSON.stringify(f) } });
 
+  /** Calendario del ciclo activo: meses, año de inicio, hoy y mes actual (zona horaria de la institución). */
+  async function calendario(planes: Awaited<ReturnType<typeof planesPago>>) {
+    const [ciclo, tz] = await Promise.all([cicloActivo(), zonaHoraria()]);
+    const meses = mesesCiclo(planes), { y, m, d } = partesEnZona(tz);
+    const ultimo = meses[meses.length - 1];
+    const fin = new Date(Date.UTC(anioDeMes(meses, ciclo.y0, ultimo), ultimo, 0)).toISOString().slice(0, 10);
+    return { ciclo, meses, hoy: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`, mesActual: m, finCiclo: fin };
+  }
+
   async function bundle(id: string): Promise<ExpedienteResp | null> {
     const a = await prisma.alumno.findUnique({ where: { id }, include: { tutor: true } });
     if (!a) return null;
-    const ficha = await loadFicha(id);
+    const [ficha, planes, fin, becasCat, catalogo] = await Promise.all([loadFicha(id), planesPago(), getFinanzas(), becasCatalogo(), catalogoServicios()]);
+    const cal = await calendario(planes);
     let docs = await prisma.persDocumento.findMany({ where: { alumnoId: id }, orderBy: { orden: 'asc' } });
     if (!docs.length) {
-      await prisma.persDocumento.createMany({ data: DOCS_DEFAULT.map((n, i) => ({ id: `pdoc-${id}-${i}`, alumnoId: id, n, f: 'Sin archivo', est: 'Pendiente', orden: i })) });
+      await prisma.persDocumento.createMany({ data: (await docsRequeridos()).map((n, i) => ({ id: `pdoc-${id}-${i}`, alumnoId: id, n, f: 'Sin archivo', est: 'Pendiente', orden: i })) });
       docs = await prisma.persDocumento.findMany({ where: { alumnoId: id }, orderBy: { orden: 'asc' } });
     }
     const [servicios, cuenta, legal, sibs, becas] = await Promise.all([
@@ -63,6 +58,16 @@ const plugin: FastifyPluginAsync = async app => {
     ]);
     const full = (x: { nombres: string; apellidos: string }) => `${x.nombres} ${x.apellidos}`;
     const becaOf = (x: { nombres: string; apellidos: string }) => becas.filter(b => b.est === full(x)).map(b => `${b.tipo} ${b.regla.includes('%') ? '−' : ''}${b.regla}`);
+
+    // El contrato guarda el id del plan (o la clave heredada '10'/'4'/'1'); se normaliza al plan real.
+    const actual = resolverPlan(planes, ficha.contrato.plan);
+    ficha.contrato = { ...ficha.contrato, plan: actual?.id ?? '' };
+    const refPlanes: Record<string, PersPlan> = {};
+    for (const p of planes) if (p.estado === 'Activo' || p.id === actual?.id) refPlanes[p.id] = persPlan(p, a.tanda, fin, cal.ciclo.y0);
+    const avisos: string[] = [];
+    if (!Object.keys(refPlanes).length) avisos.push('Configura planes y precios: no hay Planes de Pago activos (Finanzas → Planes de Pago).');
+    if (!cal.ciclo.configurado) avisos.push('Configura el ciclo lectivo activo en Configuración.');
+    if (!catalogo.length) avisos.push('No hay servicios con precio configurado (rutas, planes de alimentación, actividades o productos).');
     return {
       alumno: toAlumno(a), tutor: persona(a.tutor), legal: persona(legal), ficha,
       hermanos: sibs.map(s => ({ id: s.id, nombre: full(s), curso: `${s.grado} ${s.sec}`, beca: becaOf(s).map(b => 'Beca ' + b).join(' · ') })),
@@ -70,7 +75,11 @@ const plugin: FastifyPluginAsync = async app => {
       servicios: servicios.map(toServ),
       cuenta: cuenta.map(c => ({ id: c.id, con: c.con, vence: c.vence, est: c.est, monto: c.monto, paid: c.paid })),
       becasActivas: becaOf(a),
-      ref: { planes: PLANES, becas: BECAS, catalogo: CATALOGO, ciclos: [CICLO, '2025–2026'] },
+      ref: {
+        planes: refPlanes,
+        becas: Object.fromEntries(becasCat.map(b => [b.key, { nombre: b.nombre, pct: b.pct, aprobacion: b.aprobacion, tag: b.aprobacion ? 'Pendiente de aprobación' : 'Aprobada por Dirección' }])),
+        catalogo, ciclos: [cal.ciclo.nombre, ...cal.ciclo.otros], meses: cal.meses, anio0: cal.ciclo.y0, hoy: cal.hoy, mesActual: cal.mesActual, finCiclo: cal.finCiclo, avisos,
+      },
     };
   }
 
@@ -79,36 +88,46 @@ const plugin: FastifyPluginAsync = async app => {
   app.put<{ Params: { id: string }; Body: { plan: string; beca: string } }>('/:id/contrato', auth, async (req, reply) => {
     if (!canWrite(req.user.rol)) return reply.code(403).send({ error: 'Sin permiso' });
     const { plan, beca } = req.body ?? ({} as { plan: string; beca: string });
-    if (!(plan in PLANES) || !(beca in BECAS)) return reply.code(400).send({ error: 'Plan o beca inválidos' });
-    const f = await loadFicha(req.params.id);
-    await audit(req.user, 'Update', { tabla: 'Contrato', id: f.contrato.ctr || req.params.id, prev: `${f.contrato.plan}/${f.contrato.beca}`, next: `${plan}/${beca}`, ip: req.ip });
-    f.contrato = { ...f.contrato, plan: plan as ExpFicha['contrato']['plan'], beca: beca as ExpFicha['contrato']['beca'] };
+    const [planes, becas, f] = await Promise.all([planesPago(), becasCatalogo(), loadFicha(req.params.id)]);
+    const prev = resolverPlan(planes, f.contrato.plan), next = resolverPlan(planes, plan);
+    if (!next || (next.estado !== 'Activo' && next.id !== prev?.id) || (beca !== 'none' && !becas.some(b => b.key === beca) && beca !== f.contrato.beca)) return reply.code(400).send({ error: 'Plan o beca inválidos' });
+    await audit(req.user, 'Update', { tabla: 'Contrato', id: f.contrato.ctr || req.params.id, prev: `${f.contrato.plan}/${f.contrato.beca}`, next: `${next.id}/${beca}`, ip: req.ip });
+    f.contrato = { ...f.contrato, plan: next.id, beca };
+    await prisma.$transaction([
+      ...(prev && prev.id !== next.id ? [prisma.finPlan.updateMany({ where: { id: prev.id, alumnos: { gt: 0 } }, data: { alumnos: { decrement: 1 } } })] : []),
+      ...(!prev || prev.id !== next.id ? [prisma.finPlan.update({ where: { id: next.id }, data: { alumnos: { increment: 1 } } })] : []),
+    ]);
     await saveFicha(req.params.id, f);
     return { ok: true };
   });
 
-  // Asigna un servicio del catálogo: recurrente (cuotas desde el mes elegido hasta mayo) o cargo único.
+  // Asigna un servicio del catálogo: recurrente (cuotas desde el mes elegido hasta fin de ciclo) o cargo único.
   app.post<{ Params: { id: string }; Body: { catKey: string; spec: string; mes: number } }>('/:id/servicios', auth, async (req, reply) => {
     if (!canWrite(req.user.rol)) return reply.code(403).send({ error: 'Sin permiso' });
     const { catKey, spec, mes } = req.body ?? ({} as { catKey: string; spec: string; mes: number });
-    const cc = CATALOGO.find(c => c.k === catKey);
+    const [catalogo, planes, fin] = await Promise.all([catalogoServicios(), planesPago(), getFinanzas()]);
+    const cc: ExpCatalogoItem | undefined = catalogo.find(c => c.k === catKey);
     const a = await prisma.alumno.findUnique({ where: { id: req.params.id }, include: { tutor: true } });
-    if (!cc || !a || !MONTHS.includes(mes)) return reply.code(400).send({ error: 'Datos inválidos' });
-    const sid = `psv-${cc.k}${Date.now().toString(36)}`;
-    const venc = (m: number) => `01/${String(m).padStart(2, '0')}/${m >= 8 ? 2026 : 2027}`;
-    const meses = cc.rec ? MONTHS.slice(MONTHS.indexOf(mes)) : [mes];
+    const cal = await calendario(planes);
+    const idx = cal.meses.indexOf(mes), idxHoy = Math.max(0, cal.meses.indexOf(cal.mesActual));
+    if (!cc || !a || idx < 0 || idx < idxHoy) return reply.code(400).send({ error: 'Datos inválidos' });
+    const sid = `psv-${cc.k.replace(/\W/g, '')}${Date.now().toString(36)}`;
+    const dia = fin.diaCorte > 0 ? fin.diaCorte : 1;
+    const venc = (m: number) => vencDMY(dia, m, anioDeMes(cal.meses, cal.ciclo.y0, m));
+    const meses = cc.rec ? cal.meses.slice(idx) : [mes];
     const name = cc.l.split(' · ').pop()!;
     const sp = spec?.trim() || cc.spec;
+    const alert = cc.food && a.alg ? 'Sin ' + a.alg.split(',').map(x => x.trim()).filter(Boolean).join(' / ') : '';
     await prisma.persServicio.create({
       data: cc.rec
-        ? { id: sid, alumnoId: a.id, kind: 'rec', catKey: cc.k, name, icon: cc.icon, spec: sp, cost: cc.price, corte: 'Día 01 de cada mes', alert: cc.food && a.alg ? 'Sin Maní / Lactosa' : '' }
-        : { id: sid, alumnoId: a.id, kind: 'once', catKey: cc.k, name: `${cc.l} · ${sp}`, cost: cc.price, fecha: venc(mes), st: mes === 10 ? 'cargado' : 'prog', mes: MNAME[mes] },
+        ? { id: sid, alumnoId: a.id, kind: 'rec', catKey: cc.k, name, icon: cc.icon, spec: sp, cost: cc.price, corte: `Día ${String(dia).padStart(2, '0')} de cada mes`, alert }
+        : { id: sid, alumnoId: a.id, kind: 'once', catKey: cc.k, name: sp ? `${cc.l} · ${sp}` : cc.l, cost: cc.price, fecha: venc(mes), st: mes === cal.mesActual ? 'cargado' : 'prog', mes: MNAME[mes] },
     });
     const base = 1000 + (await prisma.finCobroItem.count());
     await prisma.finCobroItem.createMany({
       data: meses.map((m, i) => ({
         id: `${sid}-${m}`, kid: kidOf(a.id), con: `${name} · ${MNAME[m]}`, al: `${a.nombres.split(' ')[0]} · ${a.grado} ${a.sec}`, vence: venc(m), monto: cc.price,
-        est: m === 10 ? 'Por vencer' : 'Pendiente', tipo: 'srv', orden: base + i, ...(a.tutor?.cedula ? { tutorCed: digits(a.tutor.cedula) } : {}),
+        est: m === cal.mesActual ? 'Por vencer' : 'Pendiente', tipo: 'srv', orden: base + i, ...(a.tutor?.cedula ? { tutorCed: digits(a.tutor.cedula) } : {}),
       })),
     });
     await audit(req.user, 'Insert', { tabla: 'Servicios', id: `${a.code}/${cc.k}`, prev: '—', next: `${meses.length} cargo(s) × ${cc.price}`, ip: req.ip });

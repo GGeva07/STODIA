@@ -12,8 +12,11 @@ export interface ReciboFin {
   metodo: string; abono: boolean; saldo: number; nc?: string; change: number;
   items: { con: string; monto: number }[]; pays: CobroPago[];
 }
-export interface CobroCuenta { tutor: string; cedula: string; items: CobroItem[]; recibos: ReciboFin[] }
-export interface CobroProcesarReq { ids: string[]; discount: 'none' | 'pronto' | 'exo'; pays: CobroPagoReq[]; pin?: string }
+export interface CobroHijo { id: string; kid: string; nombre: string; corto: string; grado: string; sec: string; code: string }
+export interface CobroCuenta { tutor: string; cedula: string; email?: string; hijos: CobroHijo[]; becas: string[]; items: CobroItem[]; recibos: ReciboFin[] }
+export interface CobroProcesarReq { ids: string[]; discount: 'none' | 'pronto' | 'exo'; pays: CobroPagoReq[]; pin?: string; cedula?: string; intencionId?: string }
+/** Medio de pago configurado (Catálogo metodosPago): ref = etiqueta de la referencia que exige, o null si no exige. */
+export interface CobroMetodo { nombre: string; ref: string | null }
 
 export interface PlanForm {
   name: string; freq: string; n: string; anual: string; desc: string; start: string; dia: string;

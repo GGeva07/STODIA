@@ -4,16 +4,17 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    image: stodia-api:local
     restart: unless-stopped
     environment:
       NODE_ENV: production
       DATABASE_URL: file:/data/stodia.db
       JWT_SECRET: ${JWT_SECRET:-}
-      SEED_DEMO: ${SEED_DEMO:-false}
-      SEED_PASSWORD: ${SEED_PASSWORD:-}   # solo con SEED_DEMO=true (el admin real usa ADMIN_PASSWORD)
+      SEED_DEMO: "false"                    # produccion: nunca siembra usuarios demo
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_NAME: ${ADMIN_NAME:-Administrador}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}   # solo primer arranque; el instalador lo borra del .env
+      SUPERVISOR_PIN: ${SUPERVISOR_PIN:-}   # solo valor inicial (luego se cambia en Configuracion); idem
       INSTITUTION_NAME: ${INSTITUTION_NAME:-}
       TAX_ID: ${TAX_ID:-}
       ADDRESS: ${ADDRESS:-}
@@ -24,12 +25,18 @@ services:
       TIMEZONE: ${TIMEZONE:-America/Santo_Domingo}
       TZ: ${TIMEZONE:-America/Santo_Domingo}
       LICENSE_KEY: ${LICENSE_KEY:-}
-      CORS_ORIGIN: ${CORS_ORIGIN:-}        # origen(es) de la web, p. ej. http://192.168.1.10:8080 (la app móvil siempre se permite)
-      SUPERVISOR_PIN: ${SUPERVISOR_PIN:-}  # solo valor inicial; luego se cambia en Configuración
+      CORS_ORIGIN: ${CORS_ORIGIN:-}         # origen(es) de la web, p. ej. http://192.168.1.10:8080 (la app movil siempre se permite)
+      TRUST_PROXY: ${TRUST_PROXY:-false}    # true solo si la API va tras el proxy nginx de la web (API_URL=/api)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     volumes:
       - stodia-data:/data
     ports:
-      - "${API_PORT:-3000}:3000"
+      # API_BIND=127.0.0.1 cuando va tras el proxy /api (no exponer el puerto directo: X-Forwarded-For seria falsificable)
+      - "${API_BIND:-0.0.0.0}:${API_PORT:-3000}:3000"
 
   web:
     build:
@@ -41,9 +48,33 @@ services:
     environment:
       API_URL: ${API_URL:-http://localhost:3000}
       INSTITUTION_NAME: ${INSTITUTION_NAME:-}
-      API_PROXY_TARGET: http://api:3000   # habilita /api/ en el mismo origen (opcional: usar API_URL=/api)
+      API_PROXY_TARGET: http://api:3000   # habilita /api/ en el mismo origen (API_URL=/api)
     ports:
       - "${WEB_PORT:-8080}:80"
+
+  # Respaldo diario opcional de la BD (copia consistente con sqlite3 .backup, rotacion 14 dias en /data/backups).
+  #   docker compose --profile backup up -d backup
+  backup:
+    image: stodia-api:local
+    profiles: ["backup"]
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      TZ: ${TIMEZONE:-America/Santo_Domingo}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        while true; do
+          mkdir -p /data/backups
+          if [ -f /data/stodia.db ]; then
+            sqlite3 /data/stodia.db ".backup /data/backups/stodia-$$(date +%Y%m%d-%H%M%S).db" && echo "respaldo ok"
+            find /data/backups -name 'stodia-*.db' -mtime +14 -delete
+          fi
+          sleep 86400
+        done
+    volumes:
+      - stodia-data:/data
 
 volumes:
   stodia-data:

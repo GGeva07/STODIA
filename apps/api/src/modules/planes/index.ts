@@ -4,11 +4,15 @@ import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { nextSeq, supervisorOk } from '../../fin-utils';
 
-const TANDAS = ['Matutina', 'Vespertina', 'Extendida', 'Nocturna'];
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 const toPlan = (r: { id: string; alumnos: number; data: string }): PlanPagoFin => ({ ...(JSON.parse(r.data) as PlanForm), id: r.id, alumnos: r.alumnos });
 
-function validate(f: PlanForm): string | null {
+/** Tandas definidas por la institución (Catálogo 'tandas'). */
+async function tandasActivas(): Promise<string[]> {
+  return (await prisma.catalogo.findMany({ where: { tipo: 'tandas' }, orderBy: { id: 'asc' } })).map(r => String((JSON.parse(r.data) as { nombre?: string }).nombre ?? '')).filter(Boolean);
+}
+
+function validate(f: PlanForm, TANDAS: string[]): string | null {
   const n = parseInt(f.n) || 0, anual = parseFloat(f.anual) || 0, dia = parseInt(f.dia);
   if (!f.name?.trim()) return 'El nombre del plan es obligatorio.';
   if (!(n >= 1 && n <= 12)) return 'El número de cuotas debe estar entre 1 y 12.';
@@ -25,13 +29,13 @@ function validate(f: PlanForm): string | null {
 const plugin: FastifyPluginAsync = async app => {
   const auth = { onRequest: [app.authenticate] };
   const dupName = async (name: string, exceptId?: string) => (await prisma.finPlan.findMany()).some(p => p.id !== exceptId && norm(p.name) === norm(name));
-  const newId = async () => 'PLN-' + String(await nextSeq('pln', 5)).padStart(3, '0');
+  const newId = async () => 'PLN-' + String(await nextSeq('pln')).padStart(3, '0');
 
   app.get('/', auth, async () => (await prisma.finPlan.findMany({ orderBy: { id: 'asc' } })).map(toPlan));
 
   app.post<{ Body: PlanForm }>('/', auth, async (req, reply) => {
     const f = { ...req.body, name: req.body.name?.trim() ?? '' };
-    const err = validate(f) ?? ((await dupName(f.name)) ? 'Ya existe un plan con ese nombre.' : null);
+    const err = validate(f, await tandasActivas()) ?? ((await dupName(f.name)) ? 'Ya existe un plan con ese nombre.' : null);
     if (err) return reply.code(400).send({ error: err });
     const cr = await prisma.finPlan.create({ data: { id: await newId(), name: f.name, estado: f.estado, alumnos: 0, data: JSON.stringify(f) } });
     await audit(req.user, 'Insert', { tabla: 'PlanesPago', id: cr.id, next: cr.name, ip: req.ip });
@@ -43,7 +47,7 @@ const plugin: FastifyPluginAsync = async app => {
     if (!(await supervisorOk(req, req.body.pin, 'plan.modificar'))) return reply.code(403).send({ error: 'Clave de supervisor inválida' });
     const { pin: _pin, ...body } = req.body;
     const { alumnos: _a, id: _i, ...f } = { ...body, name: body.name?.trim() ?? '' } as PlanForm & { alumnos?: number; id?: string };
-    const err = validate(f) ?? ((await dupName(f.name, req.params.id)) ? 'Ya existe un plan con ese nombre.' : null);
+    const err = validate(f, await tandasActivas()) ?? ((await dupName(f.name, req.params.id)) ? 'Ya existe un plan con ese nombre.' : null);
     if (err) return reply.code(400).send({ error: err });
     const prevP = await prisma.finPlan.findUnique({ where: { id: req.params.id } });
     const up = await prisma.finPlan.update({ where: { id: req.params.id }, data: { name: f.name, estado: f.estado, data: JSON.stringify(f) } });

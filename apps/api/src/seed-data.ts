@@ -76,6 +76,9 @@ export const CAT_SEED: Record<string, CatRow[]> = {
     { id: 'e3', nombre: 'Julia Ventura', cargo: 'Coordinadora financiera', usuario: 'usr_ventura', rol: 'Super Admin', caja: '', estado: 'Activo' },
     { id: 'e4', nombre: 'Héctor Lora', cargo: 'Encargado de comedor', usuario: 'usr_lora', rol: 'Encargado Comedor', caja: '', estado: 'Activo' },
   ],
+  // Tipos de beca de la demo sin porcentaje fijo (monto fijo); los de porcentaje los siembra seed-personas en este mismo Catalogo 'becas'.
+  becas: [{ id: 'b1', nombre: 'Deportiva', estado: 'Activo' }],
+  conceptosBeca: ['Colegiatura', 'Inscripción', 'Transporte', 'Comedor'].map((nombre, i) => ({ id: 'cb' + (i + 1), nombre, estado: 'Activo' })),
   rutas: [
     { id: 'r1', nombre: 'Zona A', sectores: 'Naco · Piantini · Evaristo Morales', chofer: 'José Martínez', ficha: 'AB-0231', asientos: 30, tarifa: 2500, estado: 'Activo' },
     { id: 'r2', nombre: 'Zona B', sectores: 'Bella Vista · Mirador Sur', chofer: 'Ramón Peralta', ficha: 'AB-0244', asientos: 30, tarifa: 2500, estado: 'Activo' },

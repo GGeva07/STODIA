@@ -5,30 +5,46 @@ import { useSession } from '../../lib/session';
 import { useToastStack } from '../../components/useToastStack';
 import SupervisorGuardModal, { type GuardCfg } from '../../components/finanzas/SupervisorGuardModal';
 import { TONE, errMsg } from '../../components/finanzas/fin';
+import { useFinCfg } from '../../components/finanzas/finConfig';
 
-const BC = ['Colegiatura', 'Inscripción', 'Transporte', 'Comedor'];
-const ESTUDIANTES = ['Juan Mendoza Fernández · 5to A', 'Camila Espinal Ortiz · 5to A', 'Héctor De la Cruz · 5to A', 'Lucía Peña Durán · 5to A'];
 const GRID = 'grid grid-cols-[minmax(0,1.4fr)_130px_120px_minmax(0,1fr)_120px_170px_190px] gap-2';
 const TAG: Record<string, readonly [string, string]> = { Aprobada: TONE.ok, Pendiente: TONE.warn, Revocada: TONE.mute };
 const sel = 'h-9 rounded-md border border-slate-300 bg-white px-2 text-[13px] text-ink';
 const lbl = 'flex flex-col gap-1 text-xs font-medium text-slate-600';
 
 interface BecaForm { est: string; tipo: string; modo: 'pct' | 'fijo'; valor: string; conc: boolean[]; exp: string }
-const NEW_FORM: BecaForm = { est: ESTUDIANTES[0], tipo: 'Académica', modo: 'pct', valor: '25', conc: [true, false, false, false], exp: '' };
+interface Estudiante { id: string; label: string }
 
 export default function Screen() {
   const { user } = useSession();
   const { toast, toasts } = useToastStack();
   const isSuper = user?.rol === 'Super Admin';
   const canApprove = isSuper || user?.rol === 'Director Académico';
-  const [periodo, setPeriodo] = useState('2026–2027');
+  const cfg = useFinCfg();
+  const [periodo, setPeriodo] = useState('');
+  const [tipos, setTipos] = useState<string[]>([]);
+  const [BC, setBC] = useState<string[]>([]);
+  const [ests, setEsts] = useState<Estudiante[]>([]);
+  const [qEst, setQEst] = useState('');
+  const per = periodo || cfg.ciclo;
   const [rows, setRows] = useState<BecaFin[]>([]);
   const [bf, setBf] = useState<BecaForm | null>(null);
   const [guard, setGuard] = useState<GuardCfg | null>(null);
 
-  const load = useCallback(() => api.get<BecaFin[]>('/becas?periodo=' + encodeURIComponent(periodo)).then(setRows).catch(e => toast(errMsg(e), 'bad')), [periodo, toast]);
+  const load = useCallback(() => api.get<BecaFin[]>('/becas?periodo=' + encodeURIComponent(per)).then(setRows).catch(e => toast(errMsg(e), 'bad')), [per, toast]);
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => {
+    api.get<{ tipos: string[]; conceptos: string[] }>('/becas/catalogos').then(r => { setTipos(r.tipos); setBC(r.conceptos); }).catch(() => undefined);
+  }, []);
+  // Estudiantes activos desde la BD, con búsqueda (nombre, carnet) mientras el formulario está abierto.
+  useEffect(() => {
+    if (!bf) return;
+    const t = setTimeout(() => { api.get<Estudiante[]>('/becas/estudiantes?q=' + encodeURIComponent(qEst)).then(setEsts).catch(() => undefined); }, 200);
+    return () => clearTimeout(t);
+  }, [bf !== null, qEst]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (bf && !bf.est && ests[0]) setBf({ ...bf, est: ests[0].label }); }, [ests]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openForm = () => { setQEst(''); setBf({ est: '', tipo: tipos[0] ?? '', modo: 'pct', valor: '25', conc: BC.map((_, i) => i === 0), exp: '' }); };
   const replace = (b: BecaFin) => setRows(r => r.map(x => (x.id === b.id ? b : x)));
 
   const approve = (b: BecaFin) => {
@@ -45,19 +61,20 @@ export default function Screen() {
 
   const save = async () => {
     if (!bf) return;
+    if (!bf.est) { toast('Selecciona un estudiante', 'bad'); return; }
     if (!bf.exp.trim()) { toast('El expediente de soporte es obligatorio', 'bad'); return; }
     if (!bf.conc.some(Boolean)) { toast('Selecciona al menos un concepto', 'bad'); return; }
-    const body: BecaNueva = { est: bf.est, tipo: bf.tipo, modo: bf.modo, valor: bf.valor, conceptos: BC.filter((_, i) => bf.conc[i]), exp: bf.exp, periodo: '2026–2027' };
+    const body: BecaNueva = { est: bf.est, tipo: bf.tipo, modo: bf.modo, valor: bf.valor, conceptos: BC.filter((_, i) => bf.conc[i]), exp: bf.exp, periodo: per };
     try {
       await api.post('/becas', body);
       setBf(null);
-      if (periodo !== '2026–2027') setPeriodo('2026–2027'); else await load();
+      if (periodo && periodo !== cfg.ciclo) setPeriodo(cfg.ciclo); else await load();
       toast('Beca registrada · enviada a aprobación', 'ok');
     } catch (e) { toast(errMsg(e), 'bad'); }
   };
 
   const addBtn = (
-    <button onClick={() => setBf(NEW_FORM)} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark"><i className="ph ph-plus" />Registrar Beca</button>
+    <button onClick={openForm} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark"><i className="ph ph-plus" />Registrar Beca</button>
   );
 
   return (
@@ -68,7 +85,7 @@ export default function Screen() {
           <p className="mb-0 mt-1 text-[13px] text-slate-600">Toda beca requiere expediente de soporte y aprobación del Director Financiero antes de impactar el estado de cuenta.</p>
         </div>
         <div className="flex items-center gap-2">
-          <select value={periodo} onChange={e => setPeriodo(e.target.value)} className="h-[34px] rounded-md border border-slate-300 bg-white px-2 text-[13px]"><option>2026–2027</option><option>2027–2028</option></select>
+          <select value={per} onChange={e => setPeriodo(e.target.value)} className="h-[34px] rounded-md border border-slate-300 bg-white px-2 text-[13px]">{cfg.ciclos.map(c => <option key={c.n}>{c.n}</option>)}</select>
           {addBtn}
         </div>
       </div>
@@ -105,7 +122,7 @@ export default function Screen() {
         <section className="flex flex-col items-start gap-2.5 rounded-lg border border-slate-200 bg-white px-8 py-12">
           <span className="grid h-14 w-14 place-items-center rounded-full bg-blue-50 text-[28px] text-accent"><i className="ph ph-hand-coins" /></span>
           <div className="text-[15px] font-semibold">No hay becas registradas para este período.</div>
-          <div className="max-w-[440px] text-[13px] leading-normal text-slate-600">Las becas del ciclo 2027–2028 se registran después de la generación masiva de cartera. Puedes adelantar solicitudes con su expediente de soporte.</div>
+          <div className="max-w-[440px] text-[13px] leading-normal text-slate-600">{cfg.ciclos.find(c => c.n === per)?.estado === 'Planificado' ? 'Las becas del ciclo ' + per + ' se registran después de la generación masiva de cartera. Puedes adelantar solicitudes con su expediente de soporte.' : 'Registra una beca con su expediente de soporte para que pase a aprobación.'}</div>
           {addBtn}
         </section>
       )}
@@ -116,11 +133,12 @@ export default function Screen() {
             <div className="border-b border-slate-200 px-5 py-4 text-base font-semibold">Registrar beca</div>
             <div className="flex flex-col gap-3 px-5 py-4">
               <label className={lbl}>Estudiante
-                <select value={bf.est} onChange={e => setBf({ ...bf, est: e.target.value })} className={sel}>{ESTUDIANTES.map(s => <option key={s}>{s}</option>)}</select>
+                <input value={qEst} onChange={e => setQEst(e.target.value)} placeholder="Buscar por nombre o carnet…" className="h-9 rounded-md border border-slate-300 px-2 text-[13px] font-normal" />
+                <select value={bf.est} onChange={e => setBf({ ...bf, est: e.target.value })} className={sel}>{(ests.some(s => s.label === bf.est) ? ests : [...(bf.est ? [{ id: '', label: bf.est }] : []), ...ests]).map(s => <option key={s.id + s.label} value={s.label}>{s.label}</option>)}{ests.length === 0 && <option value="">Sin resultados</option>}</select>
               </label>
               <div className="flex gap-2.5">
                 <label className={`${lbl} flex-1`}>Tipo
-                  <select value={bf.tipo} onChange={e => setBf({ ...bf, tipo: e.target.value })} className={sel}><option>Académica</option><option>Deportiva</option><option>Hijo de Empleado</option><option>Plan Hermano</option></select>
+                  <select value={bf.tipo} onChange={e => setBf({ ...bf, tipo: e.target.value })} className={sel}>{tipos.map(t => <option key={t}>{t}</option>)}</select>
                 </label>
                 <label className={`${lbl} w-[120px]`}>Modalidad
                   <select value={bf.modo} onChange={e => setBf({ ...bf, modo: e.target.value as 'pct' | 'fijo' })} className={sel}><option value="pct">%</option><option value="fijo">Monto fijo</option></select>

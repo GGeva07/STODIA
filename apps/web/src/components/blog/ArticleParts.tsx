@@ -103,7 +103,8 @@ export function Toc({ items, active, variant }: { items: { id: string; title: st
       })}
     </ol>
   );
-  return variant === 'mobile' ? ( className="blog-noprint mb-8 rounded-2xl border border-slate-200 bg-white p-4 lg:hidden">
+  return variant === 'mobile' ? (
+      <details className="blog-noprint mb-8 rounded-2xl border border-slate-200 bg-white p-4 lg:hidden">
         <summary className="cursor-pointer text-base font-bold text-ink">En este artículo</summary>
         <nav aria-label="Contenido del artículo (móvil)" className="mt-3">{list}</nav>
       </details>

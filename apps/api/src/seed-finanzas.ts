@@ -42,7 +42,7 @@ const KPROD: [string, string, string, string, number, boolean, number | null, st
 ];
 
 export default async function seedFinanzas() {
-  for (const [key, value] of Object.entries({ rec: 418, ncf: 1881, b01: 214, nc: 213, vta: 1, ent: 32, pln: 5 })) {
+  for (const [key, value] of Object.entries({ rec: 418, ncf: 1881, b01: 214, nc: 213, vta: 89, ent: 32, pln: 5 })) {
     await prisma.finCounter.upsert({ where: { key }, update: {}, create: { key, value } });
   }
   for (const [i, r] of POS0.entries()) {
@@ -94,7 +94,10 @@ async function seedDemoDashboard() {
     ecf: true,
     ecfInfo: { archivo: 'stodia_colegio.p12', vence: '15/03/2027' },
     ciclos: [{ n: '2025–2026', estado: 'Cerrado' }, { n: '2026–2027', estado: 'Activo' }],
+    finanzas: { matricula: 85000, inscripcion: 15000, itbis: 0.18, recargoMoraPct: 3, descuentoProntoPct: 5, diaCorte: 15 }, // UNICA fuente de la config financiera de la demo (seed-personas ya no la siembra)
   };
+  const METODOS: [string, string, string | null][] = [['m1', 'Efectivo', null], ['m2', 'Tarjeta de Crédito', 'Autorización'], ['m3', 'Tarjeta de Débito', 'Autorización'], ['m4', 'Transferencia', 'Ref. bancaria'], ['m5', 'Cheque', 'No. cheque']];
+  for (const [id, nombre, ref] of METODOS) await prisma.catalogo.upsert({ where: { id: 'metodosPago:' + id }, update: {}, create: { id: 'metodosPago:' + id, tipo: 'metodosPago', estado: 'Activo', data: JSON.stringify({ id, nombre, ref }) } });
   for (const [clave, v] of Object.entries(cfg)) await prisma.sisConfig.upsert({ where: { clave }, update: {}, create: { clave, valor: JSON.stringify(v) } });
 
   // Recaudo histórico (ventas rápidas; no aparecen en el POS) (efectivo, banco) por mes, de hace 5 meses al actual; el actual completa los 3 recibos de arriba hasta ~RD$ 2.0 M.

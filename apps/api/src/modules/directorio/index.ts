@@ -1,10 +1,11 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { Alumno } from '@stodia/shared';
+import type { Alumno, DirCorte } from '@stodia/shared';
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { supervisorOk } from '../../fin-utils';
 import { READONLY_ROLES, toAlumno } from '../../lib/personas';
 import { saldoVencidoPorAlumno } from '../../lib/cxc';
+import { fechaCorte } from '../../lib/pers-fin';
 
 const EDITABLE = ['nombres', 'apellidos', 'fnac', 'estado', 'grado', 'sec', 'tanda', 'tel', 'dir'] as const;
 type Edit = Partial<Record<(typeof EDITABLE)[number], string>>;
@@ -19,6 +20,9 @@ const plugin: FastifyPluginAsync = async app => {
 
   // Saldo vencido por alumno (notificaciones de cobro impresas): cuentas por cobrar reales (lib/cxc).
   app.post<{ Body: { ids: string[] } }>('/saldos', auth, async req => saldoVencidoPorAlumno(req.body?.ids ?? []));
+
+  // Fecha límite de pago de las notificaciones de cobro: próximo día de corte configurado (o hoy + plazo estándar).
+  app.get('/corte', auth, async (): Promise<DirCorte> => fechaCorte());
 
   app.put<{ Params: { id: string }; Body: Edit }>('/:id', auth, async (req, reply) => {
     if (READONLY_ROLES.includes(req.user.rol)) return reply.code(403).send({ error: `El rol ${req.user.rol} solo tiene lectura sobre la ficha del estudiante` });

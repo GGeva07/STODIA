@@ -3,6 +3,8 @@ import type { AuditoriaList } from '@stodia/shared';
 import { btn, card, pill, pillBase, td, th } from '../../components/system/styles';
 import { useToast } from '../../components/system/UiProvider';
 import { api } from '../../lib/api';
+import { runPrint, usePrintBusy } from '../../components/finanzas/print';
+import { docAudit } from '../../components/academico/printDocs';
 
 const ACT_TONE = { Insert: 'ok', Update: 'info', Delete: 'bad' } as const;
 const COLS = ['Timestamp (UTC)', 'Usuario', 'Acción', 'Tabla', 'Registro', 'Valor anterior', 'Valor nuevo', 'IP'];
@@ -25,17 +27,7 @@ export default function Screen() {
     return () => clearTimeout(t);
   }, [q, user, act, day, toast]);
 
-  const exportCsv = () => {
-    if (!data) return;
-    const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
-    const csv = [COLS.join(','), ...data.rows.map(l => [l.t, l.usr, l.a, l.tabla, l.registro, l.prev, l.next, l.ip].map(esc).join(','))].join('\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
-    a.download = 'auditoria.csv';
-    a.click();
-    URL.revokeObjectURL(a.href);
-    toast('Auditoría exportada (' + data.rows.length + ' eventos)', 'ok');
-  };
+  const pbA = usePrintBusy()('audit', 'Imprimir / exportar', 'ph ph-printer');
 
   return (
     <div className="flex flex-col gap-3.5">
@@ -46,7 +38,7 @@ export default function Screen() {
         </div>
         <div className="flex items-center gap-2">
           <span className="flex items-center gap-1.5 text-xs font-semibold text-ok-fg"><i className="ph-fill ph-lock-key" />Inmutable</span>
-          <button onClick={exportCsv} className={btn}><i className="ph ph-printer" />Imprimir / exportar</button>
+          <button onClick={() => data && runPrint('audit', docAudit(data.rows))} className={btn}><i className={pbA.icon} style={{ animation: pbA.spin }} />{pbA.label}</button>
         </div>
       </div>
 

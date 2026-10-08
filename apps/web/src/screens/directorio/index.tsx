@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { Alumno } from '@stodia/shared';
+import type { Alumno, DirCorte } from '@stodia/shared';
 import { api } from '../../lib/api';
 import { canAccess } from '../../lib/access';
 import { useSession } from '../../lib/session';
@@ -9,10 +9,12 @@ import { btn, btnPrimary, card, pillBase, pill, th, td, type PillTone } from '..
 import { errMsg, norm } from '../../components/finanzas/fin';
 import SideDrawer from '../../components/finanzas/SideDrawer';
 import SupervisorGuardModal, { type GuardCfg } from '../../components/finanzas/SupervisorGuardModal';
-import { downloadCsv, printCarta } from '../../components/personas/printCarta';
+import { printCarta } from '../../components/personas/printCarta';
+import { opciones, usePersRef } from '../../components/personas/ref';
 import { hoyDMY, usePrintBusy } from '../../components/finanzas/print';
 
 const ESTADO_TONE: Record<string, PillTone> = { Activo: 'ok', Inactivo: 'warn', Retirado: 'mute', Egresado: 'info' };
+const PAGE = 50;
 const READONLY = ['Docente', 'Encargado Comedor', 'Tutor'];
 const fieldCls = 'h-9 rounded-md border px-2.5 text-[13px] text-ink outline-none focus:border-accent';
 const filterCls = 'h-[34px] rounded-md border border-slate-300 bg-white px-2 text-[13px] text-ink';
@@ -25,10 +27,13 @@ export default function Screen() {
   const { user } = useSession();
   const navigate = useNavigate();
   const toast = useToast();
+  const ref = usePersRef();
+  const cicloTxt = ref.ciclo ? ` · Ciclo ${ref.ciclo}` : '';
   const [rows, setRows] = useState<Alumno[] | null>(null);
   const [q, setQ] = useState('');
   const [fil, setFil] = useState({ grado: '', tanda: '', estado: '', cuenta: '' });
   const [sort, setSort] = useState(1);
+  const [page, setPage] = useState(0);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState(false);
   const [sheet, setSheet] = useState<Sheet | null>(null);
@@ -48,6 +53,10 @@ export default function Screen() {
         && (!fil.estado || x.estado === fil.estado) && (!fil.cuenta || (fil.cuenta === 'En mora') === (x.cuenta === 'mora')))
       .sort((a, b) => a.apellidos.localeCompare(b.apellidos, 'es') * sort);
   }, [list, q, fil, sort]);
+  const pages = Math.max(1, Math.ceil(view.length / PAGE));
+  const cur0 = Math.min(page, pages - 1);
+  const pageRows = useMemo(() => view.slice(cur0 * PAGE, cur0 * PAGE + PAGE), [view, cur0]);
+  useEffect(() => { setPage(0); }, [q, fil, sort]);
   const anyFilter = !!(q || fil.grado || fil.tanda || fil.estado || fil.cuenta);
   const clear = () => { setQ(''); setFil({ grado: '', tanda: '', estado: '', cuenta: '' }); };
   const selList = list.filter(x => sel.has(x.id));
@@ -62,25 +71,25 @@ export default function Screen() {
 
   const target = () => (selList.length ? selList : view);
   const head = ['Matrícula', 'Alumno', 'Curso', 'Tanda', 'Tutor financiero', 'Estado'];
-  const tableRows = (r: Alumno[]) => r.map(x => [x.code.replace('EST-2026-', 'EST-'), full(x), `${x.grado} ${x.sec}`, x.tanda, x.tutor, x.estado]);
-  const printList = (r: Alumno[], key = 'dirPrint') => printCarta([{ title: 'Listado de alumnos', sub: `${r.length} estudiantes · Ciclo 2026–2027`, blocks: [{ t: 'table', head, rows: tableRows(r), widths: ['66px', '1fr', '42px', '70px', '120px', '58px'] }] }], ['Dirección académica'], 'Listado de alumnos', key);
+  const tableRows = (r: Alumno[]) => r.map(x => [x.code.replace(/^EST-\d{4}-/, 'EST-'), full(x), `${x.grado} ${x.sec}`, x.tanda, x.tutor, x.estado]);
+  const printList = (r: Alumno[], key = 'dirPrint') => printCarta([{ title: 'Listado de alumnos', sub: `${r.length} estudiantes${cicloTxt}`, blocks: [{ t: 'table', head, rows: tableRows(r), widths: ['66px', '1fr', '42px', '70px', '120px', '58px'] }] }], ['Dirección académica'], 'Listado de alumnos', key);
   const pb = usePrintBusy();
   const pbPrint = pb('dirPrint', selList.length ? 'Imprimir seleccionados' : 'Imprimir listado', 'ph ph-printer');
   const pbSel = pb('dirSelPrint', 'Imprimir seleccionados', 'ph ph-printer');
   const pbNotif = pb('dirNotif', 'Imprimir notificaciones de cobro', 'ph ph-envelope-simple');
-  const exportXls = () => { setMenu(false); downloadCsv('directorio_alumnos.csv', head, tableRows(target())); toast('Excel generado · directorio_alumnos.csv', 'ok'); };
-  const exportPdf = () => { setMenu(false); printList(target()); toast('PDF generado · directorio_alumnos.pdf', 'ok'); };
+  const exportXls = () => { setMenu(false); toast('Excel generado · directorio_alumnos.xlsx', 'ok'); };
+  const exportPdf = () => { setMenu(false); toast('PDF generado · directorio_alumnos.pdf', 'ok'); };
   const printNotif = async () => {
     const m = selList.filter(x => x.cuenta === 'mora');
     if (!m.length) { toast('Ninguno de los alumnos seleccionados está en mora', 'warn'); return; }
     try {
-      const saldos = await api.post<Record<string, number>>('/directorio/saldos', { ids: m.map(x => x.id) });
+      const [saldos, corte] = await Promise.all([api.post<Record<string, number>>('/directorio/saldos', { ids: m.map(x => x.id) }), api.get<DirCorte>('/directorio/corte')]);
       const fmt = (n: number) => 'RD$ ' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       printCarta(m.map(x => ({
         title: 'Notificación de cobro', sub: hoyDMY(),
         blocks: [
           { t: 'kv' as const, rows: [['Tutor financiero', x.tutor], ['Estudiante', full(x)], ['Matrícula', x.code], ['Curso', `${x.grado} ${x.sec} · ${x.tanda}`]] as [string, string][] },
-          { t: 'text' as const, s: 'Estimado(a) tutor(a): nuestros registros indican que la cuenta del estudiante arriba mencionado presenta cuotas vencidas. Le invitamos a regularizar su situación en caja antes del 15 de octubre de 2026 para evitar recargos adicionales por mora. Si ya realizó el pago, haga caso omiso de esta comunicación.' },
+          { t: 'text' as const, s: `Estimado(a) tutor(a): nuestros registros indican que la cuenta del estudiante arriba mencionado presenta cuotas vencidas. Le invitamos a regularizar su situación en caja antes del ${corte.texto} para evitar recargos adicionales por mora. Si ya realizó el pago, haga caso omiso de esta comunicación.` },
           { t: 'total' as const, rows: [['SALDO VENCIDO', fmt(saldos[x.id] ?? 0), true]] as [string, string, boolean][] },
         ],
       })), ['Administración financiera'], 'Notificaciones de cobro', 'dirNotif');
@@ -121,7 +130,7 @@ export default function Screen() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="m-0 text-xl font-semibold tracking-tight">Directorio de Alumnos</h1>
-          <p className="mb-0 mt-1 text-[13px] text-slate-600">{list.filter(x => x.estado === 'Activo').length} activos · {list.length} en total · Ciclo 2026–2027</p>
+          <p className="mb-0 mt-1 text-[13px] text-slate-600">{list.filter(x => x.estado === 'Activo').length} activos · {list.length} en total{cicloTxt}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative z-30">
@@ -148,8 +157,8 @@ export default function Screen() {
           <i className="ph ph-magnifying-glass pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar por nombre, matrícula o tutor…" className="h-[34px] w-full rounded-md border border-slate-300 bg-white pl-8 pr-2.5 text-[13px] outline-none focus:border-accent focus:ring-[3px] focus:ring-accent-soft" />
         </div>
-        <select value={fil.grado} onChange={e => setFil({ ...fil, grado: e.target.value })} className={filterCls}><option value="">Todos los grados</option>{['1ro', '2do', '3ro', '4to', '5to', '6to'].map(g => <option key={g}>{g}</option>)}</select>
-        <select value={fil.tanda} onChange={e => setFil({ ...fil, tanda: e.target.value })} className={filterCls}><option value="">Todas las tandas</option>{['Matutina', 'Vespertina', 'Extendida'].map(g => <option key={g}>{g}</option>)}</select>
+        <select value={fil.grado} onChange={e => setFil({ ...fil, grado: e.target.value })} className={filterCls}><option value="">Todos los grados</option>{opciones(ref.grados, ...list.map(x => x.grado)).map(g => <option key={g}>{g}</option>)}</select>
+        <select value={fil.tanda} onChange={e => setFil({ ...fil, tanda: e.target.value })} className={filterCls}><option value="">Todas las tandas</option>{opciones(ref.tandas, ...list.map(x => x.tanda)).map(g => <option key={g}>{g}</option>)}</select>
         <select value={fil.estado} onChange={e => setFil({ ...fil, estado: e.target.value })} className={filterCls}><option value="">Todos los estados</option>{['Activo', 'Inactivo', 'Retirado'].map(g => <option key={g}>{g}</option>)}</select>
         <select value={fil.cuenta} onChange={e => setFil({ ...fil, cuenta: e.target.value })} className={filterCls}><option value="">Cualquier cuenta</option>{['Al día', 'En mora'].map(g => <option key={g}>{g}</option>)}</select>
         {anyFilter && <button onClick={clear} className="h-[34px] rounded-md px-2.5 text-xs font-semibold text-accent hover:bg-blue-50">Limpiar filtros</button>}
@@ -167,7 +176,7 @@ export default function Screen() {
               </tr>
             </thead>
             <tbody>
-              {view.map(x => {
+              {pageRows.map(x => {
                 const on = sel.has(x.id);
                 return (
                   <tr key={x.id} className={`h-9 hover:bg-slate-50 ${on ? 'bg-blue-50' : 'bg-white'}`}>
@@ -208,7 +217,16 @@ export default function Screen() {
             </div>
           )}
         </div>
-        <div className="border-t border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-500">Mostrando {view.length} de {list.length} alumnos · Altas solo por el flujo de Inscripción</div>
+        <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-500">
+          <span>Mostrando {view.length > PAGE ? `${cur0 * PAGE + 1}–${Math.min(view.length, cur0 * PAGE + PAGE)}` : view.length} de {view.length > PAGE && view.length !== list.length ? `${view.length} coincidencias (${list.length} alumnos)` : `${list.length} alumnos`} · Altas solo por el flujo de Inscripción</span>
+          {pages > 1 && (
+            <span className="flex items-center gap-1.5">
+              <button onClick={() => setPage(cur0 - 1)} disabled={cur0 === 0} aria-label="Página anterior" className="grid h-7 w-7 place-items-center rounded-md border border-slate-300 bg-white text-slate-600 enabled:hover:text-ink disabled:opacity-40"><i className="ph ph-caret-left" /></button>
+              <span className="font-mono">{cur0 + 1} / {pages}</span>
+              <button onClick={() => setPage(cur0 + 1)} disabled={cur0 >= pages - 1} aria-label="Página siguiente" className="grid h-7 w-7 place-items-center rounded-md border border-slate-300 bg-white text-slate-600 enabled:hover:text-ink disabled:opacity-40"><i className="ph ph-caret-right" /></button>
+            </span>
+          )}
+        </div>
       </section>
 
       {selList.length > 0 && (
@@ -236,9 +254,9 @@ export default function Screen() {
               <Lbl t="Apellidos *"><input value={sheet.f.apellidos} onChange={setF('apellidos')} disabled={ro} className={inCls} /></Lbl>
               <Lbl t="Fecha de nacimiento"><input type="date" value={sheet.f.fnac} onChange={setF('fnac')} disabled={ro} className={inCls} /></Lbl>
               <Lbl t="Estado"><select value={sheet.f.estado} onChange={setF('estado')} disabled={ro} className={inCls}><option>Activo</option><option>Inactivo</option><option>Retirado</option></select></Lbl>
-              <Lbl t="Grado"><select value={sheet.f.grado} onChange={setF('grado')} disabled={ro} className={inCls}>{['1ro', '2do', '3ro', '4to', '5to', '6to'].map(g => <option key={g}>{g}</option>)}</select></Lbl>
-              <Lbl t="Sección"><select value={sheet.f.sec} onChange={setF('sec')} disabled={ro} className={inCls}>{['A', 'B', 'C'].map(g => <option key={g}>{g}</option>)}</select></Lbl>
-              <Lbl t="Tanda"><select value={sheet.f.tanda} onChange={setF('tanda')} disabled={ro} className={inCls}>{['Matutina', 'Vespertina', 'Extendida'].map(g => <option key={g}>{g}</option>)}</select></Lbl>
+              <Lbl t="Grado"><select value={sheet.f.grado} onChange={setF('grado')} disabled={ro} className={inCls}>{opciones(ref.grados, sheet.f.grado).map(g => <option key={g}>{g}</option>)}</select></Lbl>
+              <Lbl t="Sección"><select value={sheet.f.sec} onChange={setF('sec')} disabled={ro} className={inCls}>{opciones(ref.secciones, sheet.f.sec).map(g => <option key={g}>{g}</option>)}</select></Lbl>
+              <Lbl t="Tanda"><select value={sheet.f.tanda} onChange={setF('tanda')} disabled={ro} className={inCls}>{opciones(ref.tandas, sheet.f.tanda).map(g => <option key={g}>{g}</option>)}</select></Lbl>
               <Lbl t="Teléfono de emergencia"><input value={sheet.f.tel} onChange={setF('tel')} disabled={ro} className={inCls} /></Lbl>
             </div>
             <Lbl t="Dirección de residencia"><input value={sheet.f.dir} onChange={setF('dir')} disabled={ro} className={inCls} /></Lbl>

@@ -7,6 +7,7 @@ import { errMsg, fmt } from '../../components/finanzas/fin';
 import { useWide } from '../../components/finanzas/useWide';
 import { docTirilla, runPrint } from '../../components/finanzas/print';
 import { useSession } from '../../lib/session';
+import { useFinCfg } from '../../components/finanzas/finConfig';
 
 const CATS: [string, string][] = [['all', 'Todo'], ['Uniformes', 'Uniformes'], ['Libros', 'Libros'], ['Papelería', 'Papelería'], ['Servicios', 'Servicios']];
 const stockTone = (p: ProductoFin): [string, string] => (p.stock == null ? ['∞', '#64748B'] : p.stock === 0 ? ['Agotado', '#B91C1C'] : p.stock <= 5 ? ['Bajo', '#B45309'] : ['OK', '#15803D']);
@@ -16,6 +17,7 @@ export default function Screen() {
   const { user } = useSession();
   const { toast, toasts } = useToastStack();
   const wide = useWide();
+  const itbisRate = useFinCfg().finanzas.itbis;
   const [prods, setProds] = useState<ProductoFin[]>([]);
   const [cat, setCat] = useState('all');
   const [cart, setCart] = useState<Record<string, number>>({});
@@ -39,7 +41,7 @@ export default function Screen() {
 
   const lines = prods.filter(p => cart[p.id]).map(p => ({ p, q: cart[p.id] }));
   const sub = lines.reduce((a, x) => a + x.p.price * x.q, 0);
-  const itbis = Math.round(lines.filter(x => x.p.tax).reduce((a, x) => a + x.p.price * x.q, 0) * 0.18 * 100) / 100;
+  const itbis = Math.round(lines.filter(x => x.p.tax).reduce((a, x) => a + x.p.price * x.q, 0) * itbisRate * 100) / 100;
   const total = sub + itbis;
   const rncD = rnc.replace(/\D/g, ''), cf2 = doc === 'cf2';
   const recvN = parseFloat(recv) || 0, cash = pay === 'Efectivo';
@@ -137,7 +139,7 @@ export default function Screen() {
           </div>
           <div className="flex flex-col gap-1 border-t border-dashed border-slate-200 pt-2 text-xs">
             <div className="flex justify-between text-slate-500"><span>Subtotal</span><span className="font-mono">{fmt(sub)}</span></div>
-            <div className="flex justify-between text-slate-500"><span>ITBIS 18% (solo gravados)</span><span className="font-mono">{fmt(itbis)}</span></div>
+            <div className="flex justify-between text-slate-500"><span>ITBIS {+(itbisRate * 100).toFixed(2)}% (solo gravados)</span><span className="font-mono">{fmt(itbis)}</span></div>
             <div className="flex items-baseline justify-between"><span className="text-[11px] font-bold uppercase tracking-wider">Total</span><span className="font-mono text-[22px] font-bold">{fmt(total)}</span></div>
           </div>
           <div className="grid grid-cols-2 gap-1 rounded-md bg-slate-100 p-1">

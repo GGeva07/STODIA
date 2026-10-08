@@ -1,6 +1,6 @@
 # Contexto de build: raíz del monorepo (docker compose lo configura)
 FROM node:20-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates sqlite3 \
     && rm -rf /var/lib/apt/lists/* && corepack enable
 WORKDIR /repo
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./

@@ -24,7 +24,7 @@ const JUAN: ExpFicha = {
     { c: '2023–2024', g: '2do A', prom: '87.8', l: 'B', btn: 'Boletín' },
   ],
   tutorLegalId: 'ul1',
-  contrato: { ciclo: '2026–2027', plan: '10', beca: 'none', ctr: 'CTR-2026-0412', firmado: '02/08/2026' },
+  contrato: { ciclo: '2026–2027', plan: 'PLN-001', beca: 'none', ctr: 'CTR-2026-0412', firmado: '02/08/2026' },
 };
 
 const SERV = [
@@ -41,7 +41,8 @@ const DOCS = [
   ['Fotos 2×2', 'Sin archivo', 'Pendiente'], ['Récord de conducta anterior', 'record_conducta_2025.pdf', 'En revisión'],
 ];
 
-const SECC: [string, string, number, number][] = [['Matutina', 'A', 30, 30], ['Matutina', 'B', 30, 26], ['Matutina', 'C', 30, 18], ['Vespertina', 'A', 30, 22], ['Vespertina', 'B', 30, 29], ['Extendida', 'A', 25, 12]];
+/** Tipos de beca/convenio de la demo (Catalogo 'becas'; pct en %, aprobacion = requiere visto bueno del Director Financiero). Una instalación real los crea desde cero. */
+const BECAS: [string, string, number, boolean][] = [['hermano', 'Beca Plan Hermano', 10, false], ['academica', 'Beca Académica', 25, true], ['empleado', 'Hijo de Empleado', 50, true]];
 
 export default async function seedPersonas() {
   // Tutor financiero de Juan con la cédula de la demo del wizard + tutor legal (madre).
@@ -68,12 +69,18 @@ export default async function seedPersonas() {
   if (sofia) {
     const f: ExpFicha = { ...JUAN, carnet: '', ingreso: 'Agosto 2024 · Pre-primario', geo: '', hist: [], conducta: { obs: [], record: 'Sin observaciones' },
       medico: { sangre: '', seguro: '', poliza: '', condiciones: '', planAlim: '', planAlimExtra: '', emergenciaNombre: 'María Fernández (madre)', emergenciaTel: '809-555-0142', alertaDetalle: '' },
-      contrato: { ciclo: '2026–2027', plan: '10', beca: 'hermano', ctr: 'CTR-2026-0587', firmado: '02/08/2026' } };
+      contrato: { ciclo: '2026–2027', plan: 'PLN-001', beca: 'hermano', ctr: 'CTR-2026-0587', firmado: '02/08/2026' } };
     await prisma.persExpediente.upsert({ where: { alumnoId: '0587' }, update: {}, create: { alumnoId: '0587', data: JSON.stringify(f) } });
   }
 
-  for (const [tanda, seccion, cap, used] of SECC) {
-    const id = `cupo-${tanda}-${seccion}`;
-    await prisma.persCupo.upsert({ where: { id }, update: {}, create: { id, tanda, seccion, cap, used } });
+  for (const [id, nombre, pct, aprobacion] of BECAS) {
+    await prisma.catalogo.upsert({ where: { id: 'becas:' + id }, update: {}, create: { id: 'becas:' + id, tipo: 'becas', estado: 'Activo', data: JSON.stringify({ id, nombre, pct, aprobacion, estado: 'Activo' }) } });
   }
+  // Tarifas de transporte del prototipo (Zona A 2,800 / Zona B 3,100): solo si siguen en el valor sembrado por defecto.
+  for (const [id, de, a] of [['r1', 2500, 2800], ['r2', 2500, 3100]] as const) {
+    const r = await prisma.catalogo.findUnique({ where: { id: 'rutas:' + id } });
+    const d = r ? (JSON.parse(r.data) as Record<string, unknown>) : null;
+    if (r && d && d.tarifa === de) await prisma.catalogo.update({ where: { id: r.id }, data: { data: JSON.stringify({ ...d, tarifa: a }) } });
+  }
+  // La config financiera (diaCorte 15, recargo, pronto pago, matrícula…) la siembra únicamente seed-finanzas.
 }

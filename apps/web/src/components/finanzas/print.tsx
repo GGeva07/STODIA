@@ -1,6 +1,8 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { fmt } from './fin';
+import { cajaSync } from './caja';
+import { nombreLegal, rncTxt, ciudadTxt, usePerfil } from './perfil';
 
 /**
  * Documento imprimible del prototipo: modelo de bloques (B.kv/text/total/table), vista previa de
@@ -16,7 +18,7 @@ export type PBlock =
   | { isTotal: true; rows: { k: string; v: string; fs: string; fw: string }[] }
   | { isTable: true; cols: string; head: { l: string; al: string }[]; rows: { cells: { v: string; al: string; ff: string }[] }[] };
 export interface PPage { title: string; sub: string; blocks: PBlock[] }
-export interface PDoc { kind: 'carta' | 'tirilla'; name: string; format: string; sign: string[]; pages: PPage[] }
+export interface PDoc { kind: 'carta' | 'tirilla'; name: string; format: string; sign: string[]; pages: PPage[]; sede?: string }
 
 export const B = {
   kv: (rows: [string, string][]): PBlock => ({ isKv: true, rows: rows.map(([k, v]) => ({ k, v })) }),
@@ -30,7 +32,8 @@ export const B = {
 };
 
 /** docTirilla del prototipo. */
-export function docTirilla(r: { id: string; ncf: string; tutor: string; hora: string; monto: number; items: { con: string; monto: number }[]; pays: { m: string; r?: string; amt: number }[]; change: number; abono?: boolean; saldo?: number }, cajero = 'Ana Rosario', fecha = hoyDMY()): PDoc {
+export function docTirilla(r: { id: string; ncf: string; tutor: string; hora: string; monto: number; items: { con: string; monto: number }[]; pays: { m: string; r?: string; amt: number }[]; change: number; abono?: boolean; saldo?: number }, cajero = '', fecha = hoyDMY()): PDoc {
+  const cj = cajaSync();
   const items = (r.items || []).map(i => [i.con, fmt(i.monto)]);
   const tot: [string, string, boolean?][] = [
     ...(r.pays || []).map(p => [p.m + (p.r ? ' ' + p.r : ''), fmt(p.amt)] as [string, string]),
@@ -39,7 +42,7 @@ export function docTirilla(r: { id: string; ncf: string; tutor: string; hora: st
     ...(r.change > 0 ? [['Cambio', fmt(r.change)] as [string, string]] : []),
   ];
   return {
-    kind: 'tirilla', name: 'Tirilla ' + r.id, format: 'Tirilla 80 mm', sign: [],
+    kind: 'tirilla', name: 'Tirilla ' + r.id, format: 'Tirilla 80 mm', sign: [], sede: [cj.caja, cj.sucursal ? 'Sucursal ' + cj.sucursal : ''].filter(Boolean).join(' · '),
     pages: [{ title: r.abono ? 'Recibo de abono' : 'Recibo de pago', sub: '', blocks: [
       B.kv([['Recibo', r.id], ['NCF', r.ncf], ['Fecha', fecha + ' ' + r.hora], ['Cajero', cajero], ['Tutor', r.tutor]]),
       B.table(['Concepto', 'Monto'], items, ['1fr', 'auto'], ['left', 'right']),
@@ -65,6 +68,13 @@ function ensureHost() {
   root.render(<PrintHost />);
 }
 
+/** Iniciales del logo del encabezado («Colegio Los Pinos, SRL» → LP): ignora el tipo de centro y la forma societaria. */
+export function inicialesDe(nombre: string) {
+  const ws = nombre.split(',')[0].split(/\s+/).filter(Boolean);
+  const rest = ws.filter(w => !/^(colegio|escuela|instituto|liceo|centro|academia|polit[eé]cnico|fundaci[oó]n|de|del|la|el|y)$/i.test(w));
+  return (rest.length ? rest : ws).slice(0, 2).map(w => w[0].toUpperCase()).join('');
+}
+
 /** Muestra «Generando…» 650 ms y abre la vista previa (runPrint del prototipo). */
 export function runPrint(key: string, doc: PDoc | null | undefined) {
   if (!doc || st.busy) return;
@@ -86,6 +96,9 @@ export function usePrintBusy() {
 function PrintHost() {
   const s = useSyncExternalStore(sub, () => st);
   const doc = s.doc;
+  const perfil = usePerfil();
+  const legal = nombreLegal(perfil).toUpperCase(), rnc = rncTxt(perfil), ciudad = ciudadTxt(perfil);
+  const iniciales = inicialesDe(perfil?.nombre ?? '');
   useEffect(() => {
     if (!doc) return;
     const k = (e: KeyboardEvent) => { if (e.key === 'Escape') closePrint(); };
@@ -115,11 +128,11 @@ function PrintHost() {
             {carta && (
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, paddingBottom: 12, borderBottom: '2px solid #000000', marginBottom: 18 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><img src="/brand/stodia-logo.svg" alt="" style={{ width: 44, height: 44 }} /><div style={{ lineHeight: 1.25 }}><div style={{ fontWeight: 700, letterSpacing: '0.1em', fontSize: 13 }}>STODIA</div><div style={{ fontSize: 10 }}>Sistema Escolar Integral</div></div></div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'right' }}><div style={{ lineHeight: 1.25 }}><div style={{ fontWeight: 700, fontSize: 13, letterSpacing: '0.04em' }}>COLEGIO LOS PINOS, SRL</div><div style={{ fontSize: 10 }}>RNC 1-31-55678-2 · Santo Domingo, D.N.</div></div><div style={{ width: 44, height: 44, border: '2px solid #000000', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 15 }}>LP</div></div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'right' }}><div style={{ lineHeight: 1.25 }}><div style={{ fontWeight: 700, fontSize: 13, letterSpacing: '0.04em' }}>{legal}</div><div style={{ fontSize: 10 }}>{rnc ? 'RNC ' + rnc : ''}{ciudad ? ' · ' + ciudad : ''}</div></div><div style={{ width: 44, height: 44, border: '2px solid #000000', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 15 }}>{iniciales}</div></div>
               </div>
             )}
             {!carta && (
-              <div style={{ textAlign: 'center', lineHeight: 1.35, paddingBottom: 6, borderBottom: '1px dashed #000000', marginBottom: 8 }}><div style={{ fontWeight: 700, fontSize: 13 }}>COLEGIO LOS PINOS, SRL</div><div>RNC 1-31-55678-2</div><div>Caja 02 · Sucursal Principal</div></div>
+              <div style={{ textAlign: 'center', lineHeight: 1.35, paddingBottom: 6, borderBottom: '1px dashed #000000', marginBottom: 8 }}><div style={{ fontWeight: 700, fontSize: 13 }}>{legal}</div><div>{rnc ? 'RNC ' + rnc : ''}</div><div>{doc.sede}</div></div>
             )}
             <div style={{ textAlign: carta ? 'left' : 'center', fontWeight: 700, fontSize: carta ? 18 : 12, letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: 2 }}>{pg.title}</div>
             <div style={{ textAlign: carta ? 'left' : 'center', fontSize: 11, marginBottom: 14 }}>{pg.sub}</div>

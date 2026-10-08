@@ -9,3 +9,5 @@ apps/desktop
 *.pem
 license-private*
 scripts/license
+backups
+respuestas*.env

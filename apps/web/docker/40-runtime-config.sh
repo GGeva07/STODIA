@@ -55,6 +55,17 @@ server {
     try_files \$uri =404;
   }
   ${PROXY}
+  # Blog: HTML prerenderizado por articulo (/blog/<slug>/index.html). Si no existe, cae al shell de la SPA (404 amable en cliente).
+  location = /blog {
+    add_header Cache-Control "no-cache";
+    ${SEC}
+    try_files /blog/index.html /index.html;
+  }
+  location ^~ /blog/ {
+    add_header Cache-Control "no-cache";
+    ${SEC}
+    try_files \$uri \$uri/index.html /index.html;
+  }
   location / {
     add_header Cache-Control "no-cache";
     ${SEC}

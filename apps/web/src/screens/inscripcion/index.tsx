@@ -1,18 +1,18 @@
+import { usePerfil } from '../../components/finanzas/perfil';
 import { useEffect, useState } from 'react';
-import type { InsConfigResp, InsReq, InsResp, InsTutorLookup } from '@stodia/shared';
+import type { InsConfigResp, InsPlan, InsReq, InsResp, InsTutorLookup } from '@stodia/shared';
 import { api } from '../../lib/api';
 import { useToast } from '../../components/system/UiProvider';
 import { pillBase } from '../../components/system/styles';
 import { errMsg, fmt } from '../../components/finanzas/fin';
 
 const STEPS = ['Datos del alumno', 'Tutores', 'Curso y tanda', 'Plan de pago', 'Cierre y factura'];
-const GRADOS = ['1ro', '2do', '3ro', '4to', '5to', '6to'];
 const inp = 'h-[38px] rounded-md border border-slate-300 px-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-[3px] focus:ring-accent-soft';
 const fmtCed = (v: string) => {
   const d = v.replace(/\D/g, '').slice(0, 11);
   return d.length <= 3 ? d : d.length <= 10 ? `${d.slice(0, 3)}-${d.slice(3)}` : `${d.slice(0, 3)}-${d.slice(3, 10)}-${d.slice(10)}`;
 };
-const blank = (): InsReq => ({ nombre: '', apellido: '', fnac: '', docs: [true, false, false, false], legalCed: '', legalName: '', finSame: true, finCed: '', finName: '', tanda: 'Matutina', grado: 'Primaria · 4to', sec: '', plan: '10', serv: [false, true, false], firma: 'digital' });
+const blank = (): InsReq => ({ nombre: '', apellido: '', fnac: '', docs: [], legalCed: '', legalName: '', finSame: true, finCed: '', finName: '', cupo: '', tanda: '', grado: '', sec: '', plan: '', serv: [], firma: 'digital' });
 type Look = InsTutorLookup | { found: false; empty: true };
 
 /** Consulta de duplicados por documento; 'empty' mientras no haya 11 dígitos. */
@@ -30,6 +30,7 @@ function useLookup(ced: string): Look {
 const isNew = (l: Look) => !l.found && !('empty' in l);
 
 export default function Screen() {
+  const perfil = usePerfil();
   const toast = useToast();
   const [cfg, setCfg] = useState<InsConfigResp | null>(null);
   const [step, setStep] = useState(1);
@@ -38,7 +39,7 @@ export default function Screen() {
   const [busy, setBusy] = useState(false);
   const set = (p: Partial<InsReq>) => setW(s => ({ ...s, ...p }));
 
-  const loadCfg = () => api.get<InsConfigResp>('/inscripcion/config').then(setCfg).catch(e => toast(errMsg(e), 'bad'));
+  const loadCfg = () => api.get<InsConfigResp>('/inscripcion/config').then(c => { setCfg(c); setW(s => (s.docs.length ? s : { ...s, docs: c.docs.map((_, i) => i === 0) })); }).catch(e => toast(errMsg(e), 'bad'));
   useEffect(() => { void loadCfg(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const L = useLookup(w.legalCed);
@@ -46,22 +47,26 @@ export default function Screen() {
   const F = w.finSame ? L : Fl;
   const legalName = L.found ? L.nombre! : w.legalName.trim();
   const finName = w.finSame ? legalName : F.found ? F.nombre! : w.finName.trim();
-  const COL = cfg?.colegiatura ?? 85000, INS = cfg?.inscripcion ?? 15000;
-  const servM = (cfg?.servicios ?? []).reduce((a, s, i) => a + (w.serv[i] ? s.price : 0), 0);
-  const plans = {
-    '1': { name: 'Pago único anual', amt: fmt(COL * 0.9), desc: '10% de descuento por contado', cuota: servM, n: 1 },
-    '10': { name: 'Plan regular · 10 cuotas', amt: '10 × ' + fmt(COL / 10), desc: 'Agosto a mayo, vence día 1', cuota: COL / 10 + servM, n: 10 },
-    '4': { name: 'Plan trimestral', amt: '4 × ' + fmt(COL / 4), desc: 'Ago · Nov · Feb · May', cuota: COL / 4, n: 4 },
-  };
-  const plan = plans[w.plan];
-  const factura = INS + (w.plan === '1' ? COL * 0.9 : 0);
+  const tanda = w.tanda || cfg?.tandas[0] || '';
+  const gradoId = w.grado || cfg?.grados[0]?.id || '';
+  const gradoLbl = cfg?.grados.find(g => g.id === gradoId)?.label ?? '';
+  const INS = cfg?.inscripcion ?? 0;
+  const servM = (cfg?.servicios ?? []).reduce((a, s) => a + (w.serv.includes(s.k) ? s.price : 0), 0);
+  const money = (n: number) => Math.round(n * 100) / 100;
+  const totalDe = (p: InsPlan) => money((p.anual[tanda] ?? p.anual['*'] ?? 0) * (1 - p.desc / 100));
+  const cuotaDe = (p: InsPlan) => money(totalDe(p) / p.n);
+  const planes = cfg?.planes ?? [];
+  const plan = planes.find(p => p.id === w.plan) ?? planes[0];
+  const planOk = !!plan && totalDe(plan) > 0;
+  const cuotaPer = !plan ? 0 : plan.freq === 1 ? cuotaDe(plan) + servM : plan.n === 1 ? servM : cuotaDe(plan);
+  const factura = INS + (plan && plan.n === 1 ? totalDe(plan) : 0);
   const ok: (string | null)[] = [null,
     w.nombre.trim() && w.apellido.trim() && w.fnac ? null : 'Completa nombres, apellidos y fecha de nacimiento',
     legalName && finName ? null : 'Identifica al tutor legal y financiero',
-    w.sec ? null : 'Selecciona una sección con cupo', null, null];
-  const grado = w.grado.replace('Primaria · ', '');
+    w.cupo ? null : 'Selecciona una sección con cupo', !plan ? 'Configura planes y precios para poder inscribir' : !planOk ? `El plan ${plan.name} no tiene monto para la tanda ${tanda}` : null, null];
+  const grado = gradoLbl.split(' · ').pop() ?? '';
   const fullName = `${w.nombre} ${w.apellido}`.trim() || '—';
-  const secs = (cfg?.cupos ?? []).filter(c => c.tanda === w.tanda);
+  const secs = (cfg?.cupos ?? []).filter(c => c.tanda === tanda && c.grado === gradoId);
   const blocked = step < 5 && !!ok[step];
 
   const next = async () => {
@@ -69,7 +74,7 @@ export default function Screen() {
     if (done) { setW(blank()); setStep(1); setDone(null); void loadCfg(); return; }
     setBusy(true);
     try {
-      setDone(await api.post<InsResp>('/inscripcion', w));
+      setDone(await api.post<InsResp>('/inscripcion', { ...w, tanda, grado: gradoId, plan: plan?.id ?? '' }));
       toast('Contrato firmado y factura de inscripción emitida', 'ok');
     } catch (e) { toast(errMsg(e), 'bad'); } finally { setBusy(false); }
   };
@@ -92,14 +97,20 @@ export default function Screen() {
   );
 
   const summary: [string, string][] = [['Alumno', fullName], ['Tutor legal', legalName || '—'], ['Tutor financiero', finName || '—'],
-    ['Curso', w.sec ? `${grado} ${w.sec} · ${w.tanda}` : '—'], ['Plan', plan.name], ['Servicios', servM ? fmt(servM) + '/mes' : 'Ninguno']];
+    ['Curso', w.sec ? `${grado} ${w.sec} · ${tanda}` : '—'], ['Plan', plan?.name ?? '—'], ['Servicios', servM ? fmt(servM) + '/mes' : 'Ninguno']];
 
   return (
     <div className="flex max-w-[1100px] flex-col gap-4">
       <div>
         <h1 className="m-0 text-xl font-semibold tracking-tight">Inscripción y Prematrícula</h1>
-        <p className="mb-0 mt-1 text-[13px] text-slate-600">Nuevo ingreso · Ciclo {cfg?.ciclo ?? '2026–2027'}</p>
+        <p className="mb-0 mt-1 text-[13px] text-slate-600">Nuevo ingreso{cfg?.ciclo ? ` · Ciclo ${cfg.ciclo}` : ''}</p>
       </div>
+
+      {cfg && cfg.avisos.length > 0 && (
+        <div className="flex flex-col gap-1 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-800">
+          {cfg.avisos.map(a => <div key={a} className="flex items-center gap-2"><i className="ph ph-warning" />{a}</div>)}
+        </div>
+      )}
 
       <ol className="m-0 flex list-none items-center overflow-auto rounded-lg border border-slate-200 bg-white px-[18px] py-3.5">
         {STEPS.map((l, i) => {
@@ -141,7 +152,7 @@ export default function Screen() {
           {step === 2 && (
             <div className="flex flex-col gap-3.5">
               <div className="text-[15px] font-semibold">Tutores</div>
-              <div className="text-[13px] text-slate-600">Se consulta el documento de identidad para evitar duplicados. Prueba con <span className="font-mono">001-0023940-1</span>.</div>
+              <div className="text-[13px] text-slate-600">Se consulta el documento de identidad para evitar duplicados. {import.meta.env.DEV && <> Prueba con <span className="font-mono">001-0023940-1</span>.</>}</div>
               {TutorCard({ role: 'TUTOR LEGAL', desc: 'Firma boletines, retiro físico, permisos', tag: 'bg-info-bg text-info-fg', ced: w.legalCed, onCed: v => set({ legalCed: v }), look: L, name: w.legalName, onName: v => set({ legalName: v }) })}
               {!w.finSame && TutorCard({ role: 'TUTOR FINANCIERO', desc: 'Titular del contrato · facturas NCF a su nombre', tag: 'bg-warn-bg text-warn-fg', ced: w.finCed, onCed: v => set({ finCed: v }), look: Fl, name: w.finName, onName: v => set({ finName: v }) })}
               <label className="flex cursor-pointer items-center gap-2 text-[13px]"><input type="checkbox" checked={w.finSame} onChange={() => set({ finSame: !w.finSame })} className="h-4 w-4 accent-accent" />El tutor financiero (responsable de pago) es la misma persona que el tutor legal</label>
@@ -153,17 +164,17 @@ export default function Screen() {
               <div className="text-[15px] font-semibold">Curso y tanda</div>
               <div className="flex flex-wrap gap-3">
                 <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Tanda
-                  <select value={w.tanda} onChange={e => set({ tanda: e.target.value, sec: '' })} className={`${inp} min-w-[180px] bg-white`}><option>Matutina</option><option>Vespertina</option><option>Extendida</option></select>
+                  <select value={tanda} onChange={e => set({ tanda: e.target.value, cupo: '', sec: '' })} className={`${inp} min-w-[180px] bg-white`}>{(cfg?.tandas ?? []).map(t => <option key={t}>{t}</option>)}</select>
                 </label>
                 <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Nivel · Grado
-                  <select value={w.grado} onChange={e => set({ grado: e.target.value, sec: '' })} className={`${inp} min-w-[200px] bg-white`}>{GRADOS.map(g => <option key={g}>Primaria · {g}</option>)}</select>
+                  <select value={gradoId} onChange={e => set({ grado: e.target.value, cupo: '', sec: '' })} className={`${inp} min-w-[200px] bg-white`}>{(cfg?.grados ?? []).map(g => <option key={g.id} value={g.id}>{g.label}</option>)}</select>
                 </label>
               </div>
               <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
                 {secs.map(c => {
-                  const pct = c.used / c.cap, full = c.used >= c.cap, sel = w.sec === c.seccion;
+                  const pct = c.used / c.cap, full = c.used >= c.cap, sel = w.cupo === c.id;
                   return (
-                    <button key={c.id} disabled={full} onClick={() => set({ sec: c.seccion })} className={`flex flex-col gap-2 rounded-lg border-2 p-3 text-left ${sel ? 'border-accent bg-blue-50' : 'border-slate-200 bg-white'} ${full ? 'cursor-not-allowed opacity-55' : 'cursor-pointer'}`}>
+                    <button key={c.id} disabled={full} onClick={() => set({ cupo: c.id, sec: c.seccion })} className={`flex flex-col gap-2 rounded-lg border-2 p-3 text-left ${sel ? 'border-accent bg-blue-50' : 'border-slate-200 bg-white'} ${full ? 'cursor-not-allowed opacity-55' : 'cursor-pointer'}`}>
                       <div className="flex items-baseline justify-between"><span className="text-[15px] font-semibold text-ink">Sección {c.seccion}</span><span className="font-mono text-xs font-medium text-slate-600">{c.used}/{c.cap}</span></div>
                       <div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full" style={{ width: `${Math.round(pct * 100)}%`, background: pct >= 1 ? '#DC2626' : pct >= 0.8 ? '#D97706' : '#16A34A' }} /></div>
                       <span className={`text-xs font-medium ${full ? 'text-red-700' : pct >= 0.8 ? 'text-amber-700' : 'text-green-700'}`}>{full ? 'Sin cupo' : `${c.cap - c.used} cupos disponibles`}</span>
@@ -171,6 +182,7 @@ export default function Screen() {
                   );
                 })}
               </div>
+              {cfg && secs.length === 0 && <div className="text-[13px] text-amber-700">No hay secciones configuradas para este grado y tanda (Catálogos → Secciones).</div>}
             </div>
           )}
 
@@ -178,17 +190,18 @@ export default function Screen() {
             <div className="flex flex-col gap-3.5">
               <div className="text-[15px] font-semibold">Plan de pago</div>
               <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
-                {(Object.entries(plans) as [InsReq['plan'], (typeof plans)['1']][]).map(([k, p]) => (
-                  <button key={k} onClick={() => set({ plan: k })} className={`flex cursor-pointer flex-col gap-1.5 rounded-lg border-2 p-3.5 text-left ${w.plan === k ? 'border-accent bg-blue-50' : 'border-slate-200 bg-white'}`}>
-                    <span className="text-sm font-semibold text-ink">{p.name}</span><span className="font-mono text-base font-semibold text-ink">{p.amt}</span><span className="text-xs text-slate-600">{p.desc}</span>
+                {planes.map(p => (
+                  <button key={p.id} onClick={() => set({ plan: p.id })} className={`flex cursor-pointer flex-col gap-1.5 rounded-lg border-2 p-3.5 text-left ${plan?.id === p.id ? 'border-accent bg-blue-50' : 'border-slate-200 bg-white'}`}>
+                    <span className="text-sm font-semibold text-ink">{p.name}</span><span className="font-mono text-base font-semibold text-ink">{p.n === 1 ? fmt(totalDe(p)) : `${p.n} × ${fmt(cuotaDe(p))}`}</span><span className="text-xs text-slate-600">{p.detalle}</span>
                   </button>
                 ))}
+                {cfg && planes.length === 0 && <div className="text-[13px] text-amber-700">Configura planes y precios (Finanzas → Planes de Pago) para poder inscribir.</div>}
               </div>
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">Servicios recurrentes opcionales</div>
               <div className="flex flex-col gap-2">
-                {(cfg?.servicios ?? []).map((s, i) => (
-                  <label key={s.k} className={`flex cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2.5 text-[13px] ${w.serv[i] ? 'border-blue-200 bg-blue-50' : 'border-slate-200 bg-white'}`}>
-                    <input type="checkbox" checked={w.serv[i]} onChange={() => set({ serv: w.serv.map((v, j) => (j === i ? !v : v)) })} className="h-4 w-4 accent-accent" />
+                {(cfg?.servicios ?? []).map(s => (
+                  <label key={s.k} className={`flex cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2.5 text-[13px] ${w.serv.includes(s.k) ? 'border-blue-200 bg-blue-50' : 'border-slate-200 bg-white'}`}>
+                    <input type="checkbox" checked={w.serv.includes(s.k)} onChange={() => set({ serv: w.serv.includes(s.k) ? w.serv.filter(k => k !== s.k) : [...w.serv, s.k] })} className="h-4 w-4 accent-accent" />
                     <span className="flex-1">{s.n}</span><span className="font-mono text-[13px] font-medium">{fmt(s.price)}/mes</span>
                   </label>
                 ))}
@@ -200,8 +213,8 @@ export default function Screen() {
             <div className="flex flex-col gap-3.5">
               <div className="text-[15px] font-semibold">Cierre: contrato y factura</div>
               <div className="rounded-md border border-slate-200 bg-slate-50 px-5 py-[18px] text-[13px] leading-[1.6] text-slate-700">
-                <div className="text-xs font-bold tracking-[0.06em] text-ink">CONTRATO DE SERVICIOS EDUCATIVOS · 2026–2027</div>
-                Entre <b>Colegio Los Pinos, SRL</b> (RNC <span className="font-mono">1-31-55678-2</span>) y <b>{finName || '—'}</b>, en calidad de tutor financiero de <b>{fullName}</b>, inscrito en <b>{grado} {w.sec || '?'} · {w.tanda}</b>, bajo el plan <b>{plan.name}</b>. Las cuotas vencidas generan recargo del 3% mensual tras 5 días de gracia.
+                <div className="text-xs font-bold tracking-[0.06em] text-ink">CONTRATO DE SERVICIOS EDUCATIVOS{cfg?.ciclo ? ` · ${cfg.ciclo}` : ''}</div>
+                Entre <b>{perfil?.nombre ?? ''}</b> (RNC <span className="font-mono">{perfil?.rnc ?? ''}</span>) y <b>{finName || '—'}</b>, en calidad de tutor financiero de <b>{fullName}</b>, inscrito en <b>{grado} {w.sec || '?'} · {tanda}</b>, bajo el plan <b>{plan?.name ?? '—'}</b>.{plan?.mora ? ` Las cuotas vencidas generan recargo ${plan.mora}${plan.gracia ? ` tras ${plan.gracia} días de gracia` : ''}.` : ''}
               </div>
               <div className="flex flex-wrap gap-2">
                 {([['digital', 'Firma digitalizada', 'ph-signature'], ['fisica', 'Imprimir para firma física', 'ph-printer']] as const).map(([k, l, ic]) => (
@@ -228,7 +241,7 @@ export default function Screen() {
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">Resumen</div>
           {summary.map(([k, v]) => <div key={k} className="flex justify-between gap-2.5 text-[13px]"><span className="text-slate-500">{k}</span><span className="text-right font-medium">{v}</span></div>)}
           <div className="flex flex-col gap-1.5 border-t border-dashed border-slate-200 pt-2.5">
-            <div className="flex justify-between text-[13px]"><span className="text-slate-500">Cuota periódica</span><span className="font-mono text-[13px] font-semibold">{fmt(plan.cuota)}</span></div>
+            <div className="flex justify-between text-[13px]"><span className="text-slate-500">Cuota periódica</span><span className="font-mono text-[13px] font-semibold">{fmt(cuotaPer)}</span></div>
             <div className="flex justify-between text-[13px]"><span className="text-slate-500">Factura inicial</span><span className="font-mono text-[15px] font-semibold">{fmt(factura)}</span></div>
           </div>
         </aside>

@@ -1,4 +1,5 @@
 import { prisma } from './db';
+import { ensureCatalogosAli } from './lib/ali-catalogos';
 
 /** Semilla del grupo Operación (comedor, alimentación, comunicaciones). Idempotente: no pisa datos existentes. */
 const J = JSON.stringify;
@@ -9,11 +10,11 @@ const ALI0 = [
   { id: 'ALI-004', name: 'Monedero Cafetería', modelo: 'wal', meals: [false, false, false, false], recarga: 500, limite: 300, freq: 'Mensual', dias: 'Lunes a Viernes', mora: false, diets: [false, false, false, false], inscritos: 352 },
 ];
 const MENU0 = [
-  { dia: 'Lunes 5', plato: 'Pollo guisado, arroz blanco, habichuelas rojas, ensalada verde', algs: [] },
-  { dia: 'Martes 6', plato: 'Pescado al horno, puré de batata, vegetales salteados', algs: ['Mariscos'] },
-  { dia: 'Miércoles 7', plato: 'Pollo en salsa de maní, moro de guandules, tostones', algs: ['Maní'] },
-  { dia: 'Jueves 8', plato: 'Pasta boloñesa, ensalada, flan de leche', algs: ['Gluten', 'Lactosa', 'Huevo'] },
-  { dia: 'Viernes 9', plato: 'Res guisada, arroz, aguacate, fruta de temporada', algs: [] },
+  { dia: 'Lunes', plato: 'Pollo guisado, arroz blanco, habichuelas rojas, ensalada verde', algs: [] },
+  { dia: 'Martes', plato: 'Pescado al horno, puré de batata, vegetales salteados', algs: ['Mariscos'] },
+  { dia: 'Miércoles', plato: 'Pollo en salsa de maní, moro de guandules, tostones', algs: ['Maní'] },
+  { dia: 'Jueves', plato: 'Pasta boloñesa, ensalada, flan de leche', algs: ['Gluten', 'Lactosa', 'Huevo'] },
+  { dia: 'Viernes', plato: 'Res guisada, arroz, aguacate, fruta de temporada', algs: [] },
 ];
 const CARNETS = [
   { code: 'EST-0412', name: 'Juan Mendoza Fernández', grado: '5to A · Matutina', plan: 'Suscripción completa · Almuerzo', ok: true, allergies: ['MANÍ', 'FRUTOS SECOS', 'LACTOSA'], restr: 'Sin lácteos: sustituir el flan del día por fruta. Revisar salsa del pollo (contiene maní).', limit: 300, wallet: 850, spent: 0 },
@@ -29,6 +30,7 @@ const OUT0: [number, string, string, string, string, string, string][] = [
 ];
 
 export async function seedOperacion() {
+  await ensureCatalogosAli();
   for (const p of ALI0) {
     await prisma.aliPlan.upsert({
       where: { id: p.id }, update: {},

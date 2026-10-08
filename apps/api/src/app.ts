@@ -6,7 +6,10 @@ import licensePlugin from './plugins/license';
 import { registerModules } from './plugins/modules';
 
 export async function buildApp() {
-  const app = Fastify({ logger: true, bodyLimit: 10 * 1024 * 1024 });
+  // TRUST_PROXY: 'true' (confiar en X-Forwarded-*; solo si la API va tras el proxy nginx de la web, /api) o N saltos. Por defecto false.
+  const tp = (process.env.TRUST_PROXY ?? '').trim().toLowerCase();
+  const trustProxy: boolean | number = tp === 'true' ? true : /^[1-9][0-9]?$/.test(tp) ? Number(tp) : false;
+  const app = Fastify({ logger: true, bodyLimit: 10 * 1024 * 1024, trustProxy });
   if (config.isProd && !process.env.CORS_ORIGIN) app.log.warn('CORS_ORIGIN no definido: solo se permiten los orígenes de la app móvil. Define el origen de la web si se sirve desde otro host/puerto.');
   await app.register(cors, { origin: config.corsOrigin, allowedHeaders: ['Content-Type', 'Authorization', 'X-License-Key'] });
 
