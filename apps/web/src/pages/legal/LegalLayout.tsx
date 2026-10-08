@@ -71,7 +71,7 @@ export default function LegalLayout({ title, description, sections, children }: 
       <a href="#contenido" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2 print:hidden">Saltar al contenido</a>
       <header className="border-b border-slate-200 bg-white print:border-0">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
-          <Link to="/" aria-label="STODIA, ir al inicio"><span className="flex items-center gap-2"><img src="/brand/stodia-mark.svg" alt="" className="h-8 w-auto" /><img src="/brand/stodia-wordmark.svg" alt="" className="h-8 w-auto" /></span></Link>
+          <Link to="/" aria-label="STODIA, ir al inicio"><span className="flex items-center gap-2"><img src="/brand/stodia-mark.svg" alt="" width={24} height={44} className="h-11 w-6 shrink-0" /></span></Link>
           <div className="flex items-center gap-2 print:hidden">
             <button type="button" onClick={() => window.print()} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]">Imprimir</button>
             <Link to="/" className="rounded-md bg-[#2563EB] px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#2563EB]">&larr; Volver al inicio</Link>
