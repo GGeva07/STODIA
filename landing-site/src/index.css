@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { line-height: normal; }
+  html, body, #root { min-height: 100%; }
+  body { margin: 0; background: #F8FAFC; color: #0F172A; font-family: Inter, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  button, input, select, textarea { font-family: inherit; line-height: normal; }
+  * { scrollbar-width: thin; scrollbar-color: rgba(148,163,184,0.35) transparent; }
+  *::-webkit-scrollbar { width: 6px; height: 6px; }
+  *::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.35); border-radius: 999px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *:focus-visible { outline: 2px solid #2563EB; outline-offset: 2px; }
+  ::selection { background: #DBEAFE; }
+  input::placeholder, textarea::placeholder { color: #757575; opacity: 1; }
+}
+.text-xs:not([class*="leading-"]), .text-sm:not([class*="leading-"]), .text-base:not([class*="leading-"]), .text-lg:not([class*="leading-"]), .text-xl:not([class*="leading-"]), .text-2xl:not([class*="leading-"]), .text-3xl:not([class*="leading-"]), .text-4xl:not([class*="leading-"]) { line-height: normal; }
+.tracking-tight { letter-spacing: -0.01em; }
+.tracking-wide { letter-spacing: 0.04em; }
