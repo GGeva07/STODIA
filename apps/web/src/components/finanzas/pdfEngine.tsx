@@ -57,9 +57,9 @@ function cortes(el: HTMLElement): number[] {
 
 const MAX_LOTE = 6 * CONTENT_H; // alto máximo (px CSS) por captura: evita canvas gigantes (límites de Safari/WebView móvil)
 
-interface Calidad { mime: 'image/png' | 'image/jpeg'; fmt: 'PNG' | 'JPEG'; q: number }
-/** PNG nítido para documentos cortos; JPEG q0.8 cuando son muchas páginas (mantiene el archivo en tamaño razonable). */
-const calidad = (totalPaginas: number): Calidad => (totalPaginas > 12 ? { mime: 'image/jpeg', fmt: 'JPEG', q: 0.8 } : { mime: 'image/png', fmt: 'PNG', q: 1 });
+interface Calidad { mime: 'image/png' | 'image/jpeg'; fmt: 'PNG' | 'JPEG'; q: number; scale: number }
+/** PNG a 2x (≈192 dpi) para documentos cortos; JPEG q0.8 a 1.5x (≈144 dpi) cuando son muchas páginas (mantiene el archivo en tamaño razonable). */
+const calidad = (totalPaginas: number): Calidad => (totalPaginas > 12 ? { mime: 'image/jpeg', fmt: 'JPEG', q: 0.8, scale: 1.5 } : { mime: 'image/png', fmt: 'PNG', q: 1, scale: SCALE });
 
 /** Rasteriza una hoja Carta en `cs.length-1` imágenes (una por página PDF), capturando por lotes verticales. */
 async function rebanadas(el: HTMLElement, cs: number[], cal: Calidad): Promise<string[]> {
@@ -69,19 +69,19 @@ async function rebanadas(el: HTMLElement, cs: number[], cal: Calidad): Promise<s
     let j = i + 1;
     while (j < cs.length - 1 && cs[j + 1] - cs[i] <= MAX_LOTE) j++;
     const y0 = cs[i], y1 = cs[j];
-    const canvas = await html2canvas(el, { scale: SCALE, backgroundColor: '#FFFFFF', useCORS: true, logging: false, x: 0, y: y0, width: el.offsetWidth, height: y1 - y0, scrollX: 0, scrollY: 0, windowWidth: Math.max(el.offsetWidth, 1) });
-    for (let k = i; k < j; k++) out.push(recorte(canvas, cs[k] - y0, cs[k + 1] - y0).toDataURL(cal.mime, cal.q));
+    const canvas = await html2canvas(el, { scale: cal.scale, backgroundColor: '#FFFFFF', useCORS: true, logging: false, x: 0, y: y0, width: el.offsetWidth, height: y1 - y0, scrollX: 0, scrollY: 0, windowWidth: Math.max(el.offsetWidth, 1) });
+    for (let k = i; k < j; k++) out.push(recorte(canvas, cs[k] - y0, cs[k + 1] - y0, cal.scale).toDataURL(cal.mime, cal.q));
     i = j;
   }
   return out;
 }
 
-function recorte(src: HTMLCanvasElement, y0: number, y1: number) {
+function recorte(src: HTMLCanvasElement, y0: number, y1: number, scale: number) {
   const c = document.createElement('canvas');
-  c.width = src.width; c.height = Math.max(1, Math.round((y1 - y0) * SCALE));
+  c.width = src.width; c.height = Math.max(1, Math.round((y1 - y0) * scale));
   const g = c.getContext('2d')!;
   g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
-  g.drawImage(src, 0, Math.round(y0 * SCALE), src.width, c.height, 0, 0, c.width, c.height);
+  g.drawImage(src, 0, Math.round(y0 * scale), src.width, c.height, 0, 0, c.width, c.height);
   return c;
 }
 

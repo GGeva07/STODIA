@@ -7,7 +7,7 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
-    { "source": "/((?!assets/|brand/|landing/|api/|sitemap\.xml$|robots\.txt$|rss\.xml$|[^/]+\.[a-zA-Z0-9]+$).*)", "destination": "/index.html" }
+    { "source": "/((?!assets/|brand/|landing/|api/).*)", "destination": "/index.html" }
   ],
   "headers": [
     {
@@ -19,7 +19,7 @@
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=86400, stale-while-revalidate=604800" }]
     },
     {
-      "source": "/(sitemap\.xml|robots\.txt|rss\.xml)",
+      "source": "/(sitemap.xml|robots.txt|rss.xml)",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }]
     },
     {
