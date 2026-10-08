@@ -9,7 +9,7 @@ export default function Footer() {
       <div className="mx-auto grid max-w-6xl gap-10 sm:grid-cols-2 lg:grid-cols-[1.4fr_1fr_1fr_1fr_1.3fr]">
         <div>
           <Link to="/" className="inline-flex items-center gap-2.5" aria-label="STODIA, ir al inicio">
-            <img src="/brand/stodia-logo.svg" alt="" width={36} height={36} className="h-9 w-9" loading="lazy" />
+            <img src="/brand/stodia-mark.svg" alt="" height={36} className="h-9 w-auto" loading="lazy" />
             <span className="text-lg font-extrabold tracking-[0.16em] text-white">STODIA</span>
           </Link>
           <p className="mt-4 max-w-xs text-sm leading-relaxed">{SITE.tagline}. Una instancia por colegio, autoalojada o gestionada.</p>

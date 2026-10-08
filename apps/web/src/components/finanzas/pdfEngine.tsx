@@ -39,7 +39,7 @@ async function montar(doc: PDoc, idx: number[]) {
 }
 
 /** Alto real de la hoja (px CSS, redondeado hacia arriba: scrollHeight trunca y recortaba el último renglón). */
-const alto = (el: HTMLElement) => Math.ceil(el.getBoundingClientRect().height) + 1;
+const alto = (el: HTMLElement) => Math.ceil(el.getBoundingClientRect().height) + 8;
 
 /** Cortes verticales (px CSS) de una hoja Carta: nunca dentro de una fila `.prow`. */
 function cortes(el: HTMLElement): number[] {
@@ -59,7 +59,7 @@ const MAX_LOTE = 6 * CONTENT_H; // alto máximo (px CSS) por captura: evita canv
 
 interface Calidad { mime: 'image/png' | 'image/jpeg'; fmt: 'PNG' | 'JPEG'; q: number; scale: number }
 /** PNG a 2x (≈192 dpi) para documentos cortos; JPEG q0.8 a 1.5x (≈144 dpi) cuando son muchas páginas (mantiene el archivo en tamaño razonable). */
-const calidad = (totalPaginas: number): Calidad => (totalPaginas > 12 ? { mime: 'image/jpeg', fmt: 'JPEG', q: 0.8, scale: 1.5 } : { mime: 'image/png', fmt: 'PNG', q: 1, scale: SCALE });
+const calidad = (totalPaginas: number): Calidad => (totalPaginas > 5 ? { mime: 'image/jpeg', fmt: 'JPEG', q: 0.8, scale: 1.5 } : { mime: 'image/png', fmt: 'PNG', q: 1, scale: SCALE });
 
 /** Rasteriza una hoja Carta en `cs.length-1` imágenes (una por página PDF), capturando por lotes verticales. */
 async function rebanadas(el: HTMLElement, cs: number[], cal: Calidad): Promise<string[]> {
@@ -115,12 +115,12 @@ async function pedirFolios(doc: PDoc, idx: number[]): Promise<Folio[]> {
 
 
 /** Dibuja una hoja del documento en el jsPDF (crea el PDF con la primera). Carta: N páginas de 8.5x11 in; tirilla: 1 página 80 mm x alto variable. */
-async function agregarHoja(pdf: jsPDF | null, doc: PDoc, pi: number, folio: Folio | null, cal: Calidad): Promise<jsPDF> {
+async function agregarHoja(pdf: jsPDF | null, doc: PDoc, pi: number, folio: Folio | null, hojas: number): Promise<jsPDF> {
   const { nodes, limpiar } = await montar(doc, [pi]);
   try {
     const el = nodes[0];
     if (doc.kind === 'carta') {
-      const cs = cortes(el), imgs = await rebanadas(el, cs, cal);
+      const cs = cortes(el), cal = calidad(Math.max(hojas, cs.length - 1)), imgs = await rebanadas(el, cs, cal);
       imgs.forEach((src, i) => {
         if (!pdf) pdf = new jsPDF({ unit: 'in', format: [8.5, 11], orientation: 'portrait', compress: true });
         else pdf.addPage([8.5, 11], 'portrait');
@@ -142,9 +142,8 @@ async function agregarHoja(pdf: jsPDF | null, doc: PDoc, pi: number, folio: Foli
 export async function generarPdf(doc: PDoc): Promise<Blob> {
   const idx = doc.pages.map((_, i) => i);
   const folios = doc.folioTipo ? await pedirFolios(doc, idx) : null;
-  const cal = calidad(doc.kind === 'carta' ? doc.pages.length : 1);
   let pdf: jsPDF | null = null;
-  for (const pi of idx) pdf = await agregarHoja(pdf, doc, pi, folios ? folios[pi] : null, cal);
+  for (const pi of idx) pdf = await agregarHoja(pdf, doc, pi, folios ? folios[pi] : null, doc.pages.length);
   pdf!.setProperties({ title: doc.name, subject: doc.pages[0].title, creator: 'STODIA', author: perfilSync()?.nombre ?? 'STODIA' });
   return pdf!.output('blob');
 }
@@ -158,7 +157,7 @@ export async function generarZipPorPagina(doc: PDoc): Promise<Blob> {
   const folios = doc.folioTipo ? await pedirFolios(doc, idx) : null; // un solo viaje al servidor
   for (const pi of idx) {
     const una: PDoc = { ...doc, pages: [doc.pages[pi]] };
-    const pdf = await agregarHoja(null, una, 0, folios ? folios[pi] : null, calidad(1));
+    const pdf = await agregarHoja(null, una, 0, folios ? folios[pi] : null, 1);
     pdf.setProperties({ title: doc.name + ' · ' + doc.pages[pi].sub, creator: 'STODIA' });
     const nom = doc.pages[pi].blocks.map(b => ('isKv' in b ? b.rows.find(r => /estudiante|alumno/i.test(r.k))?.v : undefined)).find(Boolean) ?? 'pagina_' + (pi + 1);
     files[`${String(pi + 1).padStart(3, '0')}_${safe(nom)}.pdf`] = new Uint8Array(pdf.output('arraybuffer'));

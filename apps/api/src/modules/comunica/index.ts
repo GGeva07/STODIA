@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { CmnCanalesCfg, CmnCanalesInput, CmnDestinatarios, CmnEnviarReq, CmnEnviarRes, CmnEstado, CmnFiltro, CmnMensajeDto } from '@stodia/shared';
 import { prisma } from '../../db';
-import { saldoVencidoPorAlumno } from '../../lib/cxc';
+import { cuentaDerivada, saldoVencidoPorAlumno } from '../../lib/cxc';
 import { audit } from '../../lib/audit';
 import { canalesGet, canalesSet, correoListo, proveedorDe, verificarCorreo } from '../../lib/canales';
 import { config } from '../../config';
@@ -12,10 +12,13 @@ const fmt = (n: number) => 'RD$ ' + n.toLocaleString('en-US', { minimumFractionD
 
 /** Tutores destinatarios (uno por tutor aunque tenga varios hijos) con sus alumnos y saldo vencido. */
 async function resolver(f: CmnFiltro) {
-  const alumnos = await prisma.alumno.findMany({
-    where: { estado: 'Activo', ...(f.grado ? { grado: f.grado } : {}), ...(f.tanda ? { tanda: f.tanda } : {}), ...(f.cuenta ? { cuenta: f.cuenta } : {}) },
+  const todos = await prisma.alumno.findMany({
+    where: { estado: 'Activo', ...(f.grado ? { grado: f.grado } : {}), ...(f.tanda ? { tanda: f.tanda } : {}) },
     include: { tutor: true }, orderBy: { id: 'asc' },
   });
+  // «En mora / Al día» se deriva de la CxC (regla única), no de la columna guardada.
+  const cuentaDe = f.cuenta ? await cuentaDerivada() : null;
+  const alumnos = cuentaDe ? todos.filter(a => cuentaDe(a.id) === f.cuenta) : todos;
   const saldos = await saldoVencidoPorAlumno(alumnos.map(a => a.id));
   const por = new Map<string, { nombre: string; email: string; alumnos: string[]; saldo: number }>();
   for (const a of alumnos) {

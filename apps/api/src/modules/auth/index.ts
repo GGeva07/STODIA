@@ -36,13 +36,37 @@ const plugin: FastifyPluginAsync = async app => {
       }
       loginFails.delete(key);
       const rol = u.rol as Rol;
-      const token = app.jwt.sign({ sub: u.id, usuario: u.usuario, nombre: u.nombre, rol });
-      const res: LoginResponse = { token, user: { usuario: u.usuario, nombre: u.nombre, rol } };
+      const token = app.jwt.sign({ sub: u.id, usuario: u.usuario, nombre: u.nombre, rol, ...(u.mustChange ? { mc: true } : {}) });
+      const res: LoginResponse = { token, user: { usuario: u.usuario, nombre: u.nombre, rol, ...(u.mustChange ? { mustChange: true } : {}) } };
       return res;
     },
   );
 
-  app.get('/me', { onRequest: [app.authenticate] }, async req => ({ usuario: req.user.usuario, nombre: req.user.nombre, rol: req.user.rol }));
+  app.get('/me', { onRequest: [app.authenticate] }, async req => ({ usuario: req.user.usuario, nombre: req.user.nombre, rol: req.user.rol, ...(req.user.mc ? { mustChange: true } : {}) }));
+
+  /** Cambio de contraseña propio (obligatorio en el primer ingreso con contraseña temporal). Devuelve una sesión nueva sin la marca de cambio. */
+  app.post<{ Body: { actual: string; nueva: string } }>(
+    '/password',
+    { onRequest: [app.authenticate], schema: { body: { type: 'object', required: ['actual', 'nueva'], properties: { actual: { type: 'string', maxLength: 200 }, nueva: { type: 'string', maxLength: 200 } } } } },
+    async (req, reply) => {
+      const { actual, nueva } = req.body;
+      const key = failKey(req.ip, req.user.usuario), now = Date.now(), f = loginFails.get(key);
+      if (f && f.reset > now && f.n >= LOGIN_MAX) return reply.code(429).send({ error: 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.' });
+      const u = await prisma.user.findUnique({ where: { usuario: req.user.usuario } });
+      if (!u || u.estado !== 'Activo' || !(await bcrypt.compare(actual, u.passwordHash))) {
+        loginFails.set(key, f && f.reset > now ? { n: f.n + 1, reset: f.reset } : { n: 1, reset: now + LOGIN_WINDOW });
+        return reply.code(403).send({ error: 'La contraseña actual es incorrecta' });
+      }
+      if (nueva.length < 8) return reply.code(422).send({ error: 'La nueva contraseña debe tener al menos 8 caracteres' });
+      if (nueva === actual) return reply.code(422).send({ error: 'La nueva contraseña debe ser distinta de la actual' });
+      loginFails.delete(key);
+      await prisma.user.update({ where: { id: u.id }, data: { passwordHash: await bcrypt.hash(nueva, 10), mustChange: false } });
+      await audit(req.user, 'Update', { tabla: 'Usuarios', id: u.usuario, prev: u.mustChange ? 'contraseña temporal' : '••••', next: '•••• (cambiada por el usuario)', ip: req.ip });
+      const rol = u.rol as Rol;
+      const res: LoginResponse = { token: app.jwt.sign({ sub: u.id, usuario: u.usuario, nombre: u.nombre, rol }), user: { usuario: u.usuario, nombre: u.nombre, rol } };
+      return res;
+    },
+  );
 
   // ---- PIN de supervisor (autenticado; el navegador nunca conoce el PIN) ----
   /** Canjea el PIN por un token de un solo uso (60 s). Límite: 5 fallos -> bloqueo de 5 min por usuario. */

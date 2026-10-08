@@ -13,6 +13,8 @@ export default fp(async app => {
   app.decorate('authenticate', async (req: FastifyRequest, reply: FastifyReply) => {
     try {
       await req.jwtVerify();
+      // Contraseña temporal: hasta cambiarla solo se permite /auth/* (cambio de contraseña y sesión).
+      if (req.user.mc && !req.url.split('?')[0].startsWith('/auth/')) return void reply.code(403).send({ error: 'Debes cambiar tu contraseña temporal antes de continuar', code: 'PASSWORD_CHANGE' });
       // El Tutor (portal móvil) solo toca su propio portal, la sesión, la configuración pública y la licencia: nunca directorio, expedientes ni catálogos.
       if (req.user.rol === 'Tutor' && !TUTOR_OK.test(req.url.split('?')[0])) reply.code(403).send({ error: 'Sin permiso' });
     } catch {

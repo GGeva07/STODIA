@@ -5,6 +5,7 @@ import { audit } from '../../lib/audit';
 import { cfgGet } from '../../lib/sisconfig';
 import { digits, kidOf } from '../../lib/personas';
 import { nextSeq, nowHM, round2, supervisorOk } from '../../fin-utils';
+import { estadoCuota, hoyISO, zonaHoraria } from '../../lib/cxc';
 
 /** Medios de pago del Catálogo metodosPago (sembrado en la demo; configurable por instalación). Sin catálogo: solo Efectivo. */
 const metodos = async (): Promise<CobroMetodo[]> => {
@@ -16,8 +17,9 @@ const metodos = async (): Promise<CobroMetodo[]> => {
 const RECIBOS_TURNO = 50;
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
-const toItem = (r: { id: string; con: string; al: string; kid: string; vence: string; monto: number; est: string; tipo: string; abono: boolean }): CobroItem =>
-  ({ id: r.id, con: r.con, al: r.al, kid: r.kid, vence: r.vence, monto: r.monto, est: r.est as CobroItem['est'], tipo: r.tipo, abono: r.abono || undefined });
+/** El estado de la cuota se DERIVA de la fecha de vencimiento (regla única de lib/cxc.ts); el `est` guardado solo es respaldo si la fecha no se interpreta. */
+const toItem = (r: { id: string; con: string; al: string; kid: string; vence: string; monto: number; est: string; tipo: string; abono: boolean }, hoy: string): CobroItem =>
+  ({ id: r.id, con: r.con, al: r.al, kid: r.kid, vence: r.vence, monto: r.monto, est: estadoCuota(r, hoy), tipo: r.tipo, abono: r.abono || undefined });
 const toRecibo = (r: any): ReciboFin => ({
   id: r.id, ncf: r.ncf, tutor: r.tutor, hora: r.hora, monto: r.monto, est: r.est, metodo: r.metodo, abono: r.abono, saldo: r.saldo,
   nc: r.nc ?? undefined, change: r.change, items: JSON.parse(r.items), pays: JSON.parse(r.pays),
@@ -57,6 +59,7 @@ const plugin: FastifyPluginAsync = async app => {
     const hijosDb = await prisma.alumno.findMany({ where: { tutorId: tut.id }, orderBy: { id: 'asc' } });
     const hijos: CobroHijo[] = hijosDb.map(a => ({ id: a.id, kid: kidOf(a.id), nombre: `${a.nombres.split(' ')[0]} ${a.apellidos.split(' ')[0]}`, corto: a.nombres.split(' ')[0], grado: a.grado, sec: a.sec, code: a.code }));
     const ced = digits(tut.cedula);
+    const hoy = hoyISO(await zonaHoraria());
     const [items, recibos, becas] = await Promise.all([
       prisma.finCobroItem.findMany({ where: { paid: false, OR: [...(ced ? [{ tutorCed: ced }] : []), { kid: { in: hijos.map(h => h.kid) } }] }, orderBy: { orden: 'asc' } }),
       // Historial de turno acotado: los últimos RECIBOS_TURNO emitidos + los de este tutor (antes: toda la tabla).
@@ -70,7 +73,7 @@ const plugin: FastifyPluginAsync = async app => {
       const h = hijos.find(x => hijosDb.find(a => a.id === x.id && `${a.nombres} ${a.apellidos}` === b.est));
       return `Beca ${b.tipo} −${b.regla} ya aplicada a la colegiatura de ${h?.corto ?? b.est}.`;
     });
-    const res: CobroCuenta = { tutor: tut.nombre, cedula: tut.cedula, email: tut.email ?? undefined, hijos, becas: becasTxt, items: items.map(toItem), recibos: recibos.map(toRecibo) };
+    const res: CobroCuenta = { tutor: tut.nombre, cedula: tut.cedula, email: tut.email ?? undefined, hijos, becas: becasTxt, items: items.map(i => toItem(i, hoy)), recibos: recibos.map(toRecibo) };
     return res;
   });
 
@@ -90,7 +93,8 @@ const plugin: FastifyPluginAsync = async app => {
     const prontoPct = (await cfgGet('finanzas')).descuentoProntoPct;
     if (discount === 'pronto' && !(prontoPct > 0)) return reply.code(400).send({ error: 'El descuento por pronto pago no está configurado' });
     let desc = 0;
-    if (discount === 'pronto') desc = sel.filter(i => i.tipo === 'col' && i.est === 'Pendiente').reduce((a, i) => a + i.monto * (prontoPct / 100), 0);
+    const hoyP = hoyISO(await zonaHoraria());
+    if (discount === 'pronto') desc = sel.filter(i => i.tipo === 'col' && estadoCuota(i, hoyP) === 'Pendiente').reduce((a, i) => a + i.monto * (prontoPct / 100), 0);
     if (discount === 'exo') desc = sel.filter(i => i.tipo === 'mora').reduce((a, i) => a + i.monto, 0);
     const total = round2(sub - desc);
     const pays = rawPays.map(p => ({ m: p.m, r: p.r ?? '', amt: rawPays.length === 1 && p.a === '' ? total : parseFloat(p.a) || 0 }));

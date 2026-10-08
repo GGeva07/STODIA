@@ -28,7 +28,7 @@ export default function Header({ scrolled }: { scrolled: boolean }) {
     <header className={`fixed inset-x-0 top-0 z-50 transition-all duration-300 ${scrolled || open ? 'border-b border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-md' : 'border-b border-transparent bg-transparent'}`}>
       <div className={`mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 transition-all duration-300 sm:px-6 ${scrolled ? 'h-14' : 'h-[68px]'}`}>
         <Link to="/" className="flex items-center gap-2.5 rounded-lg" aria-label="STODIA, ir al inicio" onClick={close}>
-          <img src="/brand/stodia-logo.svg" alt="" width={36} height={36} className="h-9 w-9" />
+          <img src="/brand/stodia-mark.svg" alt="" height={36} className="h-9 w-auto" />
           <span className="text-lg font-extrabold tracking-[0.16em] text-ink">STODIA</span>
         </Link>
         <nav aria-label="Principal" className="hidden items-center gap-1 lg:flex">

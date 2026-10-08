@@ -109,7 +109,7 @@ export function Paper({ doc, pi, bare }: { doc: PDoc; pi: number; bare?: boolean
     }}>
       {carta && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, paddingBottom: 12, borderBottom: '2px solid #000000', marginBottom: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><img src="/brand/stodia-logo.svg" alt="" style={{ width: 44, height: 44 }} /><div style={{ lineHeight: 1.25 }}><div style={{ fontWeight: 700, letterSpacing: '0.1em', fontSize: 13 }}>STODIA</div><div style={{ fontSize: 10 }}>Sistema Escolar Integral</div></div></div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><img src="/brand/stodia-mark.svg" alt="" style={{ height: 44, width: "auto" }} /><div style={{ lineHeight: 1.25 }}><div style={{ fontWeight: 700, letterSpacing: '0.1em', fontSize: 13 }}>STODIA</div><div style={{ fontSize: 10 }}>Sistema Escolar Integral</div></div></div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'right' }}><div style={{ lineHeight: 1.25 }}><div style={{ fontWeight: 700, fontSize: 13, letterSpacing: '0.04em' }}>{legal}</div><div style={{ fontSize: 10 }}>{rnc ? 'RNC ' + rnc : ''}{ciudad ? ' · ' + ciudad : ''}</div></div><div style={{ width: 44, height: 44, border: '2px solid #000000', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 15 }}>{iniciales}</div></div>
         </div>
       )}

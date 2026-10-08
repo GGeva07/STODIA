@@ -4,17 +4,15 @@ import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { nextSeq } from '../../fin-utils';
 import { digits } from '../../lib/personas';
+import { errorTutor, fmtCed, fmtTel, unirTipo, type TutorCampos } from '../../lib/tutor-datos';
 import { partesEnZona, zonaHoraria } from '../../lib/cxc';
 import { MES_ES, MNAME, anioDeMes, catalogoServicios, cicloActivo, cuotasDe, docsRequeridos, getFinanzas, insPlan, mesesCiclo, mesesDe, planesPago, totalDe, vencDMY } from '../../lib/pers-fin';
 
 const slug = (n: string) => n.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
 
-const fmtCed = (v: string) => {
-  const d = digits(v).slice(0, 11);
-  return d.length <= 3 ? d : d.length <= 10 ? `${d.slice(0, 3)}-${d.slice(3)}` : `${d.slice(0, 3)}-${d.slice(3, 10)}-${d.slice(10)}`;
-};
+type TutorRowDb = NonNullable<Awaited<ReturnType<typeof prisma.tutor.findFirst>>>;
 
-async function lookup(ced: string): Promise<InsTutorLookup & { tel?: string }> {
+async function lookup(ced: string): Promise<InsTutorLookup & { tel?: string; row?: TutorRowDb }> {
   const d = digits(ced);
   if (d.length < 11) return { found: false };
   const tutors = await prisma.tutor.findMany();
@@ -26,7 +24,7 @@ async function lookup(ced: string): Promise<InsTutorLookup & { tel?: string }> {
   ]);
   const legal = leg.filter(r => (JSON.parse(r.data) as ExpFicha).tutorLegalId === t.id).length;
   const info = fin ? `tutor financiero de ${fin} alumno${fin === 1 ? '' : 's'}` : legal ? `tutor${t.parentesco === 'Madre' ? 'a' : ''} legal de ${legal} alumno${legal === 1 ? '' : 's'}` : 'sin alumnos vinculados';
-  return { found: true, id: t.id, nombre: t.nombre, info, tel: t.tel };
+  return { found: true, id: t.id, nombre: t.nombre, info, tel: t.tel, row: t, datos: { parentesco: t.parentesco, tel: t.tel, email: t.email ?? '', rnc: t.rnc ?? '' } };
 }
 
 /** Grados, tandas y secciones salen de los Catálogos (única fuente: PersCupo ya no se lee). Inscritos = el mayor entre el contador del catálogo y los alumnos reales. */
@@ -72,7 +70,7 @@ const plugin: FastifyPluginAsync = async app => {
 
   // Consulta de duplicados por documento de identidad.
   app.post<{ Body: { ced?: string } }>('/tutor', guard, async req => {
-    const { tel: _tel, ...res } = await lookup(req.body?.ced ?? '');
+    const { tel: _tel, row: _row, ...res } = await lookup(req.body?.ced ?? '');
     return res satisfies InsTutorLookup;
   });
 
@@ -90,6 +88,22 @@ const plugin: FastifyPluginAsync = async app => {
     const legalName = L.found ? L.nombre! : b.legalName?.trim();
     const finName = b.finSame ? legalName : F.found ? F.nombre! : b.finName?.trim();
     if (!legalName || !finName) return fail('Identifica al tutor legal y financiero');
+    if (!b.finSame && digits(b.legalCed) === digits(b.finCed)) return fail('El tutor legal y el financiero tienen la misma cédula: marca que son la misma persona');
+
+    // Datos de contacto de cada tutor: mismos campos y validaciones que la pantalla Tutores. Se validan TODOS antes de escribir nada.
+    const campos = (rol: string, look: InsTutorLookup & { row?: TutorRowDb }, name: string, ced: string, d: InsReq['legalDatos'] | undefined, tipo: string): { v: TutorCampos } | { err: string } => {
+      const s = (x: unknown) => (typeof x === 'string' ? x.trim() : '');
+      const v: TutorCampos = {
+        nombre: look.found ? look.nombre! : name, cedula: fmtCed(ced), parentesco: s(d?.parentesco), tipo: look.row ? unirTipo(look.row.tipo, tipo) : tipo,
+        tel: fmtTel(s(d?.tel)), email: s(d?.email).toLowerCase(), rnc: s(d?.rnc),
+      };
+      const e = errorTutor(v);
+      return e ? { err: `${rol}: ${e}` } : { v };
+    };
+    const cl = campos('Tutor legal', L, legalName, b.legalCed, b.legalDatos, b.finSame ? 'Financiero y académico' : 'Académico');
+    if ('err' in cl) return fail(cl.err);
+    const cf = b.finSame ? cl : campos('Tutor financiero', F, finName, b.finCed, b.finDatos, 'Financiero');
+    if ('err' in cf) return fail(cf.err);
 
     const cupo = c.cupos.find(x => x.id === b.cupo);
     if (!cupo || cupo.used >= cupo.cap) return fail('Selecciona una sección con cupo');
@@ -99,14 +113,21 @@ const plugin: FastifyPluginAsync = async app => {
     // Tutores: vincula los existentes o crea los nuevos (sin duplicar por cédula).
     const all = await prisma.tutor.findMany({ select: { id: true } });
     let seq = Math.max(0, ...all.map(t => Number(t.id.replace(/\D/g, '')) || 0));
-    const resolve = async (l: InsTutorLookup, name: string, ced: string, tipo: string) => {
-      if (l.found) return l.id!;
+    const resolve = async (l: InsTutorLookup & { row?: TutorRowDb }, v: TutorCampos) => {
+      const datos = { parentesco: v.parentesco, tipo: v.tipo, tel: v.tel, email: v.email || null, rnc: v.rnc || null };
+      if (l.row) { // tutor existente: se reutiliza y se actualizan sus datos si cambiaron (queda en Auditoría)
+        const prev = l.row;
+        const t = await prisma.tutor.update({ where: { id: prev.id }, data: datos });
+        for (const k of ['parentesco', 'tipo', 'tel', 'email', 'rnc'] as const) { const x = String(prev[k] ?? ''), y = String(t[k] ?? ''); if (x !== y) await audit(req.user, 'Update', { tabla: 'Tutores', id: `${t.cedula}/${k}`, prev: x || '—', next: y || '—', ip: req.ip }); }
+        return t.id;
+      }
       const id = 'u' + ++seq;
-      await prisma.tutor.create({ data: { id, nombre: name, cedula: fmtCed(ced), parentesco: 'Tutor legal', tipo, tel: '' } });
+      await prisma.tutor.create({ data: { id, nombre: v.nombre, cedula: v.cedula, ...datos } });
+      await audit(req.user, 'Insert', { tabla: 'Tutores', id: v.cedula, prev: '—', next: `${v.nombre} · ${v.tipo}`, ip: req.ip });
       return id;
     };
-    const legalId = await resolve(L, legalName, b.legalCed, b.finSame ? 'Financiero y académico' : 'Académico');
-    const finId = b.finSame ? legalId : await resolve(F, finName, b.finCed, 'Financiero');
+    const legalId = await resolve(L, cl.v);
+    const finId = b.finSame ? legalId : await resolve(F, cf.v);
     const finTutor = await prisma.tutor.findUniqueOrThrow({ where: { id: finId } });
 
     const ids = (await prisma.alumno.findMany({ select: { id: true } })).map(a => Number(a.id) || 0);

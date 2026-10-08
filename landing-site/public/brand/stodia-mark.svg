@@ -1,15 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="76 38 104 190" width="100%" height="100%">
+<svg viewBox="76 38 104 190" width="100%" height="100%" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#FDE047"></stop>
-      <stop offset="55%" stop-color="#F59E0B"></stop>
-      <stop offset="100%" stop-color="#D97706"></stop>
+    <linearGradient id="linearGradient6">
+      <stop style="stop-color:#fde047;stop-opacity:1;" offset="0"/>
+      <stop style="stop-color:#f9bf29;stop-opacity:1;" offset="0.5"/>
+      <stop style="stop-color:#d97706;stop-opacity:1;" offset="1"/>
     </linearGradient>
+    <linearGradient id="g" x1="60.649815" y1="58.0381" x2="115.78601" y2="113.1743" gradientTransform="scale(1.4509525,0.68920244)" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FDE047"/>
+      <stop offset="55%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+    <linearGradient xlink:href="#linearGradient6" id="linearGradient7" x1="306.83108" y1="94.784904" x2="334.87965" y2="94.784904" gradientUnits="userSpaceOnUse" gradientTransform="matrix(1.3921568,0,0,1.1564503,-183.49411,-59.298285)"/>
   </defs>
-  <path d="M 160 114 A 32 32 0 0 0 96 114 L 160 178 A 32 32 0 0 1 96 178" fill="none" stroke="#38BDF8" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"></path>
-  <polygon points="128,40 168,59 128,78 88,59" fill="url(#g)"></polygon>
-  <circle cx="128" cy="59" r="5" fill="#B45309"></circle>
-  <path d="M 128 59 Q 142 62 142 74 L 142 100" fill="none" stroke="#FBBF24" stroke-width="6" stroke-linecap="round"></path>
-  <circle cx="142" cy="103" r="5" fill="#F59E0B"></circle>
-  <path d="M 138 108 L 136 120 M 142 108 L 142 122 M 146 108 L 148 120" stroke="#FBBF24" stroke-width="4" stroke-linecap="round"></path>
+  <g transform="matrix(0.89035602,0,0,0.85949279,-144.35486,7.9337786)">
+    <path style="fill:#38bdf8;fill-opacity:1" d="m 329.117,129.94991 c 1.3256,13.01139 24.40892,18.27536 28,-1.33334 1.56514,-7.53806 -4.92633,-43.477932 -44.88889,-47.111103 -37.27482,1.858942 -48.8062,29.644523 -46.44444,51.333333 19.45594,41.6424 41.62963,42.51851 62.44444,63.77777 -6.56419,19.05148 -32.87894,15.60565 -35.33333,-4.44444 2.95088,-12.73253 -22.84972,-24.7982 -28.22222,0 0.70576,36.50663 30.2,46.23129 47.33333,45.33333 6.9347,1.36796 46.4665,-7.59801 44.88889,-45.33333 0.72041,-22.62924 -50.37042,-65.32633 -63.11111,-69.77778 8.86037,-15.08344 31.69255,-20.13886 35.33333,7.55556 z"/>
+    <g transform="rotate(-22.420961,227.67862,-333.88232)">
+      <g>
+        <path style="fill:url(#linearGradient7);stroke-width:1.26884" d="m 263.56971,46.794598 19.14118,-13.901475 v 27.530374 c -12.53433,8.51011 -25.35431,10.956222 -39.04801,-0.0909 l 0.32813,-27.439512 z" transform="translate(-134.44444,21.777778)"/>
+        <polygon points="168,59 128,78 88,59 128,40 " fill="url(#g)" style="fill:url(#g)"/>
+        <g transform="matrix(-0.6520181,-0.26188145,-0.30008508,0.74713541,226.42156,47.134609)">
+          <circle cx="128" cy="59" r="5" fill="#b45309"/>
+          <path d="m 128,59 q 14,3 14,15 v 26" fill="none" stroke="#fbbf24" stroke-width="6" stroke-linecap="round"/>
+          <circle cx="142" cy="103" r="5" fill="#f59e0b"/>
+          <path d="m 138,108 -2,12 m 6,-12 v 14 m 4,-14 2,12" stroke="#fbbf24" stroke-width="4" stroke-linecap="round"/>
+        </g>
+      </g>
+    </g>
+  </g>
 </svg>

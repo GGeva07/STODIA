@@ -8,6 +8,8 @@ interface SessionCtx {
   user: SessionUser | null;
   login: (c: LoginRequest) => Promise<SessionUser>;
   logout: () => void;
+  /** Adopta una sesión nueva (p. ej. tras cambiar la contraseña temporal). */
+  setSession: (res: LoginResponse) => void;
 }
 
 const Ctx = createContext<SessionCtx | null>(null);
@@ -30,20 +32,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  const login = useCallback(async (c: LoginRequest) => {
-    const res = await api.post<LoginResponse>('/auth/login', c);
+  const setSession = useCallback((res: LoginResponse) => {
     tokenStore.set(res.token);
     localStorage.setItem(USER_KEY, JSON.stringify(res.user));
     setUser(res.user);
-    return res.user;
   }, []);
+
+  const login = useCallback(async (c: LoginRequest) => {
+    const res = await api.post<LoginResponse>('/auth/login', c);
+    setSession(res);
+    return res.user;
+  }, [setSession]);
 
   useEffect(() => {
     window.addEventListener(UNAUTHORIZED_EVENT, logout);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, logout);
   }, [logout]);
 
-  const value = useMemo(() => ({ user, login, logout }), [user, login, logout]);
+  const value = useMemo(() => ({ user, login, logout, setSession }), [user, login, logout, setSession]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

@@ -14,7 +14,7 @@ const mono = "'JetBrains Mono',monospace";
 function Brand({ institution }: { institution: string }) {
   return (
     <div className="flex w-[268px] flex-none items-center gap-3 max-md:w-auto">
-      <img src="/brand/stodia-mark.svg" alt="STODIA" className="block h-11 w-6 flex-none" />
+      <img src="/brand/stodia-mark.svg" alt="STODIA" className="block h-11 w-auto flex-none" />
       <div className="flex min-w-0 flex-col leading-[1.25]">
         <span className="whitespace-nowrap text-[17px] font-semibold leading-[inherit] text-[#F8FAFC]">{institution}</span>
         <span className="whitespace-nowrap text-[14px] leading-[inherit] text-[#94A3B8]">Stodia · Sistema Escolar</span>

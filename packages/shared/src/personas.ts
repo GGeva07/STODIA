@@ -74,12 +74,37 @@ export interface InsConfigResp {
   inscripcion: number;
   avisos: string[];
 }
-export interface InsTutorLookup { found: boolean; id?: string; nombre?: string; info?: string }
+/** Datos de contacto del tutor que pide el wizard (mismos campos y validaciones que la pantalla Tutores). La responsabilidad la deriva el servidor del rol. */
+export interface InsTutorDatos { parentesco: string; tel: string; email: string; rnc: string }
+export interface InsTutorLookup { found: boolean; id?: string; nombre?: string; info?: string; /** Datos guardados del tutor existente, para precargarlos. */ datos?: InsTutorDatos }
 export interface InsReq {
   nombre: string; apellido: string; fnac: string; docs: boolean[];
   legalCed: string; legalName: string; finSame: boolean; finCed: string; finName: string;
+  /** Contacto del tutor legal y del financiero (si son la misma persona, solo se usa `legalDatos`). Si el tutor ya existe se actualiza con estos datos. */
+  legalDatos: InsTutorDatos; finDatos: InsTutorDatos;
   /** Sección elegida (id de InsCupo); grado/tanda/sec se derivan en el servidor. */
   cupo: string; tanda: string; grado: string; sec: string; plan: string; serv: string[]; firma: 'digital' | 'fisica';
 }
 export interface InsResp { code: string; ncf: string; factura: number; cuotas: number }
 export interface DirCorte { fecha: string; texto: string }
+
+// ---------- Tutores (pantalla «Tutores») ----------
+export interface TutorHijoRef { id: string; nombre: string }
+export interface TutorRow {
+  id: string; nombre: string; cedula: string; parentesco: string; tipo: string; tel: string; email: string; rnc: string;
+  /** Usuario del Portal Tutor (vacío = sin acceso). */
+  usuario: string; estado: string; alumnos: TutorHijoRef[];
+}
+export interface TutoresResp { rows: TutorRow[]; page: number; size: number; filtrados: number; total: number }
+export interface TutorHijo {
+  id: string; code: string; nombre: string; grado: string; sec: string; tanda: string; estado: string;
+  vinculo: 'Financiero' | 'Legal' | 'Financiero y legal'; vencido: number; porVencer: number;
+}
+export interface TutorFicha extends TutorRow {
+  hijos: TutorHijo[];
+  saldo: { vencido: number; porVencer: number; total: number };
+  acceso: { usuario: string; estado: 'Sin acceso' | 'Activo' | 'Inactivo'; cambioPendiente: boolean };
+  correoListo: boolean;
+}
+export interface TutorAccesoResp { usuario: string; password: string; enviado: boolean; aviso: string; creado: boolean }
+export interface TutorAlumnoOpt { id: string; code: string; nombre: string; grado: string; sec: string; tutor: string }

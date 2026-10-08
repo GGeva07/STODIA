@@ -24,6 +24,8 @@ export interface SessionUser {
   usuario: string;
   nombre: string;
   rol: Rol;
+  /** Contraseña temporal: debe cambiarla antes de usar el sistema. */
+  mustChange?: boolean;
 }
 
 export interface LoginRequest { usuario: string; password: string }

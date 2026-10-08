@@ -17,7 +17,11 @@ const dkey = (v: string) => v.split('/').reverse().join('-');
 const balance = (k: MobHijo) => k.cargos.filter(c => c.estado !== 'Pendiente').reduce((a, c) => a + c.monto, 0);
 
 /** Portal Tutor (prototipo L1649-1742). Pantalla completa en dispositivo; marco 390x800 solo en escritorio ancho. */
-export default function TutorApp() {
+/**
+ * `consulta` (solo personal del colegio): muestra el portal de OTRO tutor por su cédula, en solo lectura (GET /movil/tutor?cedula=).
+ * `consulta === ''` = aún no hay tutor elegido. Sin `consulta` es el portal del propio tutor autenticado.
+ */
+export default function TutorApp({ consulta }: { consulta?: string } = {}) {
   const { user } = useSession();
   const [data, setData] = useState<MobTutorData | null>(null);
   const [error, setError] = useState('');
@@ -25,16 +29,21 @@ export default function TutorApp() {
   const [tab, setTab] = useState<Tab>('inicio');
   const [pay, setPay] = useState(false);
   const [msg, setMsg] = useState('');
+  const preview = consulta !== undefined;
+  const who = preview ? data?.tutor ?? '' : data?.tutor ?? user?.nombre ?? '';
 
   const load = useCallback(
-    () => api.get<MobTutorData>('/movil/tutor').then(d => { setData(d); setKidId(k => k || d.hijos[0]?.id || ''); }).catch(e => setError(e.message)),
-    [],
+    () => api.get<MobTutorData>('/movil/tutor' + (preview && consulta ? '?cedula=' + encodeURIComponent(consulta) : ''))
+      .then(d => { setError(''); setData(d); setKidId(k => (d.hijos.some(h => h.id === k) ? k : d.hijos[0]?.id || '')); })
+      .catch(e => { setData(null); setError(e.message); }),
+    [preview, consulta],
   );
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setData(null); setKidId(''); setTab('inicio'); load(); }, [load]);
 
   const kid: MobHijo | undefined = data?.hijos.find(h => h.id === kidId);
   const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(''), 3000); };
-  const run = (p: Promise<unknown>, ok: string) => p.then(() => { flash(ok); return load(); }).catch(e => flash(e.message));
+  const SOLO_LECTURA = 'Vista de consulta: los pagos y cambios los realiza el propio tutor';
+  const run = (p: () => Promise<unknown>, ok: string) => (preview ? Promise.resolve(flash(SOLO_LECTURA)) : p().then(() => { flash(ok); return load(); }).catch(e => flash(e.message)));
 
   return (
     <div className="mx-auto flex min-h-0 w-full flex-1 flex-col lg:w-[390px] lg:flex-none lg:rounded-[48px] lg:bg-ink lg:p-3 lg:shadow-2xl">
@@ -42,11 +51,11 @@ export default function TutorApp() {
         <div className="shrink-0 space-y-3 px-5 pb-3 pt-2">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-[13px] text-slate-500">{getConfig().institutionName || 'Colegio Los Pinos'}</div>
-              <div className="text-xl font-semibold">Hola, {(data?.tutor ?? user?.nombre ?? '').split(' ')[0]}</div>
+              <div className="text-[13px] text-slate-500">{getConfig().institutionName || 'STODIA'}</div>
+              <div className="text-xl font-semibold">{who ? 'Hola, ' + who.split(' ')[0] : 'Portal del tutor'}</div>
             </div>
             <span className="grid h-10 w-10 place-items-center rounded-full bg-slate-200 text-[13px] font-semibold text-slate-700">
-              {(data?.tutor ?? user?.nombre ?? '').split(' ').map(x => x[0]).join('').slice(0, 2).toUpperCase()}
+              {who.split(' ').map(x => x[0]).join('').slice(0, 2).toUpperCase() || '·'}
             </span>
           </div>
           {data && data.hijos.length > 1 && (
@@ -62,7 +71,8 @@ export default function TutorApp() {
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 pb-4">
           {error && <p className="rounded-xl bg-bad-bg p-3 text-sm text-bad-fg">{error}</p>}
-          {!data && !error && <p className="text-sm text-slate-500">Cargando…</p>}
+          {!data && !error && (preview && !consulta ? <p className="text-sm text-slate-500">Elige un tutor para ver su portal.</p> : <p className="text-sm text-slate-500">Cargando…</p>)}
+          {data && data.hijos.length === 0 && <p className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">{preview ? 'Este tutor no tiene estudiantes a su cargo como tutor financiero: no hay cuotas, notas ni monedero que mostrar.' : 'Aún no tienes estudiantes vinculados a tu cuenta. Comunícate con administración del colegio.'}</p>}
           {kid && tab === 'inicio' && <Inicio kid={kid} onPay={() => setPay(true)} />}
           {kid && tab === 'notas' && <Notas kid={kid} />}
           {kid && data && tab === 'comedor' && (
@@ -70,10 +80,10 @@ export default function TutorApp() {
               kid={kid}
               menu={data.menu}
               recargas={data.recargas ?? []}
-              onRecarga={v => api.put<{ intencion?: string }>(`/movil/tutor/wallet/${kid.id}`, { recarga: v })
+              onRecarga={v => (preview ? flash(SOLO_LECTURA) : api.put<{ intencion?: string }>(`/movil/tutor/wallet/${kid.id}`, { recarga: v })
                 .then(r => { flash(r.intencion ? `Solicitud de recarga de ${fmt(v)} registrada · págala en administración y se acredita al verificarla` : `Recarga de ${fmt(v)} aplicada al monedero de ${kid.nombre.split(' ')[0]}`); return load(); })
-                .catch(e => flash(e.message))}
-              onLimite={v => run(api.put(`/movil/tutor/wallet/${kid.id}`, { limite: v }), 'Límite actualizado')}
+                .catch(e => flash(e.message)))}
+              onLimite={v => run(() => api.put(`/movil/tutor/wallet/${kid.id}`, { limite: v }), 'Límite actualizado')}
             />
           )}
         </div>
@@ -106,7 +116,7 @@ export default function TutorApp() {
                   </div>
                   <button
                     className="h-[52px] w-full rounded-xl bg-accent text-[15px] font-semibold text-white"
-                    onClick={() => { setPay(false); run(api.post('/movil/tutor/pagar', { alumnoId: kid.id }), 'Pago en línea aprobado · ' + fmt(balance(kid))); }}
+                    onClick={() => { setPay(false); run(() => api.post('/movil/tutor/pagar', { alumnoId: kid.id }), 'Pago en línea aprobado · ' + fmt(balance(kid))); }}
                   >
                     Pagar {fmt(balance(kid))}
                   </button>
@@ -127,7 +137,7 @@ export default function TutorApp() {
                   )}
                   <button
                     className="h-[52px] w-full rounded-xl bg-accent text-[15px] font-semibold text-white"
-                    onClick={() => { setPay(false); run(api.post('/movil/tutor/pagar', { alumnoId: kid.id }), 'Aviso enviado · tu balance se actualiza cuando administración verifique el pago'); }}
+                    onClick={() => { setPay(false); run(() => api.post('/movil/tutor/pagar', { alumnoId: kid.id }), 'Aviso enviado · tu balance se actualiza cuando administración verifique el pago'); }}
                   >
                     Ya realicé mi pago · avisar
                   </button>

@@ -3,8 +3,8 @@ import type { MarcaAsistencia, MobHijo, MobListaData, MobListaSave, MobTutorData
 import { prisma } from '../../db';
 import { ahora, bloqueActual, bloquesDe, bloqueTexto, elegirAsig, guardarAsistencia, loadCat, marcasDelDia, nomina, norm, optDe, periodoDe, rubricaDe } from '../../lib/academico';
 import { config } from '../../config';
-import { esVencido, hoyISO, round2, zonaHoraria } from '../../lib/cxc';
-import { kidOf } from '../../lib/personas';
+import { estadoCuota, hoyISO, round2, venceISO, zonaHoraria } from '../../lib/cxc';
+import { digits, kidOf } from '../../lib/personas';
 import { cfgGet, cfgSet } from '../../lib/sisconfig';
 import { audit } from '../../lib/audit';
 import { PASARELAS_IMPLEMENTADAS, comedorGet, comedorSet, pasarelaGet, pasarelaSet } from '../../lib/canales';
@@ -20,22 +20,39 @@ async function menuTutor(): Promise<MobTutorData['menu']> {
 }
 
 const plugin: FastifyPluginAsync = async app => {
-  /** Tutor autenticado (Super Admin ve al tutor demo para previsualizar). */
+  /** Tutor autenticado: se resuelve SIEMPRE por la cuenta de la sesión (Tutor.usuario = usuario del login), nunca por parámetros ni por un usuario fijo. Cuenta o tutor inactivos = sin acceso. */
   const tutorDe = async (req: FastifyRequest) => {
-    const usuario = req.user.rol === 'Tutor' ? req.user.usuario : req.user.rol === 'Super Admin' && config.seedDemo ? 'c.mendoza' : null;
-    return usuario ? prisma.tutor.findFirst({ where: { usuario }, include: { alumnos: true } }) : null;
+    if (req.user.rol !== 'Tutor') return null;
+    const [t, u] = await Promise.all([prisma.tutor.findFirst({ where: { usuario: req.user.usuario }, include: { alumnos: true } }), prisma.user.findUnique({ where: { usuario: req.user.usuario } })]);
+    return t && t.estado === 'Activo' && u?.estado === 'Activo' ? t : null;
+  };
+  /** Consulta del personal (Super Admin / Director / Cajero): ve el portal de un tutor por su cédula, solo lectura. */
+  const STAFF_PORTAL = ['Super Admin', 'Director Académico', 'Cajero'];
+  const consultaDe = async (req: FastifyRequest<{ Querystring: { cedula?: string } }>) => {
+    if (req.user.rol === 'Tutor') return tutorDe(req);
+    const d = digits(String(req.query?.cedula ?? ''));
+    if (!STAFF_PORTAL.includes(req.user.rol) || d.length < 11) return null;
+    return (await prisma.tutor.findMany({ include: { alumnos: true } })).find(t => digits(t.cedula) === d) ?? null;
   };
 
   /** Cargos exigibles del alumno (CxC): FinCobroItem sin pagar, el mismo origen que usan el POS/Cobros. */
-  const cargosDe = (alumnoId: string) => prisma.finCobroItem.findMany({ where: { kid: kidOf(alumnoId), paid: false }, orderBy: { orden: 'asc' } });
+  const cargosDe = async (alumnoId: string) => {
+    const rows = await prisma.finCobroItem.findMany({ where: { kid: kidOf(alumnoId), paid: false }, orderBy: { orden: 'asc' } });
+    // Ordenados por vencimiento (más antiguo primero); a igual fecha, el orden de la cartera.
+    return rows.sort((p, q) => (venceISO(p.vence) ?? '9999').localeCompare(venceISO(q.vence) ?? '9999') || p.orden - q.orden);
+  };
 
-  app.get('/tutor', { onRequest: [app.authenticate] }, async (req, reply) => {
+  /**
+   * Portal del tutor. El Tutor autenticado solo ve lo suyo (se resuelve por su sesión; `?cedula=` se ignora).
+   * Super Admin / Director / Cajero pueden consultar a un tutor con `?cedula=` (solo lectura); sin cédula reciben el portal vacío.
+   */
+  app.get<{ Querystring: { cedula?: string } }>('/tutor', { onRequest: [app.authenticate] }, async (req, reply) => {
     const [pas, instr, com, menu] = await Promise.all([pasarelaGet(), instruccionesPago(), comedorGet(), menuTutor()]);
     const pago: NonNullable<MobTutorData['pago']> = { modo: pas.demo ? 'demo' : pas.activa ? 'pasarela' : 'manual', instrucciones: instr };
-    const t = await tutorDe(req);
-    // Super Admin sin cuenta demo (producción): estado vacío en lugar de datos de otra persona.
-    if (!t && req.user.rol === 'Super Admin') { const vacio: MobTutorData = { tutor: req.user.nombre, hijos: [], menu, pago, recargas: com.recargas }; return vacio; }
-    if (!t) return reply.code(403).send({ error: 'Sin permiso' });
+    const staff = STAFF_PORTAL.includes(req.user.rol);
+    if (staff && !digits(String(req.query?.cedula ?? ''))) { const vacio: MobTutorData = { tutor: '', hijos: [], menu, pago, recargas: com.recargas }; return vacio; }
+    const t = await consultaDe(req);
+    if (!t) return staff ? reply.code(404).send({ error: 'No hay un tutor con esa cédula' }) : reply.code(403).send({ error: 'Sin permiso' });
     const hijos: MobHijo[] = [];
     const [cat, hoy, tz] = await Promise.all([loadCat(), ahora(), zonaHoraria()]);
     const hoyIso = hoyISO(tz);
@@ -71,7 +88,7 @@ const plugin: FastifyPluginAsync = async app => {
       const asis = [...porFecha].map(([fecha, estado]) => ({ fecha, estado })).sort((p, q) => (p.fecha < q.fecha ? 1 : -1)).slice(0, 10);
       hijos.push({
         id: a.id, nombre: `${a.nombres} ${a.apellidos}`, grado: a.grado, sec: a.sec, alergias: a.alg,
-        cargos: cargos.map(c => ({ id: c.id, concepto: c.con, vence: c.vence, monto: c.monto, estado: (c.est === 'Pendiente' ? 'Pendiente' : esVencido(c, hoyIso) ? 'Vencida' : 'Por vencer') as EstadoCargo })),
+        cargos: cargos.map(c => ({ id: c.id, concepto: c.con, vence: c.vence, monto: c.monto, estado: estadoCuota(c, hoyIso) as EstadoCargo })),
         pagosPendientes: pend.map(p => ({ id: p.id, tipo: p.tipo as 'cargos' | 'recarga', monto: p.monto, creado: iso(p.creado)! })),
         notas: notasH,
         wallet: w ? { saldo: w.saldo, limite: w.limite } : null,
@@ -94,7 +111,8 @@ const plugin: FastifyPluginAsync = async app => {
     const alumnoId = req.body?.alumnoId;
     if (!t?.alumnos.some(a => a.id === alumnoId)) return reply.code(403).send({ error: 'Sin permiso' });
     const pas = await pasarelaGet();
-    const items = (await cargosDe(alumnoId)).filter(c => c.est !== 'Pendiente');
+    const hoyIso = hoyISO(await zonaHoraria());
+    const items = (await cargosDe(alumnoId)).filter(c => estadoCuota(c, hoyIso) !== 'Pendiente');
     if (!items.length) return { modo: pas.demo ? 'demo' : 'manual', pagados: 0 };
     if (pas.demo) {
       const r = await prisma.finCobroItem.updateMany({ where: { id: { in: items.map(i => i.id) } }, data: { paid: true } });

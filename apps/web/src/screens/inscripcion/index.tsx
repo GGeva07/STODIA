@@ -1,6 +1,6 @@
 import { usePerfil } from '../../components/finanzas/perfil';
 import { useEffect, useState } from 'react';
-import type { InsConfigResp, InsPlan, InsReq, InsResp, InsTutorLookup } from '@stodia/shared';
+import type { InsConfigResp, InsPlan, InsReq, InsResp, InsTutorDatos, InsTutorLookup } from '@stodia/shared';
 import { api } from '../../lib/api';
 import { useToast } from '../../components/system/UiProvider';
 import { pillBase } from '../../components/system/styles';
@@ -12,7 +12,18 @@ const fmtCed = (v: string) => {
   const d = v.replace(/\D/g, '').slice(0, 11);
   return d.length <= 3 ? d : d.length <= 10 ? `${d.slice(0, 3)}-${d.slice(3)}` : `${d.slice(0, 3)}-${d.slice(3, 10)}-${d.slice(10)}`;
 };
-const blank = (): InsReq => ({ nombre: '', apellido: '', fnac: '', docs: [], legalCed: '', legalName: '', finSame: true, finCed: '', finName: '', cupo: '', tanda: '', grado: '', sec: '', plan: '', serv: [], firma: 'digital' });
+const PARENTESCOS = ['Padre', 'Madre', 'Tutor legal', 'Abuelo(a)', 'Otro'];
+const datosVacios = (): InsTutorDatos => ({ parentesco: '', tel: '', email: '', rnc: '' });
+/** Mismas reglas que la pantalla Tutores (y que valida el servidor). Devuelve el primer error o null. */
+const errDatos = (rol: string, d: InsTutorDatos) => {
+  const dg = (x: string) => x.replace(/\D/g, '');
+  if (!d.parentesco) return `${rol}: indica el parentesco`;
+  if (dg(d.tel).length < 7) return `${rol}: teléfono requerido (ej. 809-555-0000)`;
+  if (d.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.email.trim())) return `${rol}: formato de correo inválido`;
+  if (d.rnc.trim() && ![9, 11].includes(dg(d.rnc).length)) return `${rol}: el RNC debe tener 9 u 11 dígitos`;
+  return null;
+};
+const blank = (): InsReq => ({ nombre: '', apellido: '', fnac: '', docs: [], legalCed: '', legalName: '', finSame: true, finCed: '', finName: '', legalDatos: datosVacios(), finDatos: datosVacios(), cupo: '', tanda: '', grado: '', sec: '', plan: '', serv: [], firma: 'digital' });
 type Look = InsTutorLookup | { found: false; empty: true };
 
 /** Consulta de duplicados por documento; 'empty' mientras no haya 11 dígitos. */
@@ -45,6 +56,10 @@ export default function Screen() {
   const L = useLookup(w.legalCed);
   const Fl = useLookup(w.finCed);
   const F = w.finSame ? L : Fl;
+  // Tutor existente: se precargan sus datos guardados (editables). Al cambiar a un tutor nuevo se limpian.
+  const keyL = L.found ? L.id : '', keyF = Fl.found ? Fl.id : '';
+  useEffect(() => { setW(s => ({ ...s, legalDatos: L.found && L.datos ? { ...L.datos } : datosVacios() })); }, [keyL]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setW(s => ({ ...s, finDatos: Fl.found && Fl.datos ? { ...Fl.datos } : datosVacios() })); }, [keyF]); // eslint-disable-line react-hooks/exhaustive-deps
   const legalName = L.found ? L.nombre! : w.legalName.trim();
   const finName = w.finSame ? legalName : F.found ? F.nombre! : w.finName.trim();
   const tanda = w.tanda || cfg?.tandas[0] || '';
@@ -62,7 +77,9 @@ export default function Screen() {
   const factura = INS + (plan && plan.n === 1 ? totalDe(plan) : 0);
   const ok: (string | null)[] = [null,
     w.nombre.trim() && w.apellido.trim() && w.fnac ? null : 'Completa nombres, apellidos y fecha de nacimiento',
-    legalName && finName ? null : 'Identifica al tutor legal y financiero',
+    !(legalName && finName) ? 'Identifica al tutor legal y financiero'
+      : !w.finSame && w.legalCed.replace(/\D/g, '') === w.finCed.replace(/\D/g, '') ? 'El tutor legal y el financiero tienen la misma cédula: marca que son la misma persona'
+      : errDatos('Tutor legal', w.legalDatos) ?? (w.finSame ? null : errDatos('Tutor financiero', w.finDatos)),
     w.cupo ? null : 'Selecciona una sección con cupo', !plan ? 'Configura planes y precios para poder inscribir' : !planOk ? `El plan ${plan.name} no tiene monto para la tanda ${tanda}` : null, null];
   const grado = gradoLbl.split(' · ').pop() ?? '';
   const fullName = `${w.nombre} ${w.apellido}`.trim() || '—';
@@ -79,7 +96,8 @@ export default function Screen() {
     } catch (e) { toast(errMsg(e), 'bad'); } finally { setBusy(false); }
   };
 
-  const TutorCard = ({ role, desc, tag, ced, onCed, look, name, onName }: { role: string; desc: string; tag: string; ced: string; onCed: (v: string) => void; look: Look; name: string; onName: (v: string) => void }) => (
+  const fmtTel = (v: string) => { const d = v.replace(/\D/g, '').slice(0, 10); return d.length <= 3 ? d : d.length <= 6 ? `${d.slice(0, 3)}-${d.slice(3)}` : `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`; };
+  const TutorCard = ({ role, desc, tag, ced, onCed, look, name, onName, datos, onDatos, resp }: { role: string; desc: string; tag: string; ced: string; onCed: (v: string) => void; look: Look; name: string; onName: (v: string) => void; datos: InsTutorDatos; onDatos: (d: InsTutorDatos) => void; resp: string }) => (
     <div className="flex flex-col gap-2 rounded-lg border border-slate-200 p-3.5">
       <div className="flex items-center gap-2"><span className={`${pillBase} w-[81px] ${tag}`}>{role}</span><span className="text-xs text-slate-500">{desc}</span></div>
       <label className="flex max-w-[280px] flex-col gap-1 text-xs font-medium text-slate-600">Cédula / Pasaporte
@@ -92,6 +110,27 @@ export default function Screen() {
         <label className="flex max-w-[420px] flex-col gap-1 text-xs font-medium text-slate-600">Nuevo tutor · nombre completo
           <input value={name} onChange={e => onName(e.target.value)} placeholder="Nombre y apellidos" className={inp} />
         </label>
+      )}
+      {(look.found || isNew(look)) && (
+        <div className="flex flex-col gap-2">
+          <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Parentesco *
+              <select value={datos.parentesco} onChange={e => onDatos({ ...datos, parentesco: e.target.value })} className={`${inp} bg-white`}>
+                <option value="">Selecciona…</option>{PARENTESCOS.map(p => <option key={p}>{p}</option>)}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Teléfono *
+              <input value={datos.tel} onChange={e => onDatos({ ...datos, tel: fmtTel(e.target.value) })} placeholder="809-555-0000" inputMode="tel" className={`${inp} font-mono`} />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Correo electrónico
+              <input type="email" value={datos.email} onChange={e => onDatos({ ...datos, email: e.target.value })} placeholder="nombre@correo.com" className={inp} />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">RNC (factura con crédito fiscal)
+              <input value={datos.rnc} onChange={e => onDatos({ ...datos, rnc: e.target.value.replace(/[^\d-]/g, '').slice(0, 13) })} placeholder="Opcional" className={`${inp} font-mono`} />
+            </label>
+          </div>
+          <div className="text-xs text-slate-500">Responsabilidad: <b className="text-slate-700">{resp}</b>{look.found ? ' · Datos precargados del sistema; si cambian, se actualizan en la ficha del tutor.' : ''}</div>
+        </div>
       )}
     </div>
   );
@@ -153,8 +192,8 @@ export default function Screen() {
             <div className="flex flex-col gap-3.5">
               <div className="text-[15px] font-semibold">Tutores</div>
               <div className="text-[13px] text-slate-600">Se consulta el documento de identidad para evitar duplicados. {import.meta.env.DEV && <> Prueba con <span className="font-mono">001-0023940-1</span>.</>}</div>
-              {TutorCard({ role: 'TUTOR LEGAL', desc: 'Firma boletines, retiro físico, permisos', tag: 'bg-info-bg text-info-fg', ced: w.legalCed, onCed: v => set({ legalCed: v }), look: L, name: w.legalName, onName: v => set({ legalName: v }) })}
-              {!w.finSame && TutorCard({ role: 'TUTOR FINANCIERO', desc: 'Titular del contrato · facturas NCF a su nombre', tag: 'bg-warn-bg text-warn-fg', ced: w.finCed, onCed: v => set({ finCed: v }), look: Fl, name: w.finName, onName: v => set({ finName: v }) })}
+              {TutorCard({ role: 'TUTOR LEGAL', desc: 'Firma boletines, retiro físico, permisos', tag: 'bg-info-bg text-info-fg', ced: w.legalCed, onCed: v => set({ legalCed: v }), look: L, name: w.legalName, onName: v => set({ legalName: v }), datos: w.legalDatos, onDatos: d => set({ legalDatos: d }), resp: w.finSame ? 'Financiero y académico' : 'Académico' })}
+              {!w.finSame && TutorCard({ role: 'TUTOR FINANCIERO', desc: 'Titular del contrato · facturas NCF a su nombre', tag: 'bg-warn-bg text-warn-fg', ced: w.finCed, onCed: v => set({ finCed: v }), look: Fl, name: w.finName, onName: v => set({ finName: v }), datos: w.finDatos, onDatos: d => set({ finDatos: d }), resp: 'Financiero' })}
               <label className="flex cursor-pointer items-center gap-2 text-[13px]"><input type="checkbox" checked={w.finSame} onChange={() => set({ finSame: !w.finSame })} className="h-4 w-4 accent-accent" />El tutor financiero (responsable de pago) es la misma persona que el tutor legal</label>
             </div>
           )}
@@ -224,7 +263,7 @@ export default function Screen() {
               {done && (
                 <div className="flex items-center gap-3 rounded-lg bg-ok-bg p-3.5 text-green-900">
                   <i className="ph-fill ph-check-circle text-[28px] text-green-600" />
-                  <div className="text-[13px] leading-normal"><b>Inscripción completada.</b> Matrícula <span className="font-mono">{done.code}</span> · Factura de inscripción NCF <span className="font-mono">{done.ncf}</span> por <b className="font-mono">{fmt(done.factura)}</b>. Cartera de {done.cuotas} cuotas generada en estado Pendiente.</div>
+                  <div className="text-[13px] leading-normal"><b>Inscripción completada.</b> Matrícula <span className="font-mono">{done.code}</span> · Factura de inscripción NCF <span className="font-mono">{done.ncf}</span> por <b className="font-mono">{fmt(done.factura)}</b>. Cartera de {done.cuotas} cuotas generada (las que ya cumplieron su fecha de vencimiento se muestran como Vencidas).</div>
                 </div>
               )}
             </div>

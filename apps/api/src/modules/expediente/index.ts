@@ -3,7 +3,7 @@ import type { ExpCatalogoItem, ExpDoc, ExpFicha, ExpPersona, ExpServicio, Expedi
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { READONLY_ROLES, digits, kidOf, toAlumno } from '../../lib/personas';
-import { partesEnZona, zonaHoraria } from '../../lib/cxc';
+import { cuentaDerivada, estadoCuota, hoyISO, partesEnZona, zonaHoraria } from '../../lib/cxc';
 import { MNAME, anioDeMes, becasCatalogo, catalogoServicios, cicloActivo, docsRequeridos, getFinanzas, mesesCiclo, persPlan, planesPago, resolverPlan, vencDMY } from '../../lib/pers-fin';
 
 const fichaDefault = (ciclo: string): ExpFicha => ({
@@ -56,6 +56,7 @@ const plugin: FastifyPluginAsync = async app => {
       a.tutorId ? prisma.alumno.findMany({ where: { tutorId: a.tutorId, NOT: { id } } }) : [],
       prisma.finBeca.findMany({ where: { estado: 'Aprobada' } }),
     ]);
+    const hoyCxc = hoyISO(await zonaHoraria());
     const full = (x: { nombres: string; apellidos: string }) => `${x.nombres} ${x.apellidos}`;
     const becaOf = (x: { nombres: string; apellidos: string }) => becas.filter(b => b.est === full(x)).map(b => `${b.tipo} ${b.regla.includes('%') ? '−' : ''}${b.regla}`);
 
@@ -69,11 +70,11 @@ const plugin: FastifyPluginAsync = async app => {
     if (!cal.ciclo.configurado) avisos.push('Configura el ciclo lectivo activo en Configuración.');
     if (!catalogo.length) avisos.push('No hay servicios con precio configurado (rutas, planes de alimentación, actividades o productos).');
     return {
-      alumno: toAlumno(a), tutor: persona(a.tutor), legal: persona(legal), ficha,
+      alumno: { ...toAlumno(a), cuenta: (await cuentaDerivada())(a.id) }, tutor: persona(a.tutor), legal: persona(legal), ficha,
       hermanos: sibs.map(s => ({ id: s.id, nombre: full(s), curso: `${s.grado} ${s.sec}`, beca: becaOf(s).map(b => 'Beca ' + b).join(' · ') })),
       docs: docs.map(d => ({ id: d.id, n: d.n, f: d.f, est: d.est as ExpDoc['est'] })),
       servicios: servicios.map(toServ),
-      cuenta: cuenta.map(c => ({ id: c.id, con: c.con, vence: c.vence, est: c.est, monto: c.monto, paid: c.paid })),
+      cuenta: cuenta.map(c => ({ id: c.id, con: c.con, vence: c.vence, est: estadoCuota(c, hoyCxc), monto: c.monto, paid: c.paid })),
       becasActivas: becaOf(a),
       ref: {
         planes: refPlanes,
@@ -150,9 +151,10 @@ const plugin: FastifyPluginAsync = async app => {
     const f = req.body?.fecha ?? '';
     if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(f)) return reply.code(400).send({ error: 'Datos inválidos' });
     await prisma.persServicio.update({ where: { id: s.id }, data: { est: 'Baja · ' + f.split('-').reverse().join('/') } });
-    const del = await prisma.finCobroItem.deleteMany({
-      where: { paid: false, NOT: { est: 'Vencida' }, OR: [{ id: { startsWith: s.id + '-' } }, { id: { in: LEGACY[s.id] ?? [] } }] },
-    });
+    // Solo se anulan las cuotas NO vencidas (la deuda vencida se deriva de la fecha, regla única de lib/cxc.ts).
+    const hoy = hoyISO(await zonaHoraria());
+    const cand = await prisma.finCobroItem.findMany({ where: { paid: false, OR: [{ id: { startsWith: s.id + '-' } }, { id: { in: LEGACY[s.id] ?? [] } }] }, select: { id: true, vence: true, est: true } });
+    const del = await prisma.finCobroItem.deleteMany({ where: { id: { in: cand.filter(c => estadoCuota(c, hoy) !== 'Vencida').map(c => c.id) } } });
     await audit(req.user, 'Update', { tabla: 'Servicios', id: s.id, prev: 'Activo', next: 'Baja ' + f, ip: req.ip });
     return { anuladas: del.count };
   });

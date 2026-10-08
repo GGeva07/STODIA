@@ -35,7 +35,37 @@ export function venceISO(s: string): string | null {
   return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : null;
 }
 
-export const esVencido = (it: { vence: string; est: string }, hoy: string) => { const v = venceISO(it.vence); return v ? v < hoy : it.est === 'Vencida'; };
+/**
+ * REGLA ÚNICA del estado de una cuota (la usan Portal Tutor, POS/Cobros, Expediente, Tutores, Directorio, Dashboard y Comunicaciones):
+ *   Vencida    = vence ANTES de hoy (zona horaria del perfil). Nunca se guarda en la BD: se deriva.
+ *   Por vencer = vence hoy o dentro de los próximos DIAS_POR_VENCER días.
+ *   Pendiente  = vence más adelante (aún no exigible).
+ * `Pagado` solo aplica a cuotas `paid`. El monto de un abono parcial ya viene descontado en `monto`.
+ * Si la fecha no se puede interpretar se cae al `est` guardado (compatibilidad con datos sembrados).
+ */
+export type EstadoCuota = 'Vencida' | 'Por vencer' | 'Pendiente';
+export const DIAS_POR_VENCER = 20;
+const diasEntre = (a: string, b: string) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5);
+
+export function estadoCuota(it: { vence: string; est?: string }, hoy: string): EstadoCuota {
+  const v = venceISO(it.vence ?? '');
+  if (!v) return it.est === 'Vencida' ? 'Vencida' : it.est === 'Por vencer' ? 'Por vencer' : 'Pendiente';
+  if (v < hoy) return 'Vencida';
+  return diasEntre(hoy, v) <= DIAS_POR_VENCER ? 'Por vencer' : 'Pendiente';
+}
+export const esVencido = (it: { vence: string; est?: string }, hoy: string) => estadoCuota(it, hoy) === 'Vencida';
+
+export interface SaldoCuenta { vencido: number; porVencer: number; exigible: number; total: number }
+/** Saldo de un conjunto de cuotas sin pagar: vencido, por vencer (todo lo no vencido), exigible (vencido + por vencer del mes) y total. */
+export function saldoCuenta(items: { monto: number; vence: string; est?: string }[], hoy: string): SaldoCuenta {
+  let vencido = 0, noVencido = 0, exigible = 0;
+  for (const i of items) {
+    const e = estadoCuota(i, hoy);
+    if (e === 'Vencida') vencido += i.monto; else noVencido += i.monto;
+    if (e !== 'Pendiente') exigible += i.monto;
+  }
+  return { vencido: round2(vencido), porVencer: round2(noVencido), exigible: round2(exigible), total: round2(vencido + noVencido) };
+}
 
 export interface Cxc { vencido: number; porVencer: number; vencidoPorKid: Map<string, number> }
 
@@ -50,6 +80,12 @@ export async function cxcResumen(kids?: string[], tz?: string): Promise<Cxc> {
   out.vencido = round2(out.vencido); out.porVencer = round2(out.porVencer);
   for (const [k, v] of out.vencidoPorKid) out.vencidoPorKid.set(k, round2(v));
   return out;
+}
+
+/** Estado de cuenta derivado ('mora' si el alumno tiene saldo vencido, 'ok' si no). `Alumno.cuenta` guardado ya no se usa para decidir: es un valor derivado. */
+export async function cuentaDerivada(): Promise<(alumnoId: string) => 'mora' | 'ok'> {
+  const r = await cxcResumen();
+  return id => ((r.vencidoPorKid.get(kidOf(id)) ?? 0) > 0 ? 'mora' : 'ok');
 }
 
 /** Saldo vencido por id de alumno (0 si no debe nada). */

@@ -3,11 +3,13 @@ import { Navigate, useLocation } from 'react-router-dom';
 import type { ScreenId } from '@stodia/shared';
 import { canAccess, homeFor, useAccessVersion } from '../lib/access';
 import { useSession } from '../lib/session';
+import CambiarClave from './CambiarClave';
 
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { user } = useSession();
   const loc = useLocation();
   if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname }} />;
+  if (user.mustChange) return <CambiarClave />;
   return <>{children}</>;
 }
 
