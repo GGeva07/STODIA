@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { APP_URL, absUrl } from '../../lib/site';
+import { Link } from 'react-router-dom';
+import { APP_URL } from '../../lib/site';
 import { NAV_LINKS } from './data';
 
 export default function Header({ scrolled }: { scrolled: boolean }) {
@@ -26,13 +27,13 @@ export default function Header({ scrolled }: { scrolled: boolean }) {
   return (
     <header className={`fixed inset-x-0 top-0 z-50 transition-all duration-300 ${scrolled || open ? 'border-b border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-md' : 'border-b border-transparent bg-transparent'}`}>
       <div className={`mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 transition-all duration-300 sm:px-6 ${scrolled ? 'h-14' : 'h-[68px]'}`}>
-        <a href="/" className="flex items-center gap-2.5 rounded-lg" aria-label="STODIA, ir al inicio" onClick={close}>
+        <Link to="/" className="flex items-center gap-2.5 rounded-lg" aria-label="STODIA, ir al inicio" onClick={close}>
           <img src="/brand/stodia-logo.svg" alt="" width={36} height={36} className="h-9 w-9" />
           <span className="text-lg font-extrabold tracking-[0.16em] text-ink">STODIA</span>
-        </a>
+        </Link>
         <nav aria-label="Principal" className="hidden items-center gap-1 lg:flex">
           {NAV_LINKS.map(l => <a key={l.href} href={l.href} className={linkCls}>{l.label}</a>)}
-          <a href={absUrl('/blog')} className={linkCls}>Blog</a>
+          <Link to="/blog" className={linkCls}>Blog</Link>
         </nav>
         <div className="hidden items-center gap-2 lg:flex">
           <a href={APP_URL} className="rounded-full px-4 py-2 text-sm font-semibold text-ink transition hover:bg-slate-100">Iniciar sesión</a>
@@ -45,7 +46,7 @@ export default function Header({ scrolled }: { scrolled: boolean }) {
       <div id="menu-movil" ref={menu} hidden={!open} className="border-t border-slate-200 bg-white px-4 pb-5 pt-3 lg:hidden">
         <nav aria-label="Principal (móvil)" className="flex flex-col">
           {NAV_LINKS.map(l => <a key={l.href} href={l.href} onClick={close} className="rounded-xl px-3 py-3 text-base font-medium text-slate-800 hover:bg-slate-100">{l.label}</a>)}
-          <a href={absUrl('/blog')} onClick={close} className="rounded-xl px-3 py-3 text-base font-medium text-slate-800 hover:bg-slate-100">Blog</a>
+          <Link to="/blog" onClick={close} className="rounded-xl px-3 py-3 text-base font-medium text-slate-800 hover:bg-slate-100">Blog</Link>
         </nav>
         <div className="mt-3 grid gap-2">
           <a href={APP_URL} onClick={close} className="btn btn-ghost">Iniciar sesión</a>

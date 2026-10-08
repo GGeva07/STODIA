@@ -297,6 +297,16 @@ model SisAudit {
   @@index([t])
 }
 
+// Folio de verificación de documentos emitidos (boletines): folio + hash SHA-256 del contenido. NO es firma digital.
+model DocFolio {
+  folio      String   @id
+  tipo       String
+  hash       String
+  detalle    String   @default("")
+  emitidoPor String   @default("")
+  createdAt  DateTime @default(now())
+}
+
 // Clave/valor JSON: licencia, perfil, assets, ncf, ecf, ciclos, access
 model SisConfig {
   clave String @id

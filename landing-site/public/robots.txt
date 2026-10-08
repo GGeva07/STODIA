@@ -1,0 +1,11 @@
+# STODIA - robots.txt
+# Dominio por defecto (https://stodia.vercel.app): se reescribe al compilar con VITE_SITE_URL.
+User-agent: *
+Allow: /
+Allow: /blog
+Allow: /terminos
+Allow: /privacidad
+Allow: /cookies
+Allow: /derechos-arco
+
+Sitemap: https://stodia.vercel.app/sitemap.xml

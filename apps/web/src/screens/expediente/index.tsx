@@ -7,8 +7,8 @@ import { useSession } from '../../lib/session';
 import { useToast } from '../../components/system/UiProvider';
 import { btn, card, pill, pillBase, type PillTone } from '../../components/system/styles';
 import { errMsg, fmt } from '../../components/finanzas/fin';
-import { printCarta } from '../../components/personas/printCarta';
-import { hoyDMY } from '../../components/finanzas/print';
+import { cartaDoc, printCarta } from '../../components/personas/printCarta';
+import { descargarPdf, hoyDMY } from '../../components/finanzas/print';
 import { usePerfil } from '../../components/finanzas/perfil';
 import Servicios from './Servicios';
 
@@ -65,7 +65,7 @@ function Expediente() {
       { t: 'table', head: ['Concepto', 'Vence', 'Estado', 'Monto'], rows: cuenta.map(i => [i.con, i.vence, estadoItem(i)[0], fmt(i.monto)]), widths: ['1fr', '82px', '74px', '100px'], aligns: ['left', 'left', 'left', 'right'] },
       { t: 'total', rows: [['Total vencido', fmt(vencido)], ['Por vencer / pendiente', fmt(pendiente)], ['BALANCE CONSOLIDADO', fmt(vencido + pendiente), true]] },
     ],
-  }], ['Firma del cajero', 'Firma de dirección'], `Estado de cuenta · ${a.nombres.split(' ')[0]} ${a.apellidos.split(' ')[0]}`, 'estado');
+  }], ['Firma del cajero', 'Firma de dirección'], `Estado de cuenta · ${a.nombres.split(' ')[0]} ${a.apellidos.split(' ')[0]}`, 'estado', `estado_cuenta_${a.code}.pdf`);
 
   const docContrato = () => {
     const p = planAct, b = data.ref.becas[ficha.contrato.beca] ?? { pct: 0 };
@@ -78,7 +78,7 @@ function Expediente() {
         { t: 'kv', rows: [['Plan de pago', p.name], ['Cuota base', fmt(p.gross)], ['Descuento / beca', b.pct ? `${Math.round(b.pct * 10000) / 100}%` : 'Ninguno'], ['Cuota neta facturable', fmt(net)]] },
         { t: 'text', s: `PRIMERO: EL TUTOR se obliga a pagar las cuotas el día ${p.dia} de ${p.freq === 1 ? 'cada mes' : 'cada vencimiento'}. SEGUNDO: ${p.mora ? `transcurridos ${p.gracia} días de gracia, las cuotas vencidas generan un recargo ${p.mora}` : 'las cuotas vencidas no generan recargo por mora'}. TERCERO: la inscripción no es reembolsable. CUARTO: EL TUTOR declara conocer el reglamento interno y autoriza el uso de los datos del estudiante para fines académicos y administrativos conforme a la ley.` },
       ],
-    }], ['Tutor financiero', 'Dirección del colegio'], 'Contrato de inscripción', 'contrato');
+    }], ['Tutor financiero', 'Dirección del colegio'], 'Contrato de inscripción', 'contrato', `contrato_${a.code}.pdf`);
   };
 
   const docNoAdeudo = () => {
@@ -89,10 +89,21 @@ function Expediente() {
         { t: 'text', s: `Por medio de la presente, ${colegio}, RNC ${rncP}, certifica que el estudiante ${nombre.toUpperCase()}, matrícula ${a.code}, cuyo tutor financiero es ${(tutor?.nombre ?? '—').toUpperCase()}, NO MANTIENE ADEUDOS VENCIDOS con la institución al día de la fecha.` },
         { t: 'text', s: 'Se expide a solicitud de la parte interesada para los fines que estime convenientes.' },
       ],
-    }], ['Administración financiera', 'Dirección del colegio'], 'Certificación de no adeudo', 'noadeudo');
+    }], ['Administración financiera', 'Dirección del colegio'], 'Certificación de no adeudo', 'noadeudo', `no_adeudo_${a.code}.pdf`);
   };
 
-  const boletin = (h: ExpedienteResp['ficha']['hist'][number]) => { toast(`Boletín ${h.c} descargado (PDF firmado)`, 'info'); };
+  /** Boletín histórico: PDF real con folio + SHA-256 + QR de verificación (no es firma digital con certificado). */
+  const boletin = async (h: ExpedienteResp['ficha']['hist'][number]) => {
+    const doc = cartaDoc([{
+      title: 'Boletín de calificaciones', sub: `Ciclo ${h.c}${h.btn === 'Parcial' ? ' · parcial (en curso)' : ''}`,
+      blocks: [
+        { t: 'kv', rows: [['Estudiante', nombre], ['Matrícula', a.code], ['Ciclo lectivo', h.c], ['Grado', h.g]] },
+        { t: 'total', rows: [['Promedio general', h.prom], ['Calificación', h.l, true]] },
+        { t: 'text', s: h.btn === 'Parcial' ? 'Promedio parcial del ciclo en curso; el asterisco indica que aún no se han cerrado todos los períodos.' : 'Promedio final del ciclo lectivo según el registro académico de la institución.' },
+      ],
+    }], ['Dirección académica', 'Firma del tutor'], `Boletín ${h.c} · ${nombre}`, `boletin_${a.code}_${h.c.replace('–', '-')}.pdf`, 'BOL');
+    try { toast('Generando boletín…', 'info'); await descargarPdf(doc); toast(`Boletín ${h.c} descargado (PDF con folio de verificación)`, 'info'); } catch (e) { toast(errMsg(e), 'bad'); }
+  };
 
 
   const subirDoc = async (d: ExpDoc) => {

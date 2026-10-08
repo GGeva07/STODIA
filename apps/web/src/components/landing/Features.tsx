@@ -79,11 +79,8 @@ function CollageMock() {
       </div>
       <div className="relative" data-reveal="" style={d(240)} aria-hidden="true">
         <div className="tilt rounded-2xl border border-slate-200 bg-white p-4 shadow-xl shadow-slate-900/10">
-          <div className="mb-2 flex items-center gap-2 text-xs font-bold text-ink"><i className="ph-fill ph-chats-circle text-lg text-violet-600" /> Mensajes</div>
-          <div className="space-y-2 text-[11px] leading-snug">
-            <div className="max-w-[88%] rounded-2xl rounded-bl-sm bg-slate-100 px-3 py-2 text-slate-800">Buenos días, ¿cómo va la tarea de ciencias?</div>
-            <div className="ml-auto max-w-[88%] rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-white">Todo al día. La entrega es el viernes.</div>
-          </div>
+          <div className="mb-2 flex items-center gap-2 text-xs font-bold text-ink"><i className="ph-fill ph-megaphone text-lg text-violet-600" /> Comunicaciones</div>
+          <div className="space-y-2 text-[11px] leading-snug"><div className="rounded-xl bg-slate-100 px-3 py-2 text-slate-800"><div className="font-bold text-ink">Recordatorio de pago</div><div className="mt-0.5">Se envía a los tutores del grado o con cuenta en mora.</div></div><div className="flex flex-wrap gap-1.5"><span className="rounded-full bg-blue-50 px-2 py-0.5 font-semibold text-blue-700">Correo</span><span className="rounded-full bg-blue-50 px-2 py-0.5 font-semibold text-blue-700">Push</span><span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-600">SMS</span><span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-600">WhatsApp</span></div><div className="flex items-center justify-between rounded-lg bg-green-50 px-2.5 py-1.5 font-semibold text-green-700"><span>Entregados</span><span className="tabnum">128 / 130</span></div></div>
         </div>
       </div>
       <Arrow className="absolute -left-10 top-1/2 hidden -rotate-12 lg:block" color="#F59E0B" delay={500} flip />

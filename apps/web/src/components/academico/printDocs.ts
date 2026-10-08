@@ -9,6 +9,7 @@ const CARTA = 'Carta 8.5 × 11 in';
 
 export interface NotaFila { nombre: string; g: string[]; prom: number | null; fin: number | null; L: string; base: number | null }
 
+const slug = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const f1 = (v: number | null) => (v != null ? v.toFixed(1) : '—');
 
 /** docSabana: tabla #, Estudiante, competencias, Prom, Final, Letra + promedio de sección y aprobados. */
@@ -30,13 +31,16 @@ export function docSabana(m: { materia: string; seccion: string; nivel: string; 
 }
 
 /** docBoletines: una página por estudiante de la sección. */
-export function docBoletines(m: { materia: string; seccion: string; tanda?: string; periodoLabel: string; docente: string; comps: { k: string; n: string }[] }, rows: NotaFila[]): PDoc {
+export function docBoletines(m: { materia: string; seccion: string; tanda?: string; periodoLabel: string; docente: string; comps: { k: string; n: string }[] }, rows: NotaFila[], borrador = false): PDoc {
   const cc = m.comps.filter(c => c.k !== 'EX');
   const rango = cc.length > 1 ? `${cc[0].k}–${cc[cc.length - 1].k}` : cc[0]?.k ?? '';
   return {
     kind: 'carta', name: `Boletines individuales · ${m.seccion}`, format: CARTA, sign: ['Docente', 'Firma del tutor'],
+    file: `boletines_${slug(m.seccion)}_${slug(m.periodoLabel.split('(')[0])}.pdf`, porAlumno: true,
+    // Borrador (celdas sin capturar) = sin folio de verificación; con notas completas cada boletín recibe folio + SHA-256 + QR.
+    folioTipo: borrador ? undefined : 'BOL',
     pages: rows.map(r => ({
-      title: 'Boletín de calificaciones', sub: `${m.materia} · ${m.seccion} · ${m.periodoLabel}`,
+      title: 'Boletín de calificaciones', sub: `${m.materia} · ${m.seccion} · ${m.periodoLabel}${borrador ? ' · BORRADOR' : ''}`,
       blocks: [
         B.kv([['Estudiante', r.nombre], ['Sección', m.seccion + (m.tanda ? ' · ' + m.tanda : '')], ['Docente', m.docente]]),
         B.table(['Competencia', 'Nombre', 'Nota'], m.comps.map((k, j) => [k.k, k.n, r.g[j] || '—']), ['60px', '1fr', '70px'], ['left', 'left', 'right']),

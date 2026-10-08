@@ -5,7 +5,7 @@ import { useSession } from '../../lib/session';
 import { useToastStack } from '../../components/useToastStack';
 import SupervisorGuardModal, { type GuardCfg } from '../../components/finanzas/SupervisorGuardModal';
 import { TONE, errMsg, fmt, norm } from '../../components/finanzas/fin';
-import { B, hoyDMY, runPrint, usePrintBusy, type PBlock, type PDoc } from '../../components/finanzas/print';
+import { B, descargarPdf, hoyDMY, runPrint, usePrintBusy, type PBlock, type PDoc } from '../../components/finanzas/print';
 import { useFinCfg } from '../../components/finanzas/finConfig';
 import PlanDrawer, { type DrawerMode } from './PlanDrawer';
 import { FREQ_L, MN, moraLbl, planCalc } from './planCalc';
@@ -97,12 +97,14 @@ export default function Screen() {
     if (tarOpts.ext) bl.push(B.text('Actividades y cursos extracurriculares', true), B.table(['Actividad', 'Categoría', 'Horario', 'Costo'], ext.filter(a => a.estado !== 'Cerrada').map(a => [a.name, a.cat, a.dias + ' · ' + a.hora, Number(a.costo) ? fmt(a.costo) + (a.kind === 'curso' ? ' total' : '/mes') : 'Gratuita']), ['1fr', '70px', '1fr', '110px'], ['left', 'left', 'left', 'right']));
     if (tarOpts.pol) bl.push(B.text('Políticas de facturación', true), B.table(['Plan', 'Gracia', 'Cobro por mora', 'Pronto pago'], act.map(p => [p.name, p.gracia + ' días', p.moraTipo === 'pct' ? p.moraVal + '% mensual' : p.moraTipo === 'fijo' ? fmt(p.moraVal) + ' por día' : 'Sin recargo', Number(p.pronto) ? p.pronto + '% hasta el día ' + p.prontoDia : 'No aplica']), ['1fr', '56px', '110px', '120px'], ['left', 'left', 'left', 'left']));
     bl.push(B.text('Montos expresados en pesos dominicanos (RD$). Tarifas vigentes para el ciclo lectivo ' + cfg.ciclo + ' y sujetas a cambios con previo aviso. Los servicios opcionales se contratan al momento de la inscripción.'));
-    return { kind: 'carta', name: 'Tarifario anual ' + cfg.ciclo, format: 'Carta 8.5 × 11 in', sign: [], pages: [{ title: 'Tarifario anual', sub: 'Ciclo lectivo ' + cfg.ciclo + ' · Generado el ' + hoyDMY(), blocks: bl }] };
+    return { kind: 'carta', name: 'Tarifario anual ' + cfg.ciclo, file: 'tarifario_' + cfg.ciclo.replace('–', '-') + '.pdf', format: 'Carta 8.5 × 11 in', sign: [], pages: [{ title: 'Tarifario anual', sub: 'Ciclo lectivo ' + cfg.ciclo + ' · Generado el ' + hoyDMY(), blocks: bl }] };
   };
   const printTar = () => { const d = docTarifario(); if (d) { setTarOpen(false); runPrint('tar', d); } };
-  const pdfTar = () => {
+  const pdfTar = async () => {
     if (!Object.values(tarOpts).some(Boolean)) { toast('Selecciona al menos una sección', 'warn'); return; }
-    setTarOpen(false); toast('PDF generado · tarifario_' + cfg.ciclo.replace('–', '-') + '.pdf', 'ok');
+    const d = docTarifario(); if (!d) return;
+    setTarOpen(false);
+    try { toast('Generando PDF…', 'info'); await descargarPdf(d); toast('PDF generado · tarifario_' + cfg.ciclo.replace('–', '-') + '.pdf', 'ok'); } catch (e) { toast(errMsg(e), 'bad'); }
   };
 
 

@@ -9,9 +9,10 @@ import { btn, btnPrimary, card, pillBase, pill, th, td, type PillTone } from '..
 import { errMsg, norm } from '../../components/finanzas/fin';
 import SideDrawer from '../../components/finanzas/SideDrawer';
 import SupervisorGuardModal, { type GuardCfg } from '../../components/finanzas/SupervisorGuardModal';
-import { printCarta } from '../../components/personas/printCarta';
+import { cartaDoc, printCarta } from '../../components/personas/printCarta';
+import { xlsxBlob } from '../../components/finanzas/xlsx';
 import { opciones, usePersRef } from '../../components/personas/ref';
-import { hoyDMY, usePrintBusy } from '../../components/finanzas/print';
+import { descargarPdf, guardarBlob, hoyDMY, runPrint, usePrintBusy } from '../../components/finanzas/print';
 
 const ESTADO_TONE: Record<string, PillTone> = { Activo: 'ok', Inactivo: 'warn', Retirado: 'mute', Egresado: 'info' };
 const PAGE = 50;
@@ -72,13 +73,15 @@ export default function Screen() {
   const target = () => (selList.length ? selList : view);
   const head = ['Matrícula', 'Alumno', 'Curso', 'Tanda', 'Tutor financiero', 'Estado'];
   const tableRows = (r: Alumno[]) => r.map(x => [x.code.replace(/^EST-\d{4}-/, 'EST-'), full(x), `${x.grado} ${x.sec}`, x.tanda, x.tutor, x.estado]);
-  const printList = (r: Alumno[], key = 'dirPrint') => printCarta([{ title: 'Listado de alumnos', sub: `${r.length} estudiantes${cicloTxt}`, blocks: [{ t: 'table', head, rows: tableRows(r), widths: ['66px', '1fr', '42px', '70px', '120px', '58px'] }] }], ['Dirección académica'], 'Listado de alumnos', key);
+  const listDoc = (r: Alumno[]) => cartaDoc([{ title: 'Listado de alumnos', sub: `${r.length} estudiantes${cicloTxt}`, blocks: [{ t: 'table', head, rows: tableRows(r), widths: ['66px', '1fr', '42px', '70px', '120px', '58px'] }] }], ['Dirección académica'], 'Listado de alumnos', 'directorio_alumnos.pdf');
+  const printList = (r: Alumno[], key = 'dirPrint') => runPrint(key, listDoc(r));
   const pb = usePrintBusy();
   const pbPrint = pb('dirPrint', selList.length ? 'Imprimir seleccionados' : 'Imprimir listado', 'ph ph-printer');
   const pbSel = pb('dirSelPrint', 'Imprimir seleccionados', 'ph ph-printer');
   const pbNotif = pb('dirNotif', 'Imprimir notificaciones de cobro', 'ph ph-envelope-simple');
-  const exportXls = () => { setMenu(false); toast('Excel generado · directorio_alumnos.xlsx', 'ok'); };
-  const exportPdf = () => { setMenu(false); toast('PDF generado · directorio_alumnos.pdf', 'ok'); };
+  // Excel y PDF reales con la misma tabla que ve el usuario (selección o resultado filtrado).
+  const exportXls = () => { setMenu(false); guardarBlob(xlsxBlob('Directorio', head, tableRows(target())), 'directorio_alumnos.xlsx'); toast('Excel generado · directorio_alumnos.xlsx', 'ok'); };
+  const exportPdf = async () => { setMenu(false); try { toast('Generando PDF…', 'info'); await descargarPdf(listDoc(target())); toast('PDF generado · directorio_alumnos.pdf', 'ok'); } catch (e) { toast(errMsg(e), 'bad'); } };
   const printNotif = async () => {
     const m = selList.filter(x => x.cuenta === 'mora');
     if (!m.length) { toast('Ninguno de los alumnos seleccionados está en mora', 'warn'); return; }
@@ -92,7 +95,7 @@ export default function Screen() {
           { t: 'text' as const, s: `Estimado(a) tutor(a): nuestros registros indican que la cuenta del estudiante arriba mencionado presenta cuotas vencidas. Le invitamos a regularizar su situación en caja antes del ${corte.texto} para evitar recargos adicionales por mora. Si ya realizó el pago, haga caso omiso de esta comunicación.` },
           { t: 'total' as const, rows: [['SALDO VENCIDO', fmt(saldos[x.id] ?? 0), true]] as [string, string, boolean][] },
         ],
-      })), ['Administración financiera'], 'Notificaciones de cobro', 'dirNotif');
+      })), ['Administración financiera'], 'Notificaciones de cobro', 'dirNotif', `notificaciones_cobro_${new Date().toISOString().slice(0, 10)}.pdf`);
     } catch (e) { toast(errMsg(e), 'bad'); }
   };
 

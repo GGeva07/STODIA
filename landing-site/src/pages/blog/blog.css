@@ -1,0 +1,19 @@
+/* Blog de STODIA: complementa landing.css (se importa desde BlogLayout). */
+.blog-root { min-height: 100vh; display: flex; flex-direction: column; }
+.blog-root > main { flex: 1 0 auto; }
+html:has(.blog-root) { scroll-padding-top: 88px; }
+.blog-prose h2, .blog-prose h3 { scroll-margin-top: 88px; }
+.blog-prose table { border-collapse: collapse; }
+.blog-reading-bar { transform-origin: 0 50%; will-change: transform; }
+
+@media print {
+  .blog-header, .blog-noprint, .skip-link { display: none !important; }
+  .blog-root { display: block; }
+  .blog-prose a[href^='http']::after { content: ' (' attr(href) ')'; font-size: .8em; word-break: break-all; }
+  .blog-prose h2, .blog-prose h3 { break-after: avoid; }
+  .blog-prose table, .blog-prose figure, .blog-callout { break-inside: avoid; }
+  .faq-panel { grid-template-rows: 1fr !important; }
+  .faq-panel > div { visibility: visible !important; }
+  .faq-chev { display: none; }
+  body { background: #fff; }
+}

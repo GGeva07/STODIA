@@ -1,5 +1,5 @@
 /** Documento oficial tamaño Carta (docDir/docNotif/docEstado/docContrato/docNoAdeudo del prototipo): abre la vista previa de impresión. */
-import { B, runPrint, type PBlock } from '../finanzas/print';
+import { B, runPrint, type PBlock, type PDoc } from '../finanzas/print';
 
 export type Block =
   | { t: 'kv'; rows: [string, string][] }
@@ -17,9 +17,14 @@ function block(b: Block): PBlock {
   return B.table(b.head, b.rows, widths, aligns);
 }
 
+/** Documento Carta a partir de bloques simples (file = nombre del PDF descargable). */
+export function cartaDoc(pages: Page[], sign: string[] = [], name = 'Documento', file?: string, folioTipo?: string): PDoc {
+  return { kind: 'carta', name, format: 'Carta 8.5 × 11 in', sign, file, folioTipo, pages: pages.map(p => ({ title: p.title, sub: p.sub, blocks: p.blocks.map(block) })) };
+}
+
 /** key = botón que muestra «Generando…» (usePrintBusy); name = título del documento en la vista previa. */
-export function printCarta(pages: Page[], sign: string[] = [], name = 'Documento', key = 'print') {
-  runPrint(key, { kind: 'carta', name, format: 'Carta 8.5 × 11 in', sign, pages: pages.map(p => ({ title: p.title, sub: p.sub, blocks: p.blocks.map(block) })) });
+export function printCarta(pages: Page[], sign: string[] = [], name = 'Documento', key = 'print', file?: string) {
+  runPrint(key, cartaDoc(pages, sign, name, file));
 }
 
 /** Descarga CSV (UTF-8 con BOM, abre directo en Excel). */

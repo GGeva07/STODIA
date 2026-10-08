@@ -14,5 +14,5 @@
     "strict": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "vite.config.ts", "tailwind.config.ts"]
+  "include": ["src", "vite.config.ts", "vite-seo.d.mts", "vite-blog.d.mts", "tailwind.config.ts"]
 }

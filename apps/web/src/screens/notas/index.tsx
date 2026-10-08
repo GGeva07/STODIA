@@ -5,7 +5,7 @@ import SegTabs from '../../components/SegTabs';
 import AsigSelect from '../../components/academico/AsigSelect';
 import { useToast } from '../../components/system/UiProvider';
 import { errMsg } from '../../components/finanzas/fin';
-import { runPrint, usePrintBusy } from '../../components/finanzas/print';
+import { descargarPdf, runPrint, usePrintBusy } from '../../components/finanzas/print';
 import { docBoletines, docSabana } from '../../components/academico/printDocs';
 import { pill, type PillTone } from '../../components/system/styles';
 
@@ -113,7 +113,15 @@ export default function Screen() {
 
   const filas = () => m.rows.map((r, i) => ({ nombre: r.nombre, g: grades[i], prom: calcs[i].prom, fin: calcs[i].fin, L: calcs[i].L, base: calcs[i].base }));
   const printSabana = () => { setMenu(false); runPrint('sabana', docSabana(m, filas())); };
-  const printBoletines = () => { setMenu(false); runPrint('boletines', docBoletines(m, filas())); };
+  const printBoletines = () => { setMenu(false); runPrint('boletines', docBoletines(m, filas(), pendCells > 0)); };
+  const generarBoletines = async () => {
+    if (pendCells) toast(`Hay ${pendCells} celdas sin capturar: el boletín se generará como borrador`, 'warn');
+    try {
+      if (!pendCells) toast('Generando boletines…', 'info');
+      await descargarPdf(docBoletines(m, filas(), pendCells > 0));
+      if (!pendCells) toast('Boletines PDF generados con folio de verificación', 'ok');
+    } catch (e) { toast(errMsg(e), 'bad'); }
+  };
   const pbS = pb('sabana', 'Sábana del Grado', 'ph ph-table'), pbB = pb('boletines', 'Boletines Individuales', 'ph ph-files');
 
   const th = 'border-b border-slate-200 px-2.5 py-1.5 text-right';
@@ -137,7 +145,7 @@ export default function Screen() {
               </div>
             )}
           </div>
-          <button onClick={() => toast(pendCells ? `Hay ${pendCells} celdas sin capturar: el boletín se generará como borrador` : 'Boletines PDF firmados digitalmente generados', pendCells ? 'warn' : 'ok')} className="flex h-[34px] items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-[13px] font-medium hover:bg-slate-100"><i className="ph ph-file-pdf" />Generar boletines</button>
+          <button onClick={generarBoletines} className="flex h-[34px] items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-[13px] font-medium hover:bg-slate-100"><i className="ph ph-file-pdf" />Generar boletines</button>
         </div>
       </div>
 

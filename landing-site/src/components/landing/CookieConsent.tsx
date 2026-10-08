@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LEGAL_ROUTES, absUrl } from '../../lib/site';
+import { Link } from 'react-router-dom';
+import { LEGAL_ROUTES } from '../../lib/site';
 
 export const CONSENT_KEY = 'stodia.cookie-consent';
 export const CONSENT_VERSION = 1;
 export const CONSENT_EVENT = 'stodia:cookie-consent';
-const OPEN_EVENT = 'stodia:cookie-prefs';
+const OPEN_EVENT = 'stodia:open-cookie-preferences';
+const OPEN_EVENT_LEGACY = 'stodia:cookie-prefs';
 export interface Consent { v: number; date: string; analytics: boolean; marketing: boolean }
 
 export function getConsent(): Consent | null {
@@ -45,7 +47,8 @@ export default function CookieConsent() {
       setVisible(true);
     };
     window.addEventListener(OPEN_EVENT, open);
-    return () => window.removeEventListener(OPEN_EVENT, open);
+    window.addEventListener(OPEN_EVENT_LEGACY, open);
+    return () => { window.removeEventListener(OPEN_EVENT, open); window.removeEventListener(OPEN_EVENT_LEGACY, open); };
   }, []);
   const close = useCallback(() => { setVisible(false); setConfig(false); trigger.current?.focus?.(); trigger.current = null; }, []);
   const decide = (a: boolean, m: boolean) => { saveConsent(a, m); close(); };
@@ -70,7 +73,7 @@ export default function CookieConsent() {
   const equal = 'btn !min-h-[44px] !px-5 !py-2.5 !text-sm bg-ink text-white hover:bg-slate-800 flex-1 sm:flex-none';
   return <div ref={root} className="cc-root fixed inset-x-0 bottom-0 z-[60] p-3 sm:p-5" role="dialog" aria-modal={config} aria-labelledby="cc-title" aria-describedby="cc-desc"><div className="mx-auto max-w-3xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl shadow-slate-900/25 sm:p-6">
     <h2 id="cc-title" data-cc-title tabIndex={-1} className="text-base font-bold text-ink outline-none"><i className="ph-fill ph-cookie mr-1.5 text-amber-600" aria-hidden="true" />Tu privacidad</h2>
-    <p id="cc-desc" className="mt-1.5 text-sm leading-relaxed text-slate-700">Usamos cookies esenciales para que el sitio funcione. Las de analítica y marketing son opcionales y están desactivadas hasta que las aceptes. Hoy esta página no carga ninguna herramienta de terceros. Más información en la <a href={absUrl(LEGAL_ROUTES.cookies)} className="font-semibold text-accent underline underline-offset-2">política de cookies</a>.</p>
+    <p id="cc-desc" className="mt-1.5 text-sm leading-relaxed text-slate-700">Usamos cookies esenciales para que el sitio funcione. Las de analítica y marketing son opcionales y están desactivadas hasta que las aceptes. Hoy esta página no carga ninguna herramienta de terceros. Más información en la <Link to={LEGAL_ROUTES.cookies} className="font-semibold text-accent underline underline-offset-2">política de cookies</Link>.</p>
     {config && <div className="mt-4 space-y-2.5"><Switch id="cc-ess" checked disabled label="Esenciales" desc="Necesarias para la seguridad, la sesión y recordar esta preferencia. Siempre activas." /><Switch id="cc-ana" checked={analytics} onChange={setAnalytics} label="Analítica" desc="Medir de forma agregada cómo se usa el sitio para mejorarlo. Actualmente no hay ninguna activa." /><Switch id="cc-mkt" checked={marketing} onChange={setMarketing} label="Marketing" desc="Personalizar y medir campañas. Actualmente no hay ninguna activa." /></div>}
     <div className="mt-5 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center"><button type="button" className={equal} onClick={() => decide(true, true)}>Aceptar todo</button><button type="button" className={equal} onClick={() => decide(false, false)}>Rechazar no esenciales</button>{config ? <button type="button" className="btn btn-ghost !min-h-[44px] !px-5 !py-2.5 !text-sm sm:ml-auto" onClick={() => decide(analytics, marketing)}>Guardar selección</button> : <button type="button" className="btn btn-ghost !min-h-[44px] !px-5 !py-2.5 !text-sm sm:ml-auto" onClick={() => { trigger.current = document.activeElement as HTMLElement; setConfig(true); }}>Configurar</button>}</div>
   </div></div>;

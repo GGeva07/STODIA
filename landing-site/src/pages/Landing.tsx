@@ -1,4 +1,6 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
+import Seo, { DEFAULT_DESC, DEFAULT_TITLE } from '../components/Seo';
 import Community from '../components/landing/Community';
 import Faq from '../components/landing/Faq';
 import Features from '../components/landing/Features';
@@ -15,7 +17,15 @@ export default function Landing() {
   const root = useRef<HTMLDivElement>(null);
   const progress = useRef<HTMLDivElement>(null);
   const scrolled = useLandingMotion(root, progress);
+  const { hash } = useLocation();
+  // Enlaces entrantes tipo /#demo (desde el blog o el pie): la landing es lazy, así que se desplaza al ancla al montar.
+  useEffect(() => {
+    if (!hash) return;
+    const t = window.setTimeout(() => document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView(), 60);
+    return () => window.clearTimeout(t);
+  }, [hash]);
   return <div ref={root} className={`landing ${canAnimate() ? 'motion' : ''}`}>
+    <Seo title={DEFAULT_TITLE} description={DEFAULT_DESC} path="/" landing />
     <a href="#contenido" className="skip-link">Saltar al contenido</a>
     <div ref={progress} className="fixed inset-x-0 top-0 z-[70] h-[3px] origin-left scale-x-0 bg-gradient-to-r from-accent via-sky-400 to-yellow-400" aria-hidden="true" />
     <Header scrolled={scrolled} />
