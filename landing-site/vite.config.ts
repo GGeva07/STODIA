@@ -10,15 +10,15 @@ function landingMetadata(siteUrl: string): Plugin {
     name: 'landing-metadata',
     transformIndexHtml(html) {
       return html
-        .replaceAll('__SITE_URL__', siteUrl.replace(/\/+$/, ''))
-        .replaceAll('__SITE_EMAIL__', SITE_EMAIL)
-        .replaceAll('__BRAND_URL__', BRAND_URL);
+        .replace(/__SITE_URL__/g, siteUrl.replace(/\/+$/, ''))
+        .replace(/__SITE_EMAIL__/g, SITE_EMAIL)
+        .replace(/__BRAND_URL__/g, BRAND_URL);
     },
   };
 }
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), 'VITE_');
+  const env = loadEnv(mode, '.', 'VITE_');
   const siteUrl = (env.VITE_SITE_URL || DEFAULT_SITE_URL).replace(/\/+$/, '');
   return {
     plugins: [react(), landingMetadata(siteUrl)],
