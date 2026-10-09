@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { randomInt } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import type { AcadCatalogos, Rol } from '@stodia/shared';
 import { prisma } from '../../db';
@@ -23,6 +24,9 @@ const DEFS: Record<string, Def> = {
   conceptosBeca: { uniq: [['nombre']], fields: [{ k: 'nombre', l: 'Concepto', req: 1 }] },
   rutas: { uniq: [['nombre'], ['ficha']], fields: [{ k: 'nombre', l: 'Ruta', req: 1 }, { k: 'sectores', l: 'Sectores' }, { k: 'chofer', l: 'Chofer', req: 1 }, { k: 'ficha', l: 'Ficha', req: 1, upper: 1 }, { k: 'asientos', l: 'Asientos', t: 'int', req: 1 }, { k: 'tarifa', l: 'Tarifa', t: 'int', req: 1 }] },
 };
+const ALFA = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+/** Contraseña temporal aleatoria (CSPRNG, sin caracteres ambiguos). */
+const clave = () => Array.from({ length: 10 }, () => ALFA[randomInt(ALFA.length)]).join('');
 const norm = (s: unknown) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const parse = (r: { data: string; estado: string }): Row => ({ ...JSON.parse(r.data), estado: r.estado });
 
@@ -31,11 +35,30 @@ const plugin: FastifyPluginAsync = async app => {
   const wr = { onRequest: [app.authenticate, app.requireRole('Super Admin')] };
 
   const list = async (tipo: string) => (await prisma.catalogo.findMany({ where: { tipo }, orderBy: { id: 'asc' } })).map(parse);
-  const all = async (): Promise<AcadCatalogos> => Object.fromEntries(await Promise.all(Object.keys(DEFS).map(async t => [t, await list(t)])));
+  /**
+   * «Inscritos» de una sección = alumnos reales (no Retirados) con su grado, letra y tanda: se CALCULA al leer, ya no se guarda un contador.
+   * (grado y tanda se enlazan por nombre hasta la Fase 2; '1ro' existe en Primaria y Secundaria, por eso se cruza también con la tanda.)
+   */
+  const conInscritos = async (secs: Row[], grados: Row[], tandas: Row[]): Promise<Row[]> => {
+    const g = await prisma.alumno.groupBy({ by: ['grado', 'sec', 'tanda'], where: { estado: { not: 'Retirado' } }, _count: { _all: true } });
+    return secs.map(s => {
+      const gn = grados.find(x => x.id === s.grado)?.grado, tn = tandas.find(x => x.id === s.tanda)?.nombre;
+      return { ...s, insc: g.filter(x => x.grado === gn && x.sec === s.seccion && x.tanda === tn).reduce((a, x) => a + x._count._all, 0) };
+    });
+  };
+  const all = async (): Promise<AcadCatalogos> => {
+    const out: AcadCatalogos = Object.fromEntries(await Promise.all(Object.keys(DEFS).map(async t => [t, await list(t)])));
+    out.secciones = await conInscritos(out.secciones, out.grados, out.tandas);
+    return out;
+  };
   const save = (tipo: string, r: Row) => prisma.catalogo.upsert({ where: { id: `${tipo}:${r.id}` }, update: { data: JSON.stringify(r), estado: r.estado }, create: { id: `${tipo}:${r.id}`, tipo, data: JSON.stringify(r), estado: r.estado } });
 
   app.get('/', rd, all);
-  app.get<{ Params: { tipo: string } }>('/:tipo', rd, async (req, reply) => (DEFS[req.params.tipo] ? list(req.params.tipo) : reply.code(404).send({ error: 'Catálogo desconocido' })));
+  app.get<{ Params: { tipo: string } }>('/:tipo', rd, async (req, reply) => {
+    const { tipo } = req.params;
+    if (!DEFS[tipo]) return reply.code(404).send({ error: 'Catálogo desconocido' });
+    return tipo === 'secciones' ? conInscritos(await list('secciones'), await list('grados'), await list('tandas')) : list(tipo);
+  });
 
   /** Valida y normaliza `b` contra la definición; devuelve el primer error en español o el registro limpio. */
   const validate = async (tipo: string, b: Record<string, unknown>, id: string | null) => {
@@ -78,11 +101,10 @@ const plugin: FastifyPluginAsync = async app => {
     const r = await validate(tipo, body, id);
     if (r.err) return reply.code(422).send({ error: r.err });
     const { pwd } = r;
-    if (DEFS[tipo].user && !id && !pwd) return reply.code(422).send({ error: 'Contraseña: requerida para crear el usuario' });
     if (pwd && pwd.length < 8) return reply.code(422).send({ error: 'Contraseña: mínimo 8 caracteres' });
     const row: Row = { ...(r.v as Row), id: id ?? tipo[0] + Date.now().toString(36) };
     if (DEFS[tipo].user) row.password = pwd || r.prev?.password ? 'set' : ''; // marca; el hash vive solo en User
-    if (tipo === 'secciones' && !id) row.insc = 0;
+    if (tipo === 'secciones') delete row.insc; // el contador no se guarda: se calcula
     await save(tipo, row);
     await audit(req.user, id ? 'Update' : 'Insert', { tabla: 'Catalogos/' + tipo, id: row.id, prev: r.prev ? JSON.stringify({ ...r.prev, password: undefined }).slice(0, 200) : undefined, next: JSON.stringify({ ...row, password: undefined }).slice(0, 200), ip: req.ip });
     if (DEFS[tipo].user && pwd) {
@@ -103,6 +125,37 @@ const plugin: FastifyPluginAsync = async app => {
       const n = cat[t].filter(r => (f.t === 'multi' ? ((r[f.k] as string[]) ?? []).includes(id) : r[f.k] === id)).length;
       if (n) out.push(`${n} en ${t} (${f.l.toLowerCase()})`);
     }
+    return [...out, ...(await depsEntidades(tipo, id, cat))];
+  };
+
+  /**
+   * Dependencias en TABLAS DE ENTIDAD (alumnos, notas, horarios, recibos...). Hasta la Fase 2 esas referencias al catálogo son lógicas
+   * (texto/id sin FK), así que el API las comprueba aquí: con historial el catálogo se DESACTIVA, no se elimina.
+   */
+  const depsEntidades = async (tipo: string, id: string, cat: AcadCatalogos): Promise<string[]> => {
+    const row = cat[tipo]?.find(r => r.id === id);
+    const out: string[] = [];
+    const add = (n: number, txt: string) => { if (n) out.push(`${n} ${txt}`); };
+    if (!row) return out;
+    if (tipo === 'grados') add(await prisma.alumno.count({ where: { grado: String(row.grado) } }), 'alumno(s) (grado)');
+    if (tipo === 'tandas') add(await prisma.alumno.count({ where: { tanda: String(row.nombre) } }), 'alumno(s) (tanda)');
+    if (tipo === 'secciones') {
+      const g = cat.grados.find(x => x.id === row.grado)?.grado, t = cat.tandas.find(x => x.id === row.tanda)?.nombre;
+      add(await prisma.alumno.count({ where: { grado: String(g), sec: String(row.seccion), tanda: String(t) } }), 'alumno(s) en la sección');
+      add(await prisma.acadRoster.count({ where: { seccion: id } }), 'registro(s) de nómina');
+      add(await prisma.acadAsignacion.count({ where: { seccionId: id } }), 'asignación(es) docente');
+      add(await prisma.acadHorario.count({ where: { seccion: id } }), 'bloque(s) de horario');
+    }
+    if (tipo === 'materias') {
+      add(await prisma.acadNota.count({ where: { materia: id } }), 'nota(s)');
+      add(await prisma.acadAsignacion.count({ where: { materiaId: id } }), 'asignación(es) docente');
+      add(await prisma.acadHorario.count({ where: { materia: id } }), 'bloque(s) de horario');
+    }
+    if (tipo === 'docentes') add(await prisma.acadAsignacion.count({ where: { docenteId: id } }), 'asignación(es) docente');
+    if (tipo === 'aulas') add(await prisma.acadAsignacion.count({ where: { aulas: { contains: `"${id}"` } } }), 'asignación(es) con esta aula');
+    if (tipo === 'cajas') add(await prisma.finRecibo.count({ where: { cajaId: id } }), 'recibo(s) cobrados en esta caja');
+    if (tipo === 'rutas') add(await prisma.persServicio.count({ where: { catKey: `rt:${id}` } }), 'servicio(s) de transporte');
+    if (tipo === 'conceptosBeca') add(await prisma.finBeca.count({ where: { conceptos: { contains: String(row.nombre) } } }), 'beca(s) con este concepto');
     return out;
   };
 
@@ -114,6 +167,55 @@ const plugin: FastifyPluginAsync = async app => {
     await prisma.catalogo.deleteMany({ where: { id: `${tipo}:${id}` } });
     await audit(req.user, 'Delete', { tabla: 'Catalogos/' + tipo, id, ip: req.ip });
     return { ok: true };
+  });
+
+  // ---- Acceso (usuario de login) de docentes/empleados: contraseña temporal aleatoria, cambio obligatorio en el primer ingreso ----
+  type Acceso = { tipo: string; id: string; nombre: string; usuario: string; rol: string; password: string; creado: boolean };
+  /** Crea (o restablece, si el registro ya tiene acceso) el usuario del registro. Devuelve la clave en claro UNA vez; solo se guarda el hash. */
+  const darAcceso = async (tipo: string, row: Row, req: FastifyRequest): Promise<Acceso | { err: string }> => {
+    const usuario = String(row.usuario ?? '').trim(), rol = String(row.rol ?? '');
+    if (!usuario) return { err: 'El registro no tiene usuario' };
+    if (!ROLES.includes(rol as Rol)) return { err: 'Rol inválido' };
+    if (!/^Activ/.test(row.estado)) return { err: 'El registro está inactivo' };
+    const ex = await prisma.user.findUnique({ where: { usuario } }), tenia = !!row.password;
+    if (ex && !tenia) return { err: `El usuario «${usuario}» ya pertenece a otra cuenta; cámbialo antes de crear el acceso` };
+    const password = clave(), passwordHash = await bcrypt.hash(password, 10);
+    if (ex) await prisma.user.update({ where: { id: ex.id }, data: { passwordHash, nombre: String(row.nombre), rol, estado: 'Activo', mustChange: true } });
+    else await prisma.user.create({ data: { usuario, nombre: String(row.nombre), rol, passwordHash, mustChange: true } });
+    await save(tipo, { ...row, password: 'set' });
+    await audit(req.user, ex ? 'Update' : 'Insert', { tabla: 'Usuarios/' + tipo, id: usuario, prev: ex ? '••••' : '—', next: ex ? 'Contraseña temporal restablecida' : 'Acceso creado (contraseña temporal)', ip: req.ip });
+    return { tipo, id: row.id, nombre: String(row.nombre), usuario, rol, password, creado: !ex };
+  };
+  const conUsuario = (tipo: string) => !!DEFS[tipo]?.user;
+
+  app.post<{ Params: { tipo: string; id: string } }>('/:tipo/:id/acceso', wr, async (req, reply) => {
+    const { tipo, id } = req.params;
+    if (!conUsuario(tipo)) return reply.code(404).send({ error: 'Catálogo desconocido' });
+    const cur = (await list(tipo)).find(r => r.id === id);
+    if (!cur) return reply.code(404).send({ error: 'Registro no encontrado' });
+    const r = await darAcceso(tipo, cur, req);
+    return 'err' in r ? reply.code(409).send({ error: r.err }) : r;
+  });
+
+  /** Docentes/empleados activos sin acceso: sin marca de contraseña y sin ninguna cuenta con ese usuario (las existentes nunca se tocan). */
+  const pendientes = async () => {
+    const users = new Set((await prisma.user.findMany({ select: { usuario: true } })).map(u => u.usuario)), out: { tipo: string; row: Row }[] = [];
+    for (const tipo of ['docentes', 'staff']) for (const row of await list(tipo)) {
+      const u = String(row.usuario ?? '').trim();
+      if (!row.password && /^Activ/.test(row.estado) && u && !users.has(u)) { out.push({ tipo, row }); users.add(u); }
+    }
+    return out;
+  };
+  app.get('/acceso/pendientes', rd, async () => ({ n: (await pendientes()).length }));
+
+  /** Crea el acceso de TODOS los docentes/empleados activos que aún no lo tienen, con contraseña temporal aleatoria. */
+  app.post('/acceso/pendientes', wr, async req => {
+    const creados: Acceso[] = [], omitidos: { nombre: string; motivo: string }[] = [];
+    for (const { tipo, row } of await pendientes()) {
+      const r = await darAcceso(tipo, row, req);
+      if ('err' in r) omitidos.push({ nombre: String(row.nombre), motivo: r.err }); else creados.push(r);
+    }
+    return { creados, omitidos };
   });
 
   app.post<{ Params: { tipo: string; id: string } }>('/:tipo/:id/desactivar', wr, async (req, reply) => {

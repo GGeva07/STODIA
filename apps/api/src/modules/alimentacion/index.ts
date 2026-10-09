@@ -6,11 +6,13 @@ import { DIAS_SEMANA, catalogosAli, ensureMenuSemanal, semanaDe } from '../../li
 import { partesEnZona, zonaHoraria } from '../../lib/cxc';
 
 type Row = Awaited<ReturnType<typeof prisma.aliPlan.findMany>>[number];
-const toDto = (p: Row): AliPlanDto => ({
+/** `inscritos` = carnets de comedor con este plan (ComCarnet.aliPlanId): se calcula, no se guarda. */
+const toDto = (p: Row, inscritos: number): AliPlanDto => ({
   id: p.id, name: p.name, modelo: p.modelo as 'sub' | 'wal', meals: JSON.parse(p.meals), precio: p.precio == null ? '' : String(p.precio),
   freq: p.freq, dias: p.dias, mora: p.mora ? 'si' : 'no', recarga: p.recarga == null ? '' : String(p.recarga), limite: p.limite == null ? '' : String(p.limite),
-  canal: p.canal, saldo: p.saldo, diets: JSON.parse(p.diets), estado: p.estado as 'Activo' | 'Inactivo', inscritos: p.inscritos,
+  canal: p.canal, saldo: p.saldo, diets: JSON.parse(p.diets), estado: p.estado as 'Activo' | 'Inactivo', inscritos,
 });
+const inscritosPorPlan = async () => new Map((await prisma.comCarnet.groupBy({ by: ['aliPlanId'], where: { aliPlanId: { not: null } }, _count: { _all: true } })).map(g => [g.aliPlanId!, g._count._all]));
 const num = (v: string) => (v === '' || v == null ? null : Number(v));
 
 function validate(f: AliPlanInput, others: Row[]): string | null {
@@ -34,8 +36,8 @@ const plugin: FastifyPluginAsync = async app => {
 
   app.get('/', read, async (): Promise<AliData> => {
     await ensureMenuSemanal();
-    const [planes, menu, alumnos, catalogos, tz] = await Promise.all([
-      prisma.aliPlan.findMany({ orderBy: { id: 'asc' } }), prisma.aliMenu.findMany({ orderBy: { orden: 'asc' } }), prisma.alumno.findMany({ select: { alg: true } }),
+    const [planes, insc, menu, alumnos, catalogos, tz] = await Promise.all([
+      prisma.aliPlan.findMany({ orderBy: { id: 'asc' } }), inscritosPorPlan(), prisma.aliMenu.findMany({ orderBy: { orden: 'asc' } }), prisma.alumno.findMany({ select: { alg: true } }),
       catalogosAli(), zonaHoraria(),
     ]);
     // La semana se calcula de la fecha real (zona del colegio): lunes a viernes; el menú es la plantilla semanal vigente.
@@ -48,7 +50,7 @@ const plugin: FastifyPluginAsync = async app => {
       const nombre = d.dia.replace(/\s*\d+\s*$/, '') || DIAS_SEMANA[d.orden] || d.dia;
       return { dia: sem.diaMes[d.orden] ? `${nombre} ${sem.diaMes[d.orden]}` : nombre, plato: d.plato, algs, afectados };
     });
-    return { planes: planes.map(toDto), menu: m, alumnosConAlergia: conAlergia.length, semana: { desde: sem.desde, hasta: sem.hasta, label: sem.label }, catalogos };
+    return { planes: planes.map(p => toDto(p, insc.get(p.id) ?? 0)), menu: m, alumnosConAlergia: conAlergia.length, semana: { desde: sem.desde, hasta: sem.hasta, label: sem.label }, catalogos };
   });
 
   app.post<{ Body: AliPlanInput }>('/planes', write, async (req, reply) => {
@@ -56,7 +58,7 @@ const plugin: FastifyPluginAsync = async app => {
     if (err) return reply.code(400).send({ error: err });
     const last = (await prisma.aliPlan.findMany({ select: { id: true } })).map(p => Number(p.id.replace('ALI-', '')) || 0);
     const id = 'ALI-' + String(Math.max(0, ...last) + 1).padStart(3, '0');
-    return toDto(await prisma.aliPlan.create({ data: { id, ...data(req.body) } }));
+    return toDto(await prisma.aliPlan.create({ data: { id, ...data(req.body) } }), 0);
   });
 
   app.put<{ Params: { id: string }; Body: AliPlanInput }>('/planes/:id', write, async (req, reply) => {
@@ -64,13 +66,14 @@ const plugin: FastifyPluginAsync = async app => {
     if (!(await prisma.aliPlan.findUnique({ where: { id } }))) return reply.code(404).send({ error: 'Plan no encontrado' });
     const err = validate(req.body, await prisma.aliPlan.findMany({ where: { id: { not: id } } }));
     if (err) return reply.code(400).send({ error: err });
-    return toDto(await prisma.aliPlan.update({ where: { id }, data: data(req.body) }));
+    return toDto(await prisma.aliPlan.update({ where: { id }, data: data(req.body) }), (await inscritosPorPlan()).get(id) ?? 0);
   });
 
   app.delete<{ Params: { id: string } }>('/planes/:id', write, async (req, reply) => {
     const p = await prisma.aliPlan.findUnique({ where: { id: req.params.id } });
     if (!p) return reply.code(404).send({ error: 'Plan no encontrado' });
-    if (p.inscritos > 0) return reply.code(409).send({ error: `No se puede eliminar: ${p.inscritos} alumnos inscritos. Márcalo Inactivo para cerrar nuevas inscripciones.` });
+    const insc = await prisma.comCarnet.count({ where: { aliPlanId: p.id } });
+    if (insc > 0) return reply.code(409).send({ error: `No se puede eliminar: ${insc} alumnos inscritos. Márcalo Inactivo para cerrar nuevas inscripciones.` });
     await prisma.aliPlan.delete({ where: { id: p.id } });
     return { ok: true };
   });

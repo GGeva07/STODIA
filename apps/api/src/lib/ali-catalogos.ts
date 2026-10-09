@@ -30,6 +30,21 @@ export async function catalogosAli(): Promise<Record<AliTipo, string[]>> {
   for (const r of rows) out[r.tipo as AliTipo].push(String(JSON.parse(r.data).nombre));
   return out;
 }
+/**
+ * Las banderas de AliPlan.meals / AliPlan.diets son POSICIONALES respecto de los catálogos comidas y dietas (orden por id). Esta función las
+ * deja con EXACTAMENTE la longitud del catálogo vigente (completa con false o recorta): sin esto un plan desalineado marca dietas equivocadas.
+ * Idempotente; la usan los seeds y scripts/fk-reparar.ts.
+ */
+export async function alinearPlanesAli(): Promise<number> {
+  const [cat, planes] = await Promise.all([catalogosAli(), prisma.aliPlan.findMany()]);
+  const ajusta = (json: string, n: number) => { const a = JSON.parse(json) as boolean[]; return Array.from({ length: n }, (_, i) => !!a[i]); };
+  let cambios = 0;
+  for (const p of planes) {
+    const meals = JSON.stringify(ajusta(p.meals, cat.comidas.length)), diets = JSON.stringify(ajusta(p.diets, cat.dietas.length));
+    if (meals !== p.meals || diets !== p.diets) { await prisma.aliPlan.update({ where: { id: p.id }, data: { meals, diets } }); cambios++; }
+  }
+  return cambios;
+}
 /** Garantiza las 5 filas del menú semanal (Lunes a Viernes); el plato queda vacío hasta que el encargado lo defina. */
 export async function ensureMenuSemanal() {
   if ((await prisma.aliMenu.count()) >= DIAS_SEMANA.length) return;

@@ -10,7 +10,7 @@ export interface CobroPago { m: string; r: string; amt: number }
 export interface ReciboFin {
   id: string; ncf: string; tutor: string; hora: string; monto: number; est: 'Activo' | 'Anulado';
   metodo: string; abono: boolean; saldo: number; nc?: string; change: number;
-  items: { con: string; monto: number }[]; pays: CobroPago[];
+  items: { con: string; monto: number; cobroItemId?: string }[]; pays: CobroPago[];
 }
 export interface CobroHijo { id: string; kid: string; nombre: string; corto: string; grado: string; sec: string; code: string }
 export interface CobroCuenta { tutor: string; cedula: string; email?: string; hijos: CobroHijo[]; becas: string[]; items: CobroItem[]; recibos: ReciboFin[] }
@@ -30,6 +30,8 @@ export interface BecaFin {
   conceptos: string; exp: string; estado: 'Aprobada' | 'Pendiente' | 'Revocada'; aprob: string;
 }
 export interface BecaNueva {
+  /** Alumno beneficiario (Alumno.id); si falta se resuelve por la etiqueta `est` (debe ser unica). */
+  alumnoId?: string;
   est: string; tipo: string; modo: 'pct' | 'fijo'; valor: string; conceptos: string[]; exp: string; periodo: string;
 }
 

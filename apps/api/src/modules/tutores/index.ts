@@ -1,17 +1,17 @@
 import { randomInt } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
 import bcrypt from 'bcryptjs';
-import type { ExpFicha, TutorAccesoResp, TutorAlumnoOpt, TutorFicha, TutorHijo, TutorRow, TutoresResp } from '@stodia/shared';
+import type { TutorAccesoResp, TutorAlumnoOpt, TutorFicha, TutorHijo, TutorRow, TutoresResp } from '@stodia/shared';
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
-import { digits, kidOf } from '../../lib/personas';
+import { digits } from '../../lib/personas';
 import { hoyISO, round2, saldoCuenta, zonaHoraria } from '../../lib/cxc';
 import { canalesGet, correoListo, proveedorCorreo } from '../../lib/canales';
 import { cfgGet } from '../../lib/sisconfig';
 import { errorTutor, fmtCed, fmtTel } from '../../lib/tutor-datos';
 
 /**
- * Pantalla «Tutores» (padres y tutores legales). Única fuente: tablas Tutor / Alumno / PersExpediente.
+ * Pantalla «Tutores» (padres y tutores legales). Única fuente: tablas Tutor / Alumno (tutorId = financiero, tutorLegalId = legal).
  *  - Los tutores nacen en Inscripción (o aquí con «Nuevo tutor»); aquí se edita su contacto, se vinculan estudiantes y se gestiona el acceso al Portal Tutor.
  *  - Lectura y escritura: Super Admin, Director Académico y Cajero (las mismas pantallas que ACCESS). Todo cambio queda en Auditoría.
  */
@@ -20,16 +20,13 @@ const norm = (s: unknown) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g
 const nombreDe = (a: { nombres: string; apellidos: string }) => `${a.nombres} ${a.apellidos}`;
 
 
-type Link = { id: string; code: string; nombres: string; apellidos: string; grado: string; sec: string; tanda: string; estado: string; tutorId: string | null };
+type Link = { id: string; code: string; nombres: string; apellidos: string; grado: string; sec: string; tanda: string; estado: string; tutorId: string };
 
-/** Vínculos tutor→alumno: financiero (Alumno.tutorId) y legal (PersExpediente.tutorLegalId). */
+/** Vínculos tutor→alumno: financiero (Alumno.tutorId) y legal (Alumno.tutorLegalId). */
 async function vinculos() {
-  const [als, exps] = await Promise.all([
-    prisma.alumno.findMany({ select: { id: true, code: true, nombres: true, apellidos: true, grado: true, sec: true, tanda: true, estado: true, tutorId: true } }),
-    prisma.persExpediente.findMany({ select: { alumnoId: true, data: true } }),
-  ]);
+  const als = await prisma.alumno.findMany({ select: { id: true, code: true, nombres: true, apellidos: true, grado: true, sec: true, tanda: true, estado: true, tutorId: true, tutorLegalId: true } });
   const legal = new Map<string, string>();
-  for (const e of exps) { try { const t = (JSON.parse(e.data) as ExpFicha).tutorLegalId; if (t) legal.set(e.alumnoId, t); } catch { /* ficha corrupta: se ignora */ } }
+  for (const a of als) if (a.tutorLegalId) legal.set(a.id, a.tutorLegalId);
   const hijosDe = new Map<string, { a: Link; fin: boolean; leg: boolean }[]>();
   const push = (tid: string, a: Link, k: 'fin' | 'leg') => {
     const arr = hijosDe.get(tid) ?? [];
@@ -41,8 +38,9 @@ async function vinculos() {
   return { als, legal, hijosDe };
 }
 
-const toRow = (t: { id: string; nombre: string; cedula: string; parentesco: string; tipo: string; tel: string; email: string | null; rnc: string | null; usuario: string | null; estado: string }, hs: { a: Link }[] = []): TutorRow => ({
-  id: t.id, nombre: t.nombre, cedula: t.cedula, parentesco: t.parentesco, tipo: t.tipo, tel: t.tel, email: t.email ?? '', rnc: t.rnc ?? '', usuario: t.usuario ?? '', estado: t.estado,
+type TutorDb = { id: string; nombre: string; cedula: string; parentesco: string; tipo: string; tel: string; email: string | null; rnc: string | null; userId: string | null; user?: { usuario: string } | null; estado: string };
+const toRow = (t: TutorDb, hs: { a: Link }[] = []): TutorRow => ({
+  id: t.id, nombre: t.nombre, cedula: fmtCed(t.cedula), parentesco: t.parentesco, tipo: t.tipo, tel: t.tel, email: t.email ?? '', rnc: t.rnc ?? '', usuario: t.user?.usuario ?? '', estado: t.estado,
   alumnos: hs.map(h => ({ id: h.a.id, nombre: nombreDe(h.a) })).sort((p, q) => p.nombre.localeCompare(q.nombre, 'es')),
 });
 
@@ -55,7 +53,7 @@ const plugin: FastifyPluginAsync = async app => {
   app.get<{ Querystring: { q?: string; page?: string; size?: string; conHijos?: string } }>('/', g, async (req): Promise<TutoresResp> => {
     const { q = '', conHijos } = req.query;
     const size = Math.min(200, Math.max(1, Number(req.query.size) || 50)), nq = norm(q.trim()), nd = digits(q);
-    const [ts, { hijosDe }] = await Promise.all([prisma.tutor.findMany({ orderBy: { nombre: 'asc' } }), vinculos()]);
+    const [ts, { hijosDe }] = await Promise.all([prisma.tutor.findMany({ orderBy: { nombre: 'asc' }, include: { user: { select: { usuario: true } } } }), vinculos()]);
     const all = ts.map(t => toRow(t, hijosDe.get(t.id) ?? []));
     const rows = all.filter(r => {
       if (conHijos === '1' && !(hijosDe.get(r.id) ?? []).some(h => h.fin)) return false;
@@ -76,18 +74,18 @@ const plugin: FastifyPluginAsync = async app => {
   });
 
   const ficha = async (id: string): Promise<TutorFicha | null> => {
-    const t = await prisma.tutor.findUnique({ where: { id } });
+    const t = await prisma.tutor.findUnique({ where: { id }, include: { user: { select: { usuario: true, estado: true, mustChange: true } } } });
     if (!t) return null;
     const [{ hijosDe }, tz, cfg] = await Promise.all([vinculos(), zonaHoraria(), canalesGet()]);
     const hs = hijosDe.get(id) ?? [];
     const hoy = hoyISO(tz);
-    const items = await prisma.finCobroItem.findMany({ where: { paid: false, kid: { in: hs.filter(h => h.fin).map(h => kidOf(h.a.id)) } }, select: { kid: true, monto: true, vence: true, est: true } });
+    const items = await prisma.finCobroItem.findMany({ where: { paid: false, alumnoId: { in: hs.filter(h => h.fin).map(h => h.a.id) } }, select: { alumnoId: true, monto: true, vence: true, est: true } });
     const hijos: TutorHijo[] = hs.map(h => {
-      const x = saldoCuenta(items.filter(i => i.kid === kidOf(h.a.id)), hoy); // misma regla que Portal, POS y Dashboard (lib/cxc)
+      const x = saldoCuenta(items.filter(i => i.alumnoId === h.a.id), hoy); // misma regla que Portal, POS y Dashboard (lib/cxc)
       return { id: h.a.id, code: h.a.code, nombre: nombreDe(h.a), grado: h.a.grado, sec: h.a.sec, tanda: h.a.tanda, estado: h.a.estado, vinculo: (h.fin && h.leg ? 'Financiero y legal' : h.fin ? 'Financiero' : 'Legal') as TutorHijo['vinculo'], vencido: x.vencido, porVencer: x.porVencer };
     }).sort((p, q) => p.nombre.localeCompare(q.nombre, 'es'));
     const vencido = round2(hijos.reduce((a, h) => a + h.vencido, 0)), porVencer = round2(hijos.reduce((a, h) => a + h.porVencer, 0));
-    const u = t.usuario ? await prisma.user.findUnique({ where: { usuario: t.usuario } }) : null;
+    const u = t.user;
     return {
       ...toRow(t, hs), hijos, saldo: { vencido, porVencer, total: round2(vencido + porVencer) },
       acceso: { usuario: u?.usuario ?? '', estado: !u ? 'Sin acceso' : u.estado === 'Activo' ? 'Activo' : 'Inactivo', cambioPendiente: !!u?.mustChange },
@@ -102,8 +100,8 @@ const plugin: FastifyPluginAsync = async app => {
     const v = { nombre: s('nombre'), cedula: fmtCed(s('cedula')), parentesco: s('parentesco'), tipo: s('tipo'), tel: fmtTel(s('tel')), email: s('email').toLowerCase(), rnc: s('rnc'), estado: ESTADOS.includes(s('estado')) ? s('estado') : 'Activo' };
     const e = errorTutor(v);
     if (e) return { err: e };
-    const dup = (await prisma.tutor.findMany({ select: { id: true, nombre: true, cedula: true } })).find(t => t.id !== id && digits(t.cedula) === digits(v.cedula));
-    if (dup) return { err: `Cédula: ya existe: ${dup.nombre}` };
+    const dup = await prisma.tutor.findUnique({ where: { cedula: digits(v.cedula) }, select: { id: true, nombre: true } });
+    if (dup && dup.id !== id) return { err: `Cédula: ya existe: ${dup.nombre}` };
     const ids = Array.isArray(b.alumnos) ? [...new Set((b.alumnos as unknown[]).map(String))] : [];
     return { v, ids };
   };
@@ -119,8 +117,7 @@ const plugin: FastifyPluginAsync = async app => {
     if (fin) return `${nombreDe(fin.a)} no puede quedar sin tutor financiero: asígnalo primero al tutor que lo recibirá.`;
     const ops = [];
     for (const h of quitar) { // solo vínculo legal: vuelve a su tutor financiero
-      const ex = await prisma.persExpediente.findUnique({ where: { alumnoId: h.a.id } });
-      if (ex) { const f = JSON.parse(ex.data) as ExpFicha; f.tutorLegalId = h.a.tutorId ?? ''; ops.push(prisma.persExpediente.update({ where: { alumnoId: h.a.id }, data: { data: JSON.stringify(f) } })); }
+      ops.push(prisma.alumno.update({ where: { id: h.a.id }, data: { tutorLegalId: h.a.tutorId } }));
       await audit(req.user, 'Update', { tabla: 'Tutores', id: `${t.id}/alumnos`, prev: nombreDe(h.a), next: 'Vínculo legal retirado', ip: req.ip });
     }
     const financiero = t.tipo.includes('Financiero'), academico = t.tipo.includes('cadémico');
@@ -128,13 +125,10 @@ const plugin: FastifyPluginAsync = async app => {
       const a = byId.get(i)!;
       if (financiero) {
         ops.push(prisma.alumno.update({ where: { id: i }, data: { tutorId: t.id } }));
-        ops.push(prisma.finCobroItem.updateMany({ where: { kid: kidOf(i), paid: false }, data: { tutorCed: digits(t.cedula) } }));
+        ops.push(prisma.finCobroItem.updateMany({ where: { alumnoId: i, paid: false }, data: { tutorId: t.id } }));
       }
       if (academico || !financiero) {
-        const ex = await prisma.persExpediente.findUnique({ where: { alumnoId: i } });
-        const f = ex ? (JSON.parse(ex.data) as ExpFicha) : ({} as ExpFicha);
-        f.tutorLegalId = t.id;
-        ops.push(prisma.persExpediente.upsert({ where: { alumnoId: i }, update: { data: JSON.stringify(f) }, create: { alumnoId: i, data: JSON.stringify(f) } }));
+        ops.push(prisma.alumno.update({ where: { id: i }, data: { tutorLegalId: t.id } }));
       }
       await audit(req.user, 'Update', { tabla: 'Tutores', id: `${t.id}/alumnos`, prev: financiero && a.tutorId ? `Tutor ${a.tutorId}` : '—', next: nombreDe(a), ip: req.ip });
     }
@@ -149,15 +143,15 @@ const plugin: FastifyPluginAsync = async app => {
     if (!ids.length) return reply.code(422).send({ error: 'Estudiantes a cargo: campo requerido' });
     const seq = Math.max(0, ...(await prisma.tutor.findMany({ select: { id: true } })).map(t => Number(t.id.replace(/\D/g, '')) || 0));
     const id = 'u' + (seq + 1);
-    const t = await prisma.tutor.create({ data: { id, ...v, email: v.email || null, rnc: v.rnc || null } });
+    const t = await prisma.tutor.create({ data: { id, ...v, cedula: digits(v.cedula), email: v.email || null, rnc: v.rnc || null } });
     const err = await vincular(t, ids, req);
     if (err) { await prisma.tutor.delete({ where: { id } }); return reply.code(422).send({ error: err }); }
-    await audit(req.user, 'Insert', { tabla: 'Tutores', id: t.cedula, prev: '—', next: `${t.nombre} · ${t.tipo}`, ip: req.ip });
+    await audit(req.user, 'Insert', { tabla: 'Tutores', id: fmtCed(t.cedula), prev: '—', next: `${t.nombre} · ${t.tipo}`, ip: req.ip });
     return ficha(id);
   });
 
   app.put<{ Params: { id: string }; Body: Record<string, unknown> }>('/:id', g, async (req, reply) => {
-    const prev = await prisma.tutor.findUnique({ where: { id: req.params.id } });
+    const prev = await prisma.tutor.findUnique({ where: { id: req.params.id }, include: { user: { select: { id: true, usuario: true } } } });
     if (!prev) return reply.code(404).send({ error: 'Tutor no encontrado' });
     const r = await validar(req.body ?? {}, prev.id);
     if (r.err) return reply.code(422).send({ error: r.err });
@@ -166,16 +160,12 @@ const plugin: FastifyPluginAsync = async app => {
     if (!ids.length && tenia.length) return reply.code(422).send({ error: 'Estudiantes a cargo: campo requerido' });
     const err = await vincular({ id: prev.id, tipo: v.tipo, cedula: v.cedula }, ids, req);
     if (err) return reply.code(422).send({ error: err });
-    const t = await prisma.tutor.update({ where: { id: prev.id }, data: { ...v, email: v.email || null, rnc: v.rnc || null } });
-    // Si cambió la cédula, los cargos pendientes de sus alumnos financieros siguen a la cédula nueva.
-    if (digits(prev.cedula) !== digits(t.cedula)) {
-      const fin = await prisma.alumno.findMany({ where: { tutorId: t.id }, select: { id: true } });
-      await prisma.finCobroItem.updateMany({ where: { kid: { in: fin.map(a => kidOf(a.id)) }, paid: false }, data: { tutorCed: digits(t.cedula) } });
-    }
+    const t = await prisma.tutor.update({ where: { id: prev.id }, data: { ...v, cedula: digits(v.cedula), email: v.email || null, rnc: v.rnc || null } });
+    // Los cargos siguen al tutor por FK (tutorId): cambiar la cédula ya no obliga a reescribir la cartera.
     const campos = ['nombre', 'cedula', 'parentesco', 'tipo', 'tel', 'email', 'rnc', 'estado'] as const;
-    for (const k of campos) { const a = String(prev[k] ?? ''), b = String(t[k] ?? ''); if (a !== b) await audit(req.user, 'Update', { tabla: 'Tutores', id: `${t.cedula}/${k}`, prev: a || '—', next: b || '—', ip: req.ip }); }
+    for (const k of campos) { const f = (x: string | null) => (k === 'cedula' ? fmtCed(x ?? '') : String(x ?? '')); const a = f(prev[k]), b = f(t[k]); if (a !== b) await audit(req.user, 'Update', { tabla: 'Tutores', id: `${fmtCed(t.cedula)}/${k}`, prev: a || '—', next: b || '—', ip: req.ip }); }
     // Un tutor desactivado/reactivado arrastra su cuenta del portal.
-    if (prev.estado !== t.estado && t.usuario && t.estado === 'Inactivo') await prisma.user.updateMany({ where: { usuario: t.usuario, rol: 'Tutor' }, data: { estado: 'Inactivo' } });
+    if (prev.estado !== t.estado && t.userId && t.estado === 'Inactivo') await prisma.user.updateMany({ where: { id: t.userId, rol: 'Tutor' }, data: { estado: 'Inactivo' } });
     return ficha(t.id);
   });
 
@@ -184,9 +174,12 @@ const plugin: FastifyPluginAsync = async app => {
     if (!t) return reply.code(404).send({ error: 'Tutor no encontrado' });
     const d = ((await vinculos()).hijosDe.get(t.id) ?? []).map(h => nombreDe(h.a));
     if (d.length) return reply.code(409).send({ error: `No se puede eliminar: ${d.length} estudiante(s) dependen de él (${d.slice(0, 4).join(', ')}${d.length > 4 ? '…' : ''}). Desactívalo en su lugar.` });
-    if (t.usuario) await prisma.user.deleteMany({ where: { usuario: t.usuario, rol: 'Tutor' } });
+    // Sin alumnos, pero con historial propio (comprobantes, cargos a su nombre o pagos del portal): la FK NoAction impide borrarlo.
+    const [rec, cob, ints] = await Promise.all([prisma.finRecibo.count({ where: { tutorId: t.id } }), prisma.finCobroItem.count({ where: { tutorId: t.id } }), prisma.mobPagoIntencion.count({ where: { tutorId: t.id } })]);
+    if (rec || cob || ints) return reply.code(409).send({ error: `No se puede eliminar: tiene historial (${[rec && rec + ' recibo(s)', cob && cob + ' cargo(s)', ints && ints + ' pago(s) del portal'].filter(Boolean).join(', ')}). Desactívalo en su lugar.` });
     await prisma.tutor.delete({ where: { id: t.id } });
-    await audit(req.user, 'Delete', { tabla: 'Tutores', id: t.cedula, prev: t.nombre, next: 'Eliminado', ip: req.ip });
+    if (t.userId) await prisma.user.deleteMany({ where: { id: t.userId, rol: 'Tutor' } });
+    await audit(req.user, 'Delete', { tabla: 'Tutores', id: fmtCed(t.cedula), prev: t.nombre, next: 'Eliminado', ip: req.ip });
     return { ok: true };
   });
 
@@ -194,26 +187,27 @@ const plugin: FastifyPluginAsync = async app => {
     const t = await prisma.tutor.findUnique({ where: { id: req.params.id } });
     if (!t) return reply.code(404).send({ error: 'Tutor no encontrado' });
     await prisma.tutor.update({ where: { id: t.id }, data: { estado: 'Inactivo' } });
-    if (t.usuario) await prisma.user.updateMany({ where: { usuario: t.usuario, rol: 'Tutor' }, data: { estado: 'Inactivo' } });
-    await audit(req.user, 'Update', { tabla: 'Tutores', id: `${t.cedula}/estado`, prev: t.estado, next: 'Inactivo', ip: req.ip });
+    if (t.userId) await prisma.user.updateMany({ where: { id: t.userId, rol: 'Tutor' }, data: { estado: 'Inactivo' } });
+    await audit(req.user, 'Update', { tabla: 'Tutores', id: `${fmtCed(t.cedula)}/estado`, prev: t.estado, next: 'Inactivo', ip: req.ip });
     return ficha(t.id);
   });
 
   // ---- Acceso al Portal Tutor ----
   /** Crea (o restablece) el usuario del tutor con una contraseña temporal aleatoria: se muestra UNA vez y debe cambiarse en el primer ingreso. */
   app.post<{ Params: { id: string } }>('/:id/acceso', g, async (req, reply) => {
-    const t = await prisma.tutor.findUnique({ where: { id: req.params.id } });
+    const t = await prisma.tutor.findUnique({ where: { id: req.params.id }, include: { user: { select: { usuario: true } } } });
     if (!t) return reply.code(404).send({ error: 'Tutor no encontrado' });
     if (t.estado !== 'Activo') return reply.code(409).send({ error: 'El tutor está inactivo: actívalo antes de darle acceso al portal.' });
-    const usuario = (t.usuario || t.email || t.cedula).trim().toLowerCase();
+    const usuario = (t.user?.usuario || t.email || fmtCed(t.cedula)).trim().toLowerCase();
     const ex = await prisma.user.findUnique({ where: { usuario } });
-    if (ex && (ex.rol !== 'Tutor' || (t.usuario !== usuario && (await prisma.tutor.count({ where: { usuario, NOT: { id: t.id } } })) > 0)))
+    if (ex && (ex.rol !== 'Tutor' || (t.userId !== ex.id && (await prisma.tutor.count({ where: { userId: ex.id, NOT: { id: t.id } } })) > 0)))
       return reply.code(409).send({ error: `El usuario «${usuario}» ya pertenece a otra cuenta. Cambia el correo o la cédula del tutor.` });
     const password = clave();
     const passwordHash = await bcrypt.hash(password, 10);
-    if (ex) await prisma.user.update({ where: { id: ex.id }, data: { passwordHash, nombre: t.nombre, estado: 'Activo', mustChange: true } });
-    else await prisma.user.create({ data: { usuario, nombre: t.nombre, rol: 'Tutor', passwordHash, mustChange: true } });
-    await prisma.tutor.update({ where: { id: t.id }, data: { usuario } });
+    const cuenta = ex
+      ? await prisma.user.update({ where: { id: ex.id }, data: { passwordHash, nombre: t.nombre, estado: 'Activo', mustChange: true } })
+      : await prisma.user.create({ data: { usuario, nombre: t.nombre, rol: 'Tutor', passwordHash, mustChange: true } });
+    await prisma.tutor.update({ where: { id: t.id }, data: { userId: cuenta.id } });
     await audit(req.user, ex ? 'Update' : 'Insert', { tabla: 'Usuarios/Tutor', id: usuario, prev: ex ? '••••' : '—', next: ex ? 'Contraseña temporal restablecida' : 'Acceso al Portal Tutor creado', ip: req.ip });
 
     let enviado = false, aviso = 'Entrégale las credenciales en persona o imprímelas: no se volverán a mostrar.';
@@ -230,10 +224,10 @@ const plugin: FastifyPluginAsync = async app => {
   });
 
   app.post<{ Params: { id: string } }>('/:id/acceso/revocar', g, async (req, reply) => {
-    const t = await prisma.tutor.findUnique({ where: { id: req.params.id } });
-    if (!t?.usuario) return reply.code(404).send({ error: 'El tutor no tiene acceso al portal' });
-    await prisma.user.updateMany({ where: { usuario: t.usuario, rol: 'Tutor' }, data: { estado: 'Inactivo' } });
-    await audit(req.user, 'Update', { tabla: 'Usuarios/Tutor', id: t.usuario, prev: 'Activo', next: 'Acceso revocado', ip: req.ip });
+    const t = await prisma.tutor.findUnique({ where: { id: req.params.id }, include: { user: { select: { usuario: true } } } });
+    if (!t?.userId || !t.user) return reply.code(404).send({ error: 'El tutor no tiene acceso al portal' });
+    await prisma.user.updateMany({ where: { id: t.userId, rol: 'Tutor' }, data: { estado: 'Inactivo' } });
+    await audit(req.user, 'Update', { tabla: 'Usuarios/Tutor', id: t.user.usuario, prev: 'Activo', next: 'Acceso revocado', ip: req.ip });
     return ficha(t.id);
   });
 };

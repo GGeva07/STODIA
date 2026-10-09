@@ -47,8 +47,10 @@ export default function Privacidad() {
         </ul>
         <h3>Formulario o solicitud de demostración</h3>
         <ul>
-          <li>Nombre, cargo, institución, correo electrónico, teléfono y el mensaje que usted decida escribir.</li>
+          <li>Nombre, institución, correo electrónico, teléfono (opcional) y el mensaje que usted decida escribir; el sitio podría solicitar además cargo, ciudad o número de estudiantes.</li>
+          <li>Al enviar el formulario se envía el mensaje a nuestro equipo por correo electrónico a través de un servidor SMTP; el correo incluye su dirección IP truncada (se oculta el último bloque), la fecha y hora y el origen de la solicitud, solo para seguridad y prevención de abusos. No guardamos esos datos en una base de datos del sitio: quedan en los buzones de correo de la persona responsable y de su proveedor de correo.</li>
         </ul>
+        <p>Para enviar el formulario debe marcar la casilla de consentimiento; si prefiere no usarlo, puede escribirnos directamente a <a href={`mailto:${SITE.email}`}>{SITE.email}</a>.</p>
         <p>No solicitamos datos sensibles ni de menores a través del sitio. Le rogamos no incluirlos en sus mensajes.</p>
         <h3>Datos escolares (como encargado)</h3>
         <p>Según los módulos que el colegio active, la Instancia puede contener identificación y contacto de estudiantes, tutores y personal; datos académicos y de asistencia; datos de pagos y facturación; datos de comedor y expediente, que pueden incluir información de salud o necesidades especiales. Estos datos se rigen por las decisiones del colegio y su propio aviso de privacidad.</p>
@@ -58,7 +60,7 @@ export default function Privacidad() {
           <table className="w-full min-w-[34rem] border-collapse text-sm">
             <thead><tr className="bg-slate-100 text-left"><th className="border border-slate-200 p-2">Finalidad</th><th className="border border-slate-200 p-2">Base</th></tr></thead>
             <tbody>
-              <tr><td className="border border-slate-200 p-2">Responder consultas y gestionar solicitudes de demostración o propuesta.</td><td className="border border-slate-200 p-2">Consentimiento o medidas precontractuales a petición del interesado.</td></tr>
+              <tr><td className="border border-slate-200 p-2">Responder consultas y gestionar solicitudes de demostración o propuesta.</td><td className="border border-slate-200 p-2">Consentimiento (casilla del formulario) o medidas precontractuales a petición del interesado.</td></tr>
               <tr><td className="border border-slate-200 p-2">Gestionar la relación contractual con el colegio cliente (facturación, soporte, licencia).</td><td className="border border-slate-200 p-2">Ejecución del contrato y obligaciones legales (fiscales, DGII).</td></tr>
               <tr><td className="border border-slate-200 p-2">Seguridad del sitio y prevención de abusos.</td><td className="border border-slate-200 p-2">Interés legítimo.</td></tr>
               <tr><td className="border border-slate-200 p-2">Analítica y mejora del sitio; comunicaciones comerciales.</td><td className="border border-slate-200 p-2">Consentimiento, revocable en cualquier momento.</td></tr>
@@ -75,7 +77,7 @@ export default function Privacidad() {
         <p>Los datos de salud y otros datos sensibles reciben un nivel reforzado de protección. El colegio debe limitar su recogida a lo estrictamente necesario, restringir su acceso a roles autorizados y no comunicarlos sin base legal o consentimiento. Los colegios deben además observar las normas y lineamientos del Ministerio de Educación (MINERD) aplicables al manejo de la información de los estudiantes.</p>
       </S>
       <S id="destinatarios" title="7. Destinatarios y encargados">
-        <p>No vendemos datos personales. Podemos comunicarlos a: proveedores que nos prestan servicios necesarios (alojamiento, correo, herramientas de gestión y, si usted consiente, analítica) bajo obligación de confidencialidad; asesores profesionales; y autoridades cuando una norma o resolución judicial lo exija. Los proveedores concretos pueden consultarse solicitándolos al correo de contacto.</p>
+        <p>No vendemos datos personales. Podemos comunicarlos a: proveedores que nos prestan servicios necesarios (alojamiento del sitio, proveedor del servicio de correo/SMTP que entrega los mensajes del formulario de demostración, que actúa como encargado del tratamiento, herramientas de gestión y, si usted consiente, analítica) bajo obligación de confidencialidad; asesores profesionales; y autoridades cuando una norma o resolución judicial lo exija. Los proveedores concretos pueden consultarse solicitándolos al correo de contacto.</p>
         <p><b>Modalidades de despliegue.</b> En la modalidad <b>autoalojada</b>, la Instancia reside en la infraestructura del colegio, que es responsable de su seguridad física y lógica y de sus respaldos; {SITE.legal.name} presta licencia y soporte. En la modalidad <b>gestionada</b>, {SITE.legal.name} aloja la Instancia como encargado del tratamiento y puede apoyarse en subencargados de infraestructura; la lista vigente se facilita al colegio previa solicitud al correo de contacto.</p>
         <p>En las Instancias, el acceso a los datos escolares por parte de STODIA se limita al estrictamente necesario para soporte o mantenimiento y siempre por instrucción del colegio.</p>
       </S>
@@ -84,7 +86,7 @@ export default function Privacidad() {
       </S>
       <S id="conservacion" title="9. Plazos de conservación">
         <ul>
-          <li>Consultas y solicitudes de demostración sin contratación: 24 meses desde el último contacto.</li>
+          <li>Solicitudes de demostración recibidas por el formulario y consultas sin contratación: hasta 12 meses desde el último contacto, salvo que usted pida antes su supresión.</li>
           <li>Datos contractuales y de facturación: mientras dure la relación y, después, el plazo que exija la normativa fiscal y mercantil dominicana (en general, no menos de 10 años para registros contables y fiscales) y hasta la prescripción de posibles acciones.</li>
           <li>Registros técnicos del servidor: hasta 12 meses.</li>
           <li>Datos escolares: el que determine el colegio; al terminar el contrato se devuelven (portabilidad) o eliminan conforme a los <Link to={LEGAL_ROUTES.terminos}>Términos</Link>.</li>

@@ -21,11 +21,13 @@ export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }:
   const [err, setErr] = useState<Record<string, string>>({});
   const [top, setTop] = useState('');
   const [busy, setBusy] = useState(false);
+  const [temp, setTemp] = useState(false); // «Crear acceso» con contraseña temporal aleatoria (docentes/empleados)
   const set = (key: string, val: unknown) => { setV(x => ({ ...x, [key]: val })); setErr(e => ({ ...e, [key]: '' })); setTop(''); };
   const id = row?.id ?? null;
 
   const save = async () => {
     const out: V = { ...v }, e: Record<string, string> = {};
+    if (temp) out.password = '';
     def.fields.forEach(f => {
       if (f.upper && typeof out[f.k] === 'string') out[f.k] = (out[f.k] as string).toUpperCase();
       if (typeof out[f.k] === 'string') out[f.k] = (out[f.k] as string).trim();
@@ -37,8 +39,7 @@ export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }:
         if (sum !== 100) { e[f.k] = `Los pesos suman ${sum}%; deben sumar 100%`; return; }
       }
       if (f.t === 'password') {
-        if (!id && !val && (k === 'docentes' || k === 'staff')) e[f.k] = 'Requerida para crear el usuario';
-        else if (val && String(val).length < 8) e[f.k] = 'Mínimo 8 caracteres';
+        if (val && String(val).length < 8) e[f.k] = 'Mínimo 8 caracteres';
         return;
       }
       if (f.t === 'time' && val !== '' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(val))) e[f.k] = 'Formato HH:MM (24 h)';
@@ -56,7 +57,7 @@ export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }:
     if (k === 'tandas' && !e.ini && !e.fin && String(out.fin) <= String(out.ini)) e.fin = 'Debe ser posterior a la hora de entrada';
     if (Object.keys(e).length) { setErr(e); return; }
     setBusy(true);
-    try { await onSave(out, id); } catch (x) { setTop(errMsg(x)); setBusy(false); }
+    try { await onSave({ ...out, _acceso: temp }, id); } catch (x) { setTop(errMsg(x)); setBusy(false); }
   };
 
   const optsFor = (f: FieldDef): { v: string; l: string }[] => {
@@ -81,9 +82,15 @@ export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }:
           return (
             <div key={f.k} className="flex flex-col gap-[5px]">
               <span className="text-xs font-medium text-slate-600">{f.l}{f.req && <span className="text-red-600"> *</span>}</span>
+              {f.t === 'password' && (
+                <label className="flex cursor-pointer items-start gap-2 text-xs text-slate-700">
+                  <input type="checkbox" checked={temp} onChange={ev => { setTemp(ev.target.checked); set('password', ''); }} className="mt-[2px]" />
+                  <span><b>{row?.password ? 'Restablecer con contraseña temporal' : 'Crear acceso con contraseña temporal'}</b> · se genera al azar, se muestra e imprime una sola vez y debe cambiarse en el primer ingreso.</span>
+                </label>
+              )}
               {(f.t === 'text' || f.t === 'int' || f.t === 'time' || f.t === 'password') && (
                 <input
-                  type={f.t === 'password' ? 'password' : 'text'} autoComplete="new-password" value={String(val ?? '')} onChange={ev => set(f.k, ev.target.value)}
+                  type={f.t === 'password' ? 'password' : 'text'} autoComplete="new-password" disabled={f.t === 'password' && temp} value={String(val ?? '')} onChange={ev => set(f.k, ev.target.value)}
                   placeholder={f.t === 'password' && id ? 'Dejar vacío para mantener la actual' : f.ph}
                   className={`box-border h-9 w-full rounded-md border bg-white px-2.5 text-[13px] text-ink outline-none focus:border-accent ${bd} ${f.mono ? 'font-mono' : ''}`}
                 />
@@ -95,7 +102,7 @@ export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }:
                 </select>
               )}
               {f.t === 'multi' && (
-                <div className={`flex flex-wrap gap-1.5 rounded-md border p-2 ${bd}`}>
+                <div className={`flex max-h-48 flex-wrap gap-1.5 overflow-y-auto rounded-md border p-2 ${bd}`}>
                   {cat[f.ref!].filter(r => /^Activ/.test(r.estado) || (val as string[]).includes(r.id)).map(r => {
                     const arr = val as string[], on = arr.includes(r.id);
                     return (
@@ -108,7 +115,7 @@ export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }:
                 </div>
               )}
               {f.t === 'info' && <div className="flex h-9 items-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-2.5 text-[13px] text-slate-600">{String(val || 0)} alumnos · se actualiza desde Inscripción</div>}
-              <span className={`text-[11px] leading-snug ${e ? 'text-red-600' : 'text-slate-500'}`}>{e || (f.t === 'password' ? (id ? 'Solo se guarda cifrada (hash); nunca se muestra.' : 'El docente podrá cambiarla en su primer inicio de sesión.') : f.hint) || ''}</span>
+              <span className={`text-[11px] leading-snug ${e ? 'text-red-600' : 'text-slate-500'}`}>{e || (f.t === 'password' ? (id ? 'Solo se guarda cifrada (hash); nunca se muestra.' : 'Opcional: sin contraseña no se crea acceso (puedes crearlo después).') : f.hint) || ''}</span>
             </div>
           );
         })}

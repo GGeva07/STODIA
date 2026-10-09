@@ -89,7 +89,7 @@ export default function Screen() {
     const act = plans.filter(p => p.estado === 'Activo'), bl: PBlock[] = [];
     if (tarOpts.col) {
       const rows: string[][] = [];
-      act.forEach(p => { const c = planCalc(p), n = c.n + (c.n === 1 ? ' cuota' : ' cuotas'); if (c.tandas) c.tandas.forEach(t => rows.push([p.name, t.l, fmt(t.total), n, fmt(t.cuota)])); else rows.push([p.name, 'Todas las tandas', fmt(c.total), n, fmt(c.cuota)]); });
+      act.forEach(p => { const c = planCalc(p, tandas, cfg.ciclo0), n = c.n + (c.n === 1 ? ' cuota' : ' cuotas'); if (c.tandas) c.tandas.filter(t => !t.sinPrecio).forEach(t => rows.push([p.name, t.l, fmt(t.total), n, fmt(t.cuota)])); else rows.push([p.name, 'Todas las tandas', fmt(c.total), n, fmt(c.cuota)]); });
       bl.push(B.text('Matriz de colegiatura', true), B.table(['Plan', 'Tanda', 'Monto anual', 'Cuotas', 'Cuota'], rows, ['1fr', '86px', '98px', '66px', '98px'], ['left', 'left', 'right', 'right', 'right']), B.text('Los montos incluyen el descuento propio de cada plan. La inscripción se factura aparte.'));
     }
     if (tarOpts.com) bl.push(B.text('Comedor y alimentación', true), B.table(['Plan', 'Incluye', 'Tarifa'], (ali?.planes ?? []).filter(p => p.estado === 'Activo').map(p => [p.name, p.modelo === 'sub' ? MEALS.filter((_, i) => p.meals[i]).join(' · ') : 'Monedero virtual', p.modelo === 'sub' ? fmt(p.precio) + (p.freq === 'Semestral' ? '/sem' : '/mes') : 'Recarga mín. ' + fmt(p.recarga)]), ['1fr', '1fr', '120px'], ['left', 'left', 'right']));
@@ -147,7 +147,7 @@ export default function Screen() {
             </thead>
             <tbody>
               {rows.map(p => {
-                const c = planCalc(p), act = p.estado === 'Activo', et = act ? TONE.ok : TONE.mute;
+                const c = planCalc(p, tandas, cfg.ciclo0), act = p.estado === 'Activo', et = act ? TONE.ok : TONE.mute;
                 return (
                   <tr key={p.id} className="h-9 hover:bg-slate-50" style={{ opacity: act ? 1 : 0.75 }}>
                     <td className={TD}>
@@ -157,9 +157,9 @@ export default function Screen() {
                       </div>
                     </td>
                     <td className={`${TD} whitespace-nowrap text-slate-600`}>{c.n + (c.n === 1 ? ' cuota' : ' cuotas')} · {FREQ_L[p.freq]} · desde {MN[Number(p.start)].slice(0, 3)}</td>
-                    <td className={`${TD} text-right font-mono font-medium`}>{c.tandas ? 'Por tanda' : fmt(c.anual)}</td>
+                    <td className={`${TD} text-right font-mono font-medium`}>{c.tandas ? 'Por tanda' : fmt(c.anual)}{c.sinPrecio.length > 0 && <div title={c.sinPrecio.join(', ')} className="font-sans text-[10px] font-semibold text-amber-700">{c.sinPrecio.length} {c.sinPrecio.length === 1 ? 'tanda sin precio' : 'tandas sin precio'}</div>}</td>
                     <td className={`${TD} text-right font-mono`} style={{ color: c.desc ? '#16A34A' : '#94A3B8' }}>{c.desc ? c.desc + '%' : '—'}</td>
-                    <td className={`${TD} text-right font-mono font-semibold`}>{c.tandas ? `${fmt(Math.min(...c.tandas.map(x => x.cuota)))} – ${fmt(Math.max(...c.tandas.map(x => x.cuota)))}` : fmt(c.cuota)}</td>
+                    <td className={`${TD} text-right font-mono font-semibold`}>{c.tandas ? (c.tandas.some(x => !x.sinPrecio) ? `${fmt(Math.min(...c.tandas.filter(x => !x.sinPrecio).map(x => x.cuota)))} – ${fmt(Math.max(...c.tandas.map(x => x.cuota)))}` : '—') : fmt(c.cuota)}</td>
                     <td className={`${TD} whitespace-nowrap text-xs text-slate-600`}>{moraLbl(p)}</td>
                     <td className={`${TD} whitespace-nowrap text-xs text-slate-600`}>{Number(p.pronto) ? `${p.pronto}% hasta día ${p.prontoDia}` : '—'}</td>
                     <td className={`${TD} text-right font-mono font-medium`}>{p.alumnos}</td>

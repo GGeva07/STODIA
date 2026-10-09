@@ -20,10 +20,10 @@ async function resolver(f: CmnFiltro) {
   const cuentaDe = f.cuenta ? await cuentaDerivada() : null;
   const alumnos = cuentaDe ? todos.filter(a => cuentaDe(a.id) === f.cuenta) : todos;
   const saldos = await saldoVencidoPorAlumno(alumnos.map(a => a.id));
-  const por = new Map<string, { nombre: string; email: string; alumnos: string[]; saldo: number }>();
+  const por = new Map<string, { id: string; nombre: string; email: string; alumnos: string[]; saldo: number }>();
   for (const a of alumnos) {
     if (!a.tutor?.nombre) continue;
-    const g = por.get(a.tutor.id) ?? { nombre: a.tutor.nombre, email: (a.tutor.email ?? '').trim(), alumnos: [], saldo: 0 };
+    const g = por.get(a.tutor.id) ?? { id: a.tutor.id, nombre: a.tutor.nombre, email: (a.tutor.email ?? '').trim(), alumnos: [], saldo: 0 };
     g.alumnos.push(a.nombres); g.saldo += saldos[a.id] ?? 0;
     por.set(a.tutor.id, g);
   }
@@ -92,7 +92,7 @@ const plugin: FastifyPluginAsync = async app => {
         if (canal === 'Correo' && correoListo(cfg.email)) { if (!d.email) { estado = 'Fallido'; error = 'El tutor no tiene correo registrado'; } }
         else { estado = 'Canal no configurado'; error = canal === 'Correo' ? 'Correo (SMTP) no configurado' : `Canal ${canal} sin proveedor configurado`; }
       }
-      return { batch, t, to: d.nombre, canal, asunto: fill(asunto.trim(), d), cuerpo: fill(mensaje.trim(), d), destino: canal === 'Correo' ? d.email : '', estado, error, by: req.user.usuario };
+      return { batch, t, to: d.nombre, tutorId: d.id, userId: req.user.sub, canal, asunto: fill(asunto.trim(), d), cuerpo: fill(mensaje.trim(), d), destino: canal === 'Correo' ? d.email : '', estado, error, by: req.user.usuario };
     }));
     await prisma.cmnMensaje.createMany({ data });
     return { batch, total: data.length, enCola: data.filter(m => m.estado === 'En cola').length, sinCanal: data.filter(m => m.estado === 'Canal no configurado').length };

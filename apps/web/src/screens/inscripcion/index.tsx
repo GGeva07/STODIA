@@ -231,7 +231,7 @@ export default function Screen() {
               <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
                 {planes.map(p => (
                   <button key={p.id} onClick={() => set({ plan: p.id })} className={`flex cursor-pointer flex-col gap-1.5 rounded-lg border-2 p-3.5 text-left ${plan?.id === p.id ? 'border-accent bg-blue-50' : 'border-slate-200 bg-white'}`}>
-                    <span className="text-sm font-semibold text-ink">{p.name}</span><span className="font-mono text-base font-semibold text-ink">{p.n === 1 ? fmt(totalDe(p)) : `${p.n} × ${fmt(cuotaDe(p))}`}</span><span className="text-xs text-slate-600">{p.detalle}</span>
+                    <span className="text-sm font-semibold text-ink">{p.name}</span>{totalDe(p) > 0 ? <span className="font-mono text-base font-semibold text-ink">{p.n === 1 ? fmt(totalDe(p)) : `${p.n} × ${fmt(cuotaDe(p))}`}</span> : <span className="flex items-center gap-1 text-[13px] font-semibold text-amber-700"><i className="ph ph-warning" />Sin precio en {tanda}</span>}<span className="text-xs text-slate-600">{p.detalle}</span>
                   </button>
                 ))}
                 {cfg && planes.length === 0 && <div className="text-[13px] text-amber-700">Configura planes y precios (Finanzas → Planes de Pago) para poder inscribir.</div>}

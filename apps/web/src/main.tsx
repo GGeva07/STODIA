@@ -22,7 +22,7 @@ loadRuntimeConfig().then(() => {
   void initNative(() => ({ path: window.location.pathname, back: () => window.history.back() }));
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <BrowserRouter>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <SessionProvider>
           <App />
         </SessionProvider>

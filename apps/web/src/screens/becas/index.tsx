@@ -64,7 +64,7 @@ export default function Screen() {
     if (!bf.est) { toast('Selecciona un estudiante', 'bad'); return; }
     if (!bf.exp.trim()) { toast('El expediente de soporte es obligatorio', 'bad'); return; }
     if (!bf.conc.some(Boolean)) { toast('Selecciona al menos un concepto', 'bad'); return; }
-    const body: BecaNueva = { est: bf.est, tipo: bf.tipo, modo: bf.modo, valor: bf.valor, conceptos: BC.filter((_, i) => bf.conc[i]), exp: bf.exp, periodo: per };
+    const body: BecaNueva = { alumnoId: ests.find(s => s.label === bf.est)?.id || undefined, est: bf.est, tipo: bf.tipo, modo: bf.modo, valor: bf.valor, conceptos: BC.filter((_, i) => bf.conc[i]), exp: bf.exp, periodo: per };
     try {
       await api.post('/becas', body);
       setBf(null);

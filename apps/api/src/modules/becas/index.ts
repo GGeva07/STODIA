@@ -16,6 +16,8 @@ const plugin: FastifyPluginAsync = async app => {
     (await prisma.finBeca.findMany({ where: req.query.periodo ? { periodo: req.query.periodo } : {}, orderBy: { createdAt: 'asc' } })).map(toBeca));
 
 
+  const catNombres = async (tipo: string) => (await prisma.catalogo.findMany({ where: { tipo, estado: 'Activo' } })).map(r => String((JSON.parse(r.data) as { nombre?: string }).nombre ?? '').trim());
+
   /** Catálogos del formulario de becas: tipos (Catalogo 'becas', compartido con expediente) y conceptos afectables. */
   app.get('/catalogos', auth, async () => {
     const nombres = async (tipo: string) => {
@@ -40,9 +42,20 @@ const plugin: FastifyPluginAsync = async app => {
     if (!b.exp?.trim()) return reply.code(400).send({ error: 'El expediente de soporte es obligatorio' });
     if (!b.conceptos?.length) return reply.code(400).send({ error: 'Selecciona al menos un concepto' });
     const [est, grado = ''] = b.est.split(' · ');
+    // El beneficiario es una FK real: por id, o por la etiqueta «Nombre Apellidos · 5to A» si identifica a UN solo alumno.
+    let alumno = b.alumnoId ? await prisma.alumno.findUnique({ where: { id: b.alumnoId } }) : null;
+    if (!alumno && !b.alumnoId) {
+      const cand = (await prisma.alumno.findMany({ where: { estado: 'Activo' } })).filter(a => `${a.nombres} ${a.apellidos}` === est && (!grado || `${a.grado} ${a.sec}` === grado));
+      if (cand.length > 1) return reply.code(400).send({ error: 'Hay varios estudiantes con ese nombre y curso: selecciona el estudiante de la lista.' });
+      alumno = cand[0] ?? null;
+    }
+    if (!alumno) return reply.code(400).send({ error: 'Estudiante no encontrado' });
+    const [tipos, conceptos] = await Promise.all([catNombres('becas'), catNombres('conceptosBeca')]);
+    if (!tipos.includes(b.tipo)) return reply.code(400).send({ error: 'Tipo de beca inexistente en el catálogo' });
+    if (b.conceptos.some(c => !conceptos.includes(c))) return reply.code(400).send({ error: 'Algún concepto no existe en el catálogo de conceptos de beca' });
     const row = await prisma.finBeca.create({
       data: {
-        id: String(Date.now()), periodo: b.periodo, est, grado, tipo: b.tipo, regla: b.modo === 'pct' ? b.valor + '%' : fmt(Number(b.valor)),
+        id: String(Date.now()), periodo: b.periodo, alumnoId: alumno.id, est: `${alumno.nombres} ${alumno.apellidos}`, grado: `${alumno.grado} ${alumno.sec}`, tipo: b.tipo, regla: b.modo === 'pct' ? b.valor + '%' : fmt(Number(b.valor)),
         conceptos: b.conceptos.join(' · '), exp: b.exp.trim(), estado: 'Pendiente', aprob: 'Esperando Director Financiero',
       },
     });

@@ -3,7 +3,9 @@ import type { CobroCuenta, CobroHijo, CobroMetodo, CobroItem, CobroProcesarReq, 
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { cfgGet } from '../../lib/sisconfig';
-import { digits, kidOf } from '../../lib/personas';
+import { digits } from '../../lib/personas';
+import { fmtCed } from '../../lib/tutor-datos';
+import { cajaDe, metodoDe, parseItems, parsePays, type LineaRecibo } from '../../lib/recibos';
 import { nextSeq, nowHM, round2, supervisorOk } from '../../fin-utils';
 import { estadoCuota, hoyISO, zonaHoraria } from '../../lib/cxc';
 
@@ -18,12 +20,12 @@ const RECIBOS_TURNO = 50;
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 /** El estado de la cuota se DERIVA de la fecha de vencimiento (regla única de lib/cxc.ts); el `est` guardado solo es respaldo si la fecha no se interpreta. */
-const toItem = (r: { id: string; con: string; al: string; kid: string; vence: string; monto: number; est: string; tipo: string; abono: boolean }, hoy: string): CobroItem =>
-  ({ id: r.id, con: r.con, al: r.al, kid: r.kid, vence: r.vence, monto: r.monto, est: estadoCuota(r, hoy), tipo: r.tipo, abono: r.abono || undefined });
-const toRecibo = (r: any): ReciboFin => ({
-  id: r.id, ncf: r.ncf, tutor: r.tutor, hora: r.hora, monto: r.monto, est: r.est, metodo: r.metodo, abono: r.abono, saldo: r.saldo,
-  nc: r.nc ?? undefined, change: r.change, items: JSON.parse(r.items), pays: JSON.parse(r.pays),
-});
+const toItem = (r: { id: string; con: string; al: string; alumnoId: string; vence: string; monto: number; est: string; tipo: string; abono: boolean }, hoy: string): CobroItem =>
+  ({ id: r.id, con: r.con, al: r.al, kid: r.alumnoId, vence: r.vence, monto: r.monto, est: estadoCuota(r, hoy), tipo: r.tipo, abono: r.abono || undefined });
+const toRecibo = (r: { id: string; ncf: string; tutor: string; hora: string; monto: number; est: string; abono: boolean; saldo: number; nc: string | null; change: number; items: string; pays: string }): ReciboFin => {
+  const pays = parsePays(r.pays);
+  return { id: r.id, ncf: r.ncf, tutor: r.tutor, hora: r.hora, monto: r.monto, est: r.est as ReciboFin['est'], metodo: metodoDe(pays), abono: r.abono, saldo: r.saldo, nc: r.nc ?? undefined, change: r.change, items: parseItems(r.items), pays };
+};
 
 const plugin: FastifyPluginAsync = async app => {
   const auth = { onRequest: [app.authenticate] };
@@ -57,23 +59,22 @@ const plugin: FastifyPluginAsync = async app => {
     const tut = best && tutores.find(t => t.id === best[0]);
     if (!tut) return reply.code(404).send({ error: 'No encontramos ninguna cuenta con «' + (req.query.q ?? '').trim() + '». Verifica la cédula, el carnet o el nombre.' });
     const hijosDb = await prisma.alumno.findMany({ where: { tutorId: tut.id }, orderBy: { id: 'asc' } });
-    const hijos: CobroHijo[] = hijosDb.map(a => ({ id: a.id, kid: kidOf(a.id), nombre: `${a.nombres.split(' ')[0]} ${a.apellidos.split(' ')[0]}`, corto: a.nombres.split(' ')[0], grado: a.grado, sec: a.sec, code: a.code }));
-    const ced = digits(tut.cedula);
+    const hijos: CobroHijo[] = hijosDb.map(a => ({ id: a.id, kid: a.id, nombre: `${a.nombres.split(' ')[0]} ${a.apellidos.split(' ')[0]}`, corto: a.nombres.split(' ')[0], grado: a.grado, sec: a.sec, code: a.code }));
     const hoy = hoyISO(await zonaHoraria());
     const [items, recibos, becas] = await Promise.all([
-      prisma.finCobroItem.findMany({ where: { paid: false, OR: [...(ced ? [{ tutorCed: ced }] : []), { kid: { in: hijos.map(h => h.kid) } }] }, orderBy: { orden: 'asc' } }),
+      prisma.finCobroItem.findMany({ where: { paid: false, OR: [{ tutorId: tut.id }, { alumnoId: { in: hijos.map(h => h.id) } }] }, orderBy: { orden: 'asc' } }),
       // Historial de turno acotado: los últimos RECIBOS_TURNO emitidos + los de este tutor (antes: toda la tabla).
       Promise.all([
         prisma.finRecibo.findMany({ orderBy: { createdAt: 'desc' }, take: RECIBOS_TURNO }),
-        prisma.finRecibo.findMany({ where: { tutor: tut.nombre }, orderBy: { createdAt: 'desc' }, take: 200 }),
+        prisma.finRecibo.findMany({ where: { tutorId: tut.id }, orderBy: { createdAt: 'desc' }, take: 200 }),
       ]).then(([ult, suyos]) => [...new Map([...ult, ...suyos].map(r => [r.id, r])).values()].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())),
-      prisma.finBeca.findMany({ where: { estado: 'Aprobada', est: { in: hijosDb.map(a => `${a.nombres} ${a.apellidos}`) } } }),
+      prisma.finBeca.findMany({ where: { estado: 'Aprobada', alumnoId: { in: hijosDb.map(a => a.id) } } }),
     ]);
     const becasTxt = becas.filter(b => b.conceptos.toLowerCase().includes('colegiatura')).map(b => {
-      const h = hijos.find(x => hijosDb.find(a => a.id === x.id && `${a.nombres} ${a.apellidos}` === b.est));
-      return `Beca ${b.tipo} −${b.regla} ya aplicada a la colegiatura de ${h?.corto ?? b.est}.`;
+      const h = hijos.find(x => x.id === b.alumnoId);
+      return `${/^beca\b/i.test(b.tipo) ? '' : 'Beca '}${b.tipo} −${b.regla} ya aplicada a la colegiatura de ${h?.corto ?? b.est}.`;
     });
-    const res: CobroCuenta = { tutor: tut.nombre, cedula: tut.cedula, email: tut.email ?? undefined, hijos, becas: becasTxt, items: items.map(i => toItem(i, hoy)), recibos: recibos.map(toRecibo) };
+    const res: CobroCuenta = { tutor: tut.nombre, cedula: fmtCed(tut.cedula), email: tut.email ?? undefined, hijos, becas: becasTxt, items: items.map(i => toItem(i, hoy)), recibos: recibos.map(toRecibo) };
     return res;
   });
 
@@ -84,11 +85,14 @@ const plugin: FastifyPluginAsync = async app => {
     const sel = await prisma.finCobroItem.findMany({ where: { id: { in: ids }, paid: false }, orderBy: { orden: 'asc' } });
     if (!sel.length) return reply.code(400).send({ error: 'Selecciona al menos un ítem' });
     if (discount === 'exo' && !(await supervisorOk(req, pin, 'cobro.exonerar'))) return reply.code(403).send({ error: 'Clave de supervisor inválida' });
-    const tutores = await prisma.tutor.findMany({ select: { id: true, nombre: true, cedula: true } });
-    // Cédula: la de la cuenta cargada; si falta, la del ítem; si tampoco, el tutor responsable del alumno del primer ítem.
-    const alumnoTutor = (await prisma.alumno.findMany({ select: { id: true, tutorId: true } })).find(a => kidOf(a.id) === sel[0].kid)?.tutorId;
-    const cedBuscada = digits(cedula ?? '') || sel[0].tutorCed || digits(tutores.find(t => t.id === alumnoTutor)?.cedula ?? '');
-    const tutorNombre = tutores.find(t => digits(t.cedula) === cedBuscada)?.nombre ?? 'Consumidor final';
+    // Tutor del comprobante: el de la cédula de la cuenta cargada; si no se indicó, el del primer ítem; si tampoco, el tutor responsable del alumno.
+    const cedBuscada = digits(cedula ?? '');
+    const tutor = cedBuscada
+      ? await prisma.tutor.findUnique({ where: { cedula: cedBuscada } })
+      : sel[0].tutorId
+        ? await prisma.tutor.findUnique({ where: { id: sel[0].tutorId } })
+        : (await prisma.alumno.findUnique({ where: { id: sel[0].alumnoId }, include: { tutor: true } }))?.tutor ?? null;
+    const tutorNombre = tutor?.nombre ?? 'Consumidor final';
     const sub = sel.reduce((a, i) => a + i.monto, 0);
     const prontoPct = (await cfgGet('finanzas')).descuentoProntoPct;
     if (discount === 'pronto' && !(prontoPct > 0)) return reply.code(400).send({ error: 'El descuento por pronto pago no está configurado' });
@@ -108,28 +112,33 @@ const plugin: FastifyPluginAsync = async app => {
 
     const remaining = round2(total - paid), change = paid > total ? round2(paid - total) : 0;
     const abono = remaining > 0.001;
-    const applied: { con: string; monto: number }[] = [];
-    if (abono) {
-      let left = paid;
-      for (const i of sel) {
-        if (left <= 0.001) break;
-        const take = Math.min(left, i.monto);
-        applied.push({ con: i.con + (take < i.monto - 0.001 ? ' (abono)' : ''), monto: take });
-        if (take >= i.monto - 0.001) await prisma.finCobroItem.update({ where: { id: i.id }, data: { paid: true } });
-        else await prisma.finCobroItem.update({ where: { id: i.id }, data: { monto: round2(i.monto - take), abono: true } });
-        left -= take;
-      }
-    } else {
-      await prisma.finCobroItem.updateMany({ where: { id: { in: sel.map(i => i.id) } }, data: { paid: true } });
-    }
+    const applied: LineaRecibo[] = [];
     const id = 'REC-' + String(await nextSeq('rec')).padStart(4, '0'), ncf = 'B02' + String(await nextSeq('ncf')).padStart(8, '0');
-    const metodo = pays.length > 1 ? 'Mixto' : pays[0].m.startsWith('Tarjeta') ? 'Tarjeta' : pays[0].m;
-    const row = await prisma.finRecibo.create({
-      data: {
-        id, ncf, tutor: tutorNombre, hora: nowHM(), monto: abono ? paid : total, metodo, abono, saldo: abono ? remaining : 0,
-        change: abono ? 0 : change, items: JSON.stringify(abono ? applied : sel.map(i => ({ con: i.con, monto: i.monto }))), pays: JSON.stringify(pays),
-      },
+    const cajaId = await cajaDe(req.user);
+    // Saldar cargos + emitir recibo en UNA transaccion: si algo falla no queda una cartera saldada sin comprobante.
+    const row = await prisma.$transaction(async tx => {
+      if (abono) {
+        let left = paid;
+        for (const i of sel) {
+          if (left <= 0.001) break;
+          const take = Math.min(left, i.monto);
+          applied.push({ con: i.con + (take < i.monto - 0.001 ? ' (abono)' : ''), monto: take, cobroItemId: i.id });
+          if (take >= i.monto - 0.001) await tx.finCobroItem.update({ where: { id: i.id }, data: { paid: true } });
+          else await tx.finCobroItem.update({ where: { id: i.id }, data: { monto: round2(i.monto - take), abono: true } });
+          left -= take;
+        }
+      } else {
+        await tx.finCobroItem.updateMany({ where: { id: { in: sel.map(i => i.id) } }, data: { paid: true } });
+      }
+      const lineas: LineaRecibo[] = abono ? applied : sel.map(i => ({ con: i.con, monto: i.monto, cobroItemId: i.id }));
+      return tx.finRecibo.create({
+        data: {
+          id, ncf, tutor: tutorNombre, tutorId: tutor?.id ?? null, cajaId, cajeroId: req.user.sub, hora: nowHM(), monto: abono ? paid : total, abono, saldo: abono ? remaining : 0,
+          change: abono ? 0 : change, items: JSON.stringify(lineas), pays: JSON.stringify(pays),
+        },
+      });
     });
+    const metodo = metodoDe(pays);
     await audit(req.user, 'Insert', { tabla: 'Recibos', id, next: `${ncf} · ${metodo} · $${row.monto}${abono ? ' (abono)' : ''}`, ip: req.ip });
     // Cobro ligado a una intención de pago del portal (tipo cargos): se cierra con este recibo. Un abono parcial la deja pendiente.
     if (intencionId && !abono) {

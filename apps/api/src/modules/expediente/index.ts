@@ -2,7 +2,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ExpCatalogoItem, ExpDoc, ExpFicha, ExpPersona, ExpServicio, ExpedienteResp, PersPlan } from '@stodia/shared';
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
-import { READONLY_ROLES, digits, kidOf, toAlumno } from '../../lib/personas';
+import { READONLY_ROLES, toAlumno } from '../../lib/personas';
+import { fmtCed } from '../../lib/tutor-datos';
 import { cuentaDerivada, estadoCuota, hoyISO, partesEnZona, zonaHoraria } from '../../lib/cxc';
 import { MNAME, anioDeMes, becasCatalogo, catalogoServicios, cicloActivo, docsRequeridos, getFinanzas, mesesCiclo, persPlan, planesPago, resolverPlan, vencDMY } from '../../lib/pers-fin';
 
@@ -14,21 +15,31 @@ const fichaDefault = (ciclo: string): ExpFicha => ({
 });
 
 const persona = (t: { nombre: string; parentesco: string; cedula: string; tel: string } | null): ExpPersona | null =>
-  t ? { nombre: t.nombre, parentesco: t.parentesco, cedula: t.cedula, tel: t.tel } : null;
+  t ? { nombre: t.nombre, parentesco: t.parentesco, cedula: fmtCed(t.cedula), tel: t.tel } : null;
 
-type ServRow = { id: string; kind: string; catKey: string; name: string; icon: string; spec: string; cost: number; corte: string; est: string; alert: string; fecha: string; st: string; mes: string; recibo: string };
-const toServ = (s: ServRow): ExpServicio => ({ ...s, kind: s.kind as ExpServicio['kind'], st: s.st as ExpServicio['st'] });
+/** «Beca X −10%»: los tipos del catálogo ya empiezan por «Beca» en varios casos; no se duplica el prefijo. */
+const conBeca = (txt: string) => (/^beca\b/i.test(txt) ? txt : 'Beca ' + txt);
+
+type ServRow = { id: string; kind: string; catKey: string; name: string; icon: string; spec: string; cost: number; corte: string; est: string; alert: string; fecha: string; st: string; mes: string; reciboId: string | null };
+const toServ = ({ reciboId, ...s }: ServRow): ExpServicio => ({ ...s, kind: s.kind as ExpServicio['kind'], st: s.st as ExpServicio['st'], recibo: reciboId ?? '' });
 
 const plugin: FastifyPluginAsync = async app => {
   const auth = { onRequest: [app.authenticate] };
   const canWrite = (rol: string) => !READONLY_ROLES.includes(rol);
 
+  /** Ficha completa = JSON de PersExpediente + Contrato del ciclo activo + tutor legal (Alumno.tutorLegalId): contrato y tutor legal viven en tablas con FK. */
   async function loadFicha(alumnoId: string): Promise<ExpFicha> {
-    const [r, ciclo] = await Promise.all([prisma.persExpediente.findUnique({ where: { alumnoId } }), cicloActivo()]);
-    return r ? { ...fichaDefault(ciclo.nombre), ...JSON.parse(r.data) } : fichaDefault(ciclo.nombre);
+    const ciclo = await cicloActivo();
+    const [r, ct, al] = await Promise.all([
+      prisma.persExpediente.findUnique({ where: { alumnoId } }),
+      prisma.contrato.findUnique({ where: { alumnoId_ciclo: { alumnoId, ciclo: ciclo.nombre } } }),
+      prisma.alumno.findUnique({ where: { id: alumnoId }, select: { tutorLegalId: true } }),
+    ]);
+    const f: ExpFicha = r ? { ...fichaDefault(ciclo.nombre), ...JSON.parse(r.data) } : fichaDefault(ciclo.nombre);
+    f.contrato = ct ? { ciclo: ct.ciclo, plan: ct.planId, beca: ct.beca ?? 'none', ctr: ct.ctr, firmado: ct.firmado } : { ...fichaDefault(ciclo.nombre).contrato };
+    if (al?.tutorLegalId) f.tutorLegalId = al.tutorLegalId; else delete f.tutorLegalId;
+    return f;
   }
-  const saveFicha = (alumnoId: string, f: ExpFicha) =>
-    prisma.persExpediente.upsert({ where: { alumnoId }, update: { data: JSON.stringify(f) }, create: { alumnoId, data: JSON.stringify(f) } });
 
   /** Calendario del ciclo activo: meses, año de inicio, hoy y mes actual (zona horaria de la institución). */
   async function calendario(planes: Awaited<ReturnType<typeof planesPago>>) {
@@ -51,14 +62,14 @@ const plugin: FastifyPluginAsync = async app => {
     }
     const [servicios, cuenta, legal, sibs, becas] = await Promise.all([
       prisma.persServicio.findMany({ where: { alumnoId: id } }),
-      prisma.finCobroItem.findMany({ where: { kid: kidOf(id) }, orderBy: { orden: 'asc' } }),
-      ficha.tutorLegalId ? prisma.tutor.findUnique({ where: { id: ficha.tutorLegalId } }) : null,
-      a.tutorId ? prisma.alumno.findMany({ where: { tutorId: a.tutorId, NOT: { id } } }) : [],
+      prisma.finCobroItem.findMany({ where: { alumnoId: id }, orderBy: { orden: 'asc' } }),
+      a.tutorLegalId ? prisma.tutor.findUnique({ where: { id: a.tutorLegalId } }) : null,
+      prisma.alumno.findMany({ where: { tutorId: a.tutorId, NOT: { id } } }),
       prisma.finBeca.findMany({ where: { estado: 'Aprobada' } }),
     ]);
     const hoyCxc = hoyISO(await zonaHoraria());
     const full = (x: { nombres: string; apellidos: string }) => `${x.nombres} ${x.apellidos}`;
-    const becaOf = (x: { nombres: string; apellidos: string }) => becas.filter(b => b.est === full(x)).map(b => `${b.tipo} ${b.regla.includes('%') ? '−' : ''}${b.regla}`);
+    const becaOf = (x: { id: string }) => becas.filter(b => b.alumnoId === x.id).map(b => `${b.tipo} ${b.regla.includes('%') ? '−' : ''}${b.regla}`);
 
     // El contrato guarda el id del plan (o la clave heredada '10'/'4'/'1'); se normaliza al plan real.
     const actual = resolverPlan(planes, ficha.contrato.plan);
@@ -71,7 +82,7 @@ const plugin: FastifyPluginAsync = async app => {
     if (!catalogo.length) avisos.push('No hay servicios con precio configurado (rutas, planes de alimentación, actividades o productos).');
     return {
       alumno: { ...toAlumno(a), cuenta: (await cuentaDerivada())(a.id) }, tutor: persona(a.tutor), legal: persona(legal), ficha,
-      hermanos: sibs.map(s => ({ id: s.id, nombre: full(s), curso: `${s.grado} ${s.sec}`, beca: becaOf(s).map(b => 'Beca ' + b).join(' · ') })),
+      hermanos: sibs.map(s => ({ id: s.id, nombre: full(s), curso: `${s.grado} ${s.sec}`, beca: becaOf(s).map(conBeca).join(' · ') })),
       docs: docs.map(d => ({ id: d.id, n: d.n, f: d.f, est: d.est as ExpDoc['est'] })),
       servicios: servicios.map(toServ),
       cuenta: cuenta.map(c => ({ id: c.id, con: c.con, vence: c.vence, est: estadoCuota(c, hoyCxc), monto: c.monto, paid: c.paid })),
@@ -93,12 +104,14 @@ const plugin: FastifyPluginAsync = async app => {
     const prev = resolverPlan(planes, f.contrato.plan), next = resolverPlan(planes, plan);
     if (!next || (next.estado !== 'Activo' && next.id !== prev?.id) || (beca !== 'none' && !becas.some(b => b.key === beca) && beca !== f.contrato.beca)) return reply.code(400).send({ error: 'Plan o beca inválidos' });
     await audit(req.user, 'Update', { tabla: 'Contrato', id: f.contrato.ctr || req.params.id, prev: `${f.contrato.plan}/${f.contrato.beca}`, next: `${next.id}/${beca}`, ip: req.ip });
-    f.contrato = { ...f.contrato, plan: next.id, beca };
-    await prisma.$transaction([
-      ...(prev && prev.id !== next.id ? [prisma.finPlan.updateMany({ where: { id: prev.id, alumnos: { gt: 0 } }, data: { alumnos: { decrement: 1 } } })] : []),
-      ...(!prev || prev.id !== next.id ? [prisma.finPlan.update({ where: { id: next.id }, data: { alumnos: { increment: 1 } } })] : []),
-    ]);
-    await saveFicha(req.params.id, f);
+    // El contrato es una fila (Contrato) con FK a Plan: «alumnos» de cada plan se cuenta desde aquí, sin contadores que puedan divergir.
+    const ciclo = f.contrato.ciclo || (await cicloActivo()).nombre;
+    const y0 = /(d{4})/.exec(ciclo)?.[1] ?? '';
+    await prisma.contrato.upsert({
+      where: { alumnoId_ciclo: { alumnoId: req.params.id, ciclo } },
+      update: { planId: next.id, beca: beca === 'none' ? null : beca },
+      create: { id: `ctr-${req.params.id}-${y0}`, alumnoId: req.params.id, ciclo, planId: next.id, beca: beca === 'none' ? null : beca, ctr: f.contrato.ctr, firmado: f.contrato.firmado },
+    });
     return { ok: true };
   });
 
@@ -127,8 +140,8 @@ const plugin: FastifyPluginAsync = async app => {
     const base = 1000 + (await prisma.finCobroItem.count());
     await prisma.finCobroItem.createMany({
       data: meses.map((m, i) => ({
-        id: `${sid}-${m}`, kid: kidOf(a.id), con: `${name} · ${MNAME[m]}`, al: `${a.nombres.split(' ')[0]} · ${a.grado} ${a.sec}`, vence: venc(m), monto: cc.price,
-        est: m === cal.mesActual ? 'Por vencer' : 'Pendiente', tipo: 'srv', orden: base + i, ...(a.tutor?.cedula ? { tutorCed: digits(a.tutor.cedula) } : {}),
+        id: `${sid}-${m}`, alumnoId: a.id, tutorId: a.tutorId, servicioId: sid, con: `${name} · ${MNAME[m]}`, al: `${a.nombres.split(' ')[0]} · ${a.grado} ${a.sec}`, vence: venc(m), monto: cc.price,
+        est: m === cal.mesActual ? 'Por vencer' : 'Pendiente', tipo: 'srv', orden: base + i,
       })),
     });
     await audit(req.user, 'Insert', { tabla: 'Servicios', id: `${a.code}/${cc.k}`, prev: '—', next: `${meses.length} cargo(s) × ${cc.price}`, ip: req.ip });
@@ -144,8 +157,7 @@ const plugin: FastifyPluginAsync = async app => {
   });
 
   // Baja: marca el servicio y anula las cuotas futuras pendientes (no vencidas ni pagadas) en CxC.
-  const LEGACY: Record<string, string[]> = { 'psv-fut': ['f10'] };
-  app.post<{ Params: { id: string; sid: string }; Body: { fecha: string } }>('/:id/servicios/:sid/baja', auth, async (req, reply) => {
+    app.post<{ Params: { id: string; sid: string }; Body: { fecha: string } }>('/:id/servicios/:sid/baja', auth, async (req, reply) => {
     if (!canWrite(req.user.rol)) return reply.code(403).send({ error: 'Sin permiso' });
     const s = await prisma.persServicio.findFirst({ where: { id: req.params.sid, alumnoId: req.params.id, kind: 'rec' } });
     const f = req.body?.fecha ?? '';
@@ -153,7 +165,7 @@ const plugin: FastifyPluginAsync = async app => {
     await prisma.persServicio.update({ where: { id: s.id }, data: { est: 'Baja · ' + f.split('-').reverse().join('/') } });
     // Solo se anulan las cuotas NO vencidas (la deuda vencida se deriva de la fecha, regla única de lib/cxc.ts).
     const hoy = hoyISO(await zonaHoraria());
-    const cand = await prisma.finCobroItem.findMany({ where: { paid: false, OR: [{ id: { startsWith: s.id + '-' } }, { id: { in: LEGACY[s.id] ?? [] } }] }, select: { id: true, vence: true, est: true } });
+    const cand = await prisma.finCobroItem.findMany({ where: { paid: false, servicioId: s.id }, select: { id: true, vence: true, est: true } });
     const del = await prisma.finCobroItem.deleteMany({ where: { id: { in: cand.filter(c => estadoCuota(c, hoy) !== 'Vencida').map(c => c.id) } } });
     await audit(req.user, 'Update', { tabla: 'Servicios', id: s.id, prev: 'Activo', next: 'Baja ' + f, ip: req.ip });
     return { anuladas: del.count };
@@ -163,9 +175,10 @@ const plugin: FastifyPluginAsync = async app => {
     if (!canWrite(req.user.rol)) return reply.code(403).send({ error: 'Sin permiso' });
     const s = await prisma.persServicio.findFirst({ where: { id: req.params.sid, alumnoId: req.params.id, kind: 'once', st: 'prog' } });
     if (!s) return reply.code(400).send({ error: 'Solo se cancelan cargos programados' });
+    // Primero los cargos (referencian al servicio por FK), luego el servicio.
     await prisma.$transaction([
+      prisma.finCobroItem.deleteMany({ where: { servicioId: s.id, paid: false } }),
       prisma.persServicio.delete({ where: { id: s.id } }),
-      prisma.finCobroItem.deleteMany({ where: { id: { startsWith: s.id + '-' }, paid: false } }),
     ]);
     return { ok: true };
   });

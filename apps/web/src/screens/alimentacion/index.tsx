@@ -50,7 +50,7 @@ export default function Screen() {
   ];
 
   const openAd = (p: AliPlanDto | null, mode: 'view' | 'edit' | 'create') =>
-    setAd({ id: p?.id ?? null, mode, inscritos: p?.inscritos ?? 0, err: '', f: p ? { ...p, meals: p.meals.slice(), diets: p.diets.slice() } : blank(data.catalogos) });
+    setAd({ id: p?.id ?? null, mode, inscritos: p?.inscritos ?? 0, err: '', f: p ? { ...p, meals: MEALS.map((_, i) => !!p.meals[i]), diets: DIETS.map((_, i) => !!p.diets[i]) } : blank(data.catalogos) });
 
   const del = async (p: AliPlanDto) => {
     if (p.inscritos > 0) { toast(`No se puede eliminar: ${p.inscritos} alumnos inscritos. Márcalo Inactivo para cerrar nuevas inscripciones.`, 'bad'); return; }

@@ -4,7 +4,7 @@ import { prisma } from '../../db';
 import { ahora, bloqueActual, bloquesDe, bloqueTexto, elegirAsig, guardarAsistencia, loadCat, marcasDelDia, nomina, norm, optDe, periodoDe, rubricaDe } from '../../lib/academico';
 import { config } from '../../config';
 import { estadoCuota, hoyISO, round2, venceISO, zonaHoraria } from '../../lib/cxc';
-import { digits, kidOf } from '../../lib/personas';
+import { digits } from '../../lib/personas';
 import { cfgGet, cfgSet } from '../../lib/sisconfig';
 import { audit } from '../../lib/audit';
 import { PASARELAS_IMPLEMENTADAS, comedorGet, comedorSet, pasarelaGet, pasarelaSet } from '../../lib/canales';
@@ -20,10 +20,10 @@ async function menuTutor(): Promise<MobTutorData['menu']> {
 }
 
 const plugin: FastifyPluginAsync = async app => {
-  /** Tutor autenticado: se resuelve SIEMPRE por la cuenta de la sesión (Tutor.usuario = usuario del login), nunca por parámetros ni por un usuario fijo. Cuenta o tutor inactivos = sin acceso. */
+  /** Tutor autenticado: se resuelve SIEMPRE por la cuenta de la sesión (Tutor.userId = id del login (JWT sub)), nunca por parámetros ni por un usuario fijo. Cuenta o tutor inactivos = sin acceso. */
   const tutorDe = async (req: FastifyRequest) => {
     if (req.user.rol !== 'Tutor') return null;
-    const [t, u] = await Promise.all([prisma.tutor.findFirst({ where: { usuario: req.user.usuario }, include: { alumnos: true } }), prisma.user.findUnique({ where: { usuario: req.user.usuario } })]);
+    const [t, u] = await Promise.all([prisma.tutor.findFirst({ where: { userId: req.user.sub }, include: { alumnos: true } }), prisma.user.findUnique({ where: { id: req.user.sub } })]);
     return t && t.estado === 'Activo' && u?.estado === 'Activo' ? t : null;
   };
   /** Consulta del personal (Super Admin / Director / Cajero): ve el portal de un tutor por su cédula, solo lectura. */
@@ -32,12 +32,12 @@ const plugin: FastifyPluginAsync = async app => {
     if (req.user.rol === 'Tutor') return tutorDe(req);
     const d = digits(String(req.query?.cedula ?? ''));
     if (!STAFF_PORTAL.includes(req.user.rol) || d.length < 11) return null;
-    return (await prisma.tutor.findMany({ include: { alumnos: true } })).find(t => digits(t.cedula) === d) ?? null;
+    return prisma.tutor.findUnique({ where: { cedula: d }, include: { alumnos: true } });
   };
 
   /** Cargos exigibles del alumno (CxC): FinCobroItem sin pagar, el mismo origen que usan el POS/Cobros. */
   const cargosDe = async (alumnoId: string) => {
-    const rows = await prisma.finCobroItem.findMany({ where: { kid: kidOf(alumnoId), paid: false }, orderBy: { orden: 'asc' } });
+    const rows = await prisma.finCobroItem.findMany({ where: { alumnoId, paid: false }, orderBy: { orden: 'asc' } });
     // Ordenados por vencimiento (más antiguo primero); a igual fecha, el orden de la cartera.
     return rows.sort((p, q) => (venceISO(p.vence) ?? '9999').localeCompare(venceISO(q.vence) ?? '9999') || p.orden - q.orden);
   };
@@ -58,13 +58,12 @@ const plugin: FastifyPluginAsync = async app => {
     const hoyIso = hoyISO(tz);
     const periodo = periodoDe(hoy.fecha);
     for (const a of t.alumnos) {
-      const [cargos, notas, w, accesos, asisMob, ros, pend] = await Promise.all([
+      const [cargos, notas, w, accesos, ros, pend] = await Promise.all([
         cargosDe(a.id),
         prisma.mobNota.findMany({ where: { alumnoId: a.id }, orderBy: { id: 'asc' } }),
         prisma.mobWallet.findUnique({ where: { alumnoId: a.id } }),
         prisma.mobAcceso.findMany({ where: { alumnoId: a.id }, orderBy: { creado: 'desc' }, take: 10 }),
-        prisma.mobAsistencia.findMany({ where: { alumnoId: a.id }, orderBy: { fecha: 'desc' }, take: 10 }),
-        prisma.acadRoster.findUnique({
+        prisma.acadRoster.findFirst({
           where: { alumnoId: a.id },
           include: { asistencias: { orderBy: { fecha: 'desc' }, take: 10 }, notas: { where: { periodo } } },
         }),
@@ -83,7 +82,7 @@ const plugin: FastifyPluginAsync = async app => {
         const i = notasH.findIndex(x => norm(x.materia) === norm(m.nombre));
         if (i >= 0) notasH[i] = { materia: notasH[i].materia, valor }; else notasH.unshift({ materia: m.nombre as string, valor });
       }
-      const porFecha = new Map<string, string>(asisMob.map(x => [x.fecha, x.estado]));
+      const porFecha = new Map<string, string>();
       for (const x of ros?.asistencias ?? []) porFecha.set(x.fecha, x.estado);
       const asis = [...porFecha].map(([fecha, estado]) => ({ fecha, estado })).sort((p, q) => (p.fecha < q.fecha ? 1 : -1)).slice(0, 10);
       hijos.push({
@@ -124,7 +123,7 @@ const plugin: FastifyPluginAsync = async app => {
     const previa = await prisma.mobPagoIntencion.findFirst({ where: { alumnoId, tipo: 'cargos', estado: 'pendiente' } });
     const it = previa
       ? await prisma.mobPagoIntencion.update({ where: { id: previa.id }, data: { monto, detalle } })
-      : await prisma.mobPagoIntencion.create({ data: { alumnoId, tutor: t.nombre, tipo: 'cargos', monto, detalle } });
+      : await prisma.mobPagoIntencion.create({ data: { alumnoId, tutorId: t.id, tipo: 'cargos', monto, detalle } });
     return { modo: 'manual', intencion: it.id, monto, instrucciones: await instruccionesPago() };
   });
 
@@ -141,7 +140,7 @@ const plugin: FastifyPluginAsync = async app => {
     if (recarga && recarga > 0) {
       if (pas.demo) saldo = w.saldo + recarga;
       else if (pas.activa) return reply.code(501).send({ error: `La pasarela «${pas.proveedor ?? 'sin proveedor'}» no está disponible. Recarga en administración.` });
-      else intencion = (await prisma.mobPagoIntencion.create({ data: { alumnoId, tutor: t.nombre, tipo: 'recarga', monto: recarga } })).id;
+      else intencion = (await prisma.mobPagoIntencion.create({ data: { alumnoId, tutorId: t.id, tipo: 'recarga', monto: recarga } })).id;
     }
     const up = await prisma.mobWallet.update({
       where: { alumnoId },
@@ -158,15 +157,15 @@ const plugin: FastifyPluginAsync = async app => {
   const cajero = { onRequest: [app.authenticate, app.requireRole('Super Admin', 'Cajero')] };
   app.get<{ Querystring: { estado?: string } }>('/pagos/intenciones', cajero, async req => {
     const estado = req.query.estado ?? 'pendiente';
-    const rows = await prisma.mobPagoIntencion.findMany({ where: estado === 'todas' ? {} : { estado }, orderBy: { creado: 'desc' }, take: 200 });
+    const rows = await prisma.mobPagoIntencion.findMany({ where: estado === 'todas' ? {} : { estado }, orderBy: { creado: 'desc' }, take: 200, include: { tutor: { select: { nombre: true } } } });
     const als = await prisma.alumno.findMany({ where: { id: { in: [...new Set(rows.map(r => r.alumnoId))] } }, select: { id: true, nombres: true, apellidos: true } });
     const ids = [...new Set(rows.flatMap(r => JSON.parse(r.detalle) as string[]))];
     const items = new Map((await prisma.finCobroItem.findMany({ where: { id: { in: ids } } })).map(i => [i.id, i]));
     return rows.map((r): MobPagoIntencionDto => {
       const a = als.find(x => x.id === r.alumnoId);
       return {
-        id: r.id, alumnoId: r.alumnoId, alumno: a ? `${a.nombres} ${a.apellidos}` : r.alumnoId, tutor: r.tutor, tipo: r.tipo as 'cargos' | 'recarga', monto: r.monto,
-        estado: r.estado as MobPagoIntencionDto['estado'], creado: iso(r.creado)!, resuelto: iso(r.resuelto), resueltoPor: r.resueltoPor, nota: r.nota, reciboId: r.reciboId,
+        id: r.id, alumnoId: r.alumnoId, alumno: a ? `${a.nombres} ${a.apellidos}` : r.alumnoId, tutor: r.tutor.nombre, tipo: r.tipo as 'cargos' | 'recarga', monto: r.monto,
+        estado: r.estado as MobPagoIntencionDto['estado'], creado: iso(r.creado)!, resuelto: iso(r.resuelto), resueltoPor: r.resueltoPor ?? '', nota: r.nota, reciboId: r.reciboId ?? '',
         detalle: (JSON.parse(r.detalle) as string[]).map(id => items.get(id)).filter((i): i is NonNullable<typeof i> => !!i).map(i => ({ id: i.id, con: i.con, monto: i.monto })),
       };
     });
@@ -178,8 +177,10 @@ const plugin: FastifyPluginAsync = async app => {
     if (r.estado !== 'pendiente') return reply.code(409).send({ error: `Ya estaba ${r.estado}` });
     const nota = String(req.body?.nota ?? '').trim().slice(0, 300), reciboId = String(req.body?.reciboId ?? '').trim().slice(0, 40);
     if (accion === 'rechazada' && !nota) return reply.code(400).send({ error: 'Indica el motivo del rechazo' });
+    // El recibo es una FK real: debe existir (vacío = sin recibo).
+    if (reciboId && !(await prisma.finRecibo.findUnique({ where: { id: reciboId }, select: { id: true } }))) return reply.code(400).send({ error: `El recibo ${reciboId} no existe` });
     // Reclamo atómico: solo una resolución gana si dos cajeros actúan a la vez.
-    const ok = await prisma.mobPagoIntencion.updateMany({ where: { id: r.id, estado: 'pendiente' }, data: { estado: accion, resuelto: new Date(), resueltoPor: req.user.usuario, nota, reciboId } });
+    const ok = await prisma.mobPagoIntencion.updateMany({ where: { id: r.id, estado: 'pendiente' }, data: { estado: accion, resuelto: new Date(), resueltoPor: req.user.usuario, nota, reciboId: reciboId || null } });
     if (!ok.count) return reply.code(409).send({ error: 'Ya fue resuelta por otro usuario' });
     if (accion === 'confirmada' && r.tipo === 'recarga')
       await prisma.mobWallet.upsert({ where: { alumnoId: r.alumnoId }, update: { saldo: { increment: r.monto } }, create: { alumnoId: r.alumnoId, saldo: r.monto, limite: 200 } });

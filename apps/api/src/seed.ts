@@ -5,11 +5,22 @@ import { seedMovil, seedDemoModos } from './seed-movil';
 import { seedOperacion } from './seed-operacion';
 import { CAT_SEED, DIR0, SEED_USERS, norm } from './seed-data';
 import { seedSupervisorPin } from './lib/supervisor';
+import { asegurarIndices } from './lib/db-indices';
+// Imports estaticos: el import() dinamico sin extension falla en la build CJS (Docker): Node lo resuelve como ESM.
+import { seedFinanzasBase, seedFinanzasCartera } from './seed-finanzas';
+import seedAcademico from './seed-academico';
+import seedSistema from './seed-sistema';
+import seedPersonas from './seed-personas';
+import { seedInstalacion } from './seed-instalacion';
+import { sembrarDemoGrande } from './seed-demo-grande';
+import { seedCatalogos } from './seed-catalogos';
+import { alinearPlanesAli } from './lib/ali-catalogos';
 
 /** Idempotente: se puede ejecutar en cada arranque. No pisa datos de registros ya existentes. */
 async function main() {
+  await asegurarIndices();
   if (!config.seedDemo) {
-    await (await import('./seed-instalacion')).seedInstalacion();
+    await seedInstalacion();
     await seedSupervisorPin(false);
     return;
   }
@@ -34,6 +45,7 @@ async function main() {
   const byTutor = new Map<string, string>(); // nombre -> tel
   for (const d of DIR0) if (!byTutor.has(d[7])) byTutor.set(d[7], d[12]);
   const tutorIdByName = new Map<string, string>();
+  const usuarios = new Map((await prisma.user.findMany({ select: { id: true, usuario: true } })).map(u => [u.usuario, u.id]));
   let i = 0;
   for (const [nombre, tel] of byTutor) {
     const [first, second = ''] = nombre.split(' ');
@@ -45,12 +57,13 @@ async function main() {
       create: {
         id,
         nombre,
-        cedula: '001-' + String(1504321 + i * 7919).padStart(7, '0') + '-' + (i % 9),
+        cedula: '001' + String(1504321 + i * 7919).padStart(7, '0') + (i % 9), // solo digitos (11), UNIQUE
         parentesco: femenino ? 'Madre' : 'Padre',
         tipo: 'Financiero y académico',
         tel,
         email: `${norm(first)}.${norm(second)}@correo.do`,
-        usuario: i < 4 ? `${norm(first)[0]}.${norm(second)}` : null,
+        // Cuenta del portal: solo si el usuario de login EXISTE (FK a User); los demas tutores quedan sin acceso (NULL), no con un nombre de usuario inexistente.
+        userId: (i < 4 ? usuarios.get(`${norm(first)[0]}.${norm(second)}`) : undefined) ?? null,
       },
     });
     tutorIdByName.set(nombre, id);
@@ -63,19 +76,23 @@ async function main() {
       update: {},
       create: {
         id: r[0], code: 'EST-2026-' + r[0], nombres: r[1], apellidos: r[2], fnac: r[3], grado: r[4], sec: r[5],
-        tanda: r[6], cuenta: r[8], estado: r[9], alg: r[10], dir: r[11], tel: r[12], tutorId: tutorIdByName.get(r[7]),
+        tanda: r[6], cuenta: r[8], estado: r[9], alg: r[10], dir: r[11], tel: r[12], tutorId: tutorIdByName.get(r[7])!,
       },
     });
   }
   await seedMovil();
   await seedDemoModos();
   await seedOperacion();
-  await (await import('./seed-finanzas')).default();
-  await (await import('./seed-academico')).default();
-  await (await import('./seed-sistema')).default();
-  await (await import('./seed-personas')).default();
+  // Orden dictado por las FK: recibos y planes -> servicios y contratos del alumno -> cartera (cargos referencian servicios) -> academico.
+  await seedFinanzasBase();
+  await seedPersonas();
+  await seedFinanzasCartera();
+  await seedAcademico();
+  await seedSistema();
   await seedSupervisorPin(true);
-  if (process.env.DEMO_SCALE === 'large') await (await import('./seed-demo-grande')).sembrarDemoGrande(); // solo SEED_DEMO=true (este camino)
+  if (process.env.DEMO_SCALE === 'large') await sembrarDemoGrande(); // solo SEED_DEMO=true (este camino)
+  await seedCatalogos(); // catálogos maestros de prueba (solo SEED_DEMO=true; aditivo e idempotente)
+  await alinearPlanesAli(); // banderas posicionales de los planes de alimentación = longitud de los catálogos finales
   console.log(`seed ok: ${SEED_USERS.length} usuarios, ${DIR0.length} alumnos, ${byTutor.size} tutores`);
 }
 

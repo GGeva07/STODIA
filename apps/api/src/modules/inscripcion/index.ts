@@ -15,19 +15,14 @@ type TutorRowDb = NonNullable<Awaited<ReturnType<typeof prisma.tutor.findFirst>>
 async function lookup(ced: string): Promise<InsTutorLookup & { tel?: string; row?: TutorRowDb }> {
   const d = digits(ced);
   if (d.length < 11) return { found: false };
-  const tutors = await prisma.tutor.findMany();
-  const t = tutors.find(x => digits(x.cedula) === d);
+  const t = await prisma.tutor.findUnique({ where: { cedula: d } });
   if (!t) return { found: false };
-  const [fin, leg] = await Promise.all([
-    prisma.alumno.count({ where: { tutorId: t.id } }),
-    prisma.persExpediente.findMany({ select: { data: true } }),
-  ]);
-  const legal = leg.filter(r => (JSON.parse(r.data) as ExpFicha).tutorLegalId === t.id).length;
+  const [fin, legal] = await Promise.all([prisma.alumno.count({ where: { tutorId: t.id } }), prisma.alumno.count({ where: { tutorLegalId: t.id } })]);
   const info = fin ? `tutor financiero de ${fin} alumno${fin === 1 ? '' : 's'}` : legal ? `tutor${t.parentesco === 'Madre' ? 'a' : ''} legal de ${legal} alumno${legal === 1 ? '' : 's'}` : 'sin alumnos vinculados';
   return { found: true, id: t.id, nombre: t.nombre, info, tel: t.tel, row: t, datos: { parentesco: t.parentesco, tel: t.tel, email: t.email ?? '', rnc: t.rnc ?? '' } };
 }
 
-/** Grados, tandas y secciones salen de los Catálogos (única fuente: PersCupo ya no se lee). Inscritos = el mayor entre el contador del catálogo y los alumnos reales. */
+/** Grados, tandas y secciones salen de los Catálogos. Inscritos = alumnos reales de la sección (se calcula; ya no hay contador guardado). */
 async function cargarCupos() {
   const [rows, alumnos] = await Promise.all([
     prisma.catalogo.findMany({ where: { tipo: { in: ['grados', 'tandas', 'secciones'] } }, orderBy: { id: 'asc' } }),
@@ -43,7 +38,7 @@ async function cargarCupos() {
     const g = gr.find(x => x.d.id === s.d.grado && x.row.estado === 'Activo'), t = td.find(x => x.d.id === s.d.tanda && x.row.estado === 'Activo');
     if (!g || !t) continue;
     const real = alumnos.filter(a => a.grado === g.d.grado && a.sec === s.d.seccion && a.tanda === t.d.nombre).length;
-    cupos.push({ id: s.row.id, grado: String(g.d.id), tanda: String(t.d.nombre), seccion: String(s.d.seccion), cap: Number(s.d.cap) || 0, used: Math.max(Number(s.d.insc) || 0, real) });
+    cupos.push({ id: s.row.id, grado: String(g.d.id), tanda: String(t.d.nombre), seccion: String(s.d.seccion), cap: Number(s.d.cap) || 0, used: real });
   }
   return { grados, tandas, cupos, gradoNombre: (id: string) => String(gr.find(g => g.d.id === id)?.d.grado ?? '') };
 }
@@ -118,11 +113,11 @@ const plugin: FastifyPluginAsync = async app => {
       if (l.row) { // tutor existente: se reutiliza y se actualizan sus datos si cambiaron (queda en Auditoría)
         const prev = l.row;
         const t = await prisma.tutor.update({ where: { id: prev.id }, data: datos });
-        for (const k of ['parentesco', 'tipo', 'tel', 'email', 'rnc'] as const) { const x = String(prev[k] ?? ''), y = String(t[k] ?? ''); if (x !== y) await audit(req.user, 'Update', { tabla: 'Tutores', id: `${t.cedula}/${k}`, prev: x || '—', next: y || '—', ip: req.ip }); }
+        for (const k of ['parentesco', 'tipo', 'tel', 'email', 'rnc'] as const) { const x = String(prev[k] ?? ''), y = String(t[k] ?? ''); if (x !== y) await audit(req.user, 'Update', { tabla: 'Tutores', id: `${fmtCed(t.cedula)}/${k}`, prev: x || '—', next: y || '—', ip: req.ip }); }
         return t.id;
       }
       const id = 'u' + ++seq;
-      await prisma.tutor.create({ data: { id, nombre: v.nombre, cedula: v.cedula, ...datos } });
+      await prisma.tutor.create({ data: { id, nombre: v.nombre, cedula: digits(v.cedula), ...datos } });
       await audit(req.user, 'Insert', { tabla: 'Tutores', id: v.cedula, prev: '—', next: `${v.nombre} · ${v.tipo}`, ip: req.ip });
       return id;
     };
@@ -138,11 +133,11 @@ const plugin: FastifyPluginAsync = async app => {
     const hoy = `${String(hoyP.d).padStart(2, '0')}/${String(hoyP.m).padStart(2, '0')}/${hoyP.y}`;
     const mesNom = MES_ES[hoyP.m - 1];
 
-    const ficha: ExpFicha = {
+    // El contrato y el tutor legal tienen tabla/columna propia (Contrato, Alumno.tutorLegalId): no se duplican en el JSON de la ficha.
+    const ficha: Omit<ExpFicha, 'contrato' | 'tutorLegalId'> = {
       carnet: '', ingreso: `${mesNom[0].toUpperCase()}${mesNom.slice(1)} ${hoyP.y} · ${grado} ${sec}`, geo: '',
       medico: { sangre: '', seguro: '', poliza: '', condiciones: '', planAlim: '', planAlimExtra: '', emergenciaNombre: '', emergenciaTel: finTutor.tel, alertaDetalle: '' },
-      conducta: { obs: [], record: 'Sin observaciones' }, hist: [], tutorLegalId: legalId,
-      contrato: { ciclo: ciclo.nombre, plan: plan.id, beca: 'none', ctr: `CTR-${ciclo.y0}-${id}`, firmado: b.firma === 'digital' ? hoy : '' },
+      conducta: { obs: [], record: 'Sin observaciones' }, hist: [],
     };
 
     // Cartera: cuotas del plan real (montos por tanda, descuento y meses del plan) + servicios desde el mes actual hasta fin de ciclo.
@@ -155,33 +150,31 @@ const plugin: FastifyPluginAsync = async app => {
     const venc = (m: number) => vencDMY(dia, m, anioDeMes(meses, ciclo.y0, m));
     const al = `${b.nombre.trim().split(' ')[0]} · ${grado} ${sec}`;
     const base = 2000 + (await prisma.finCobroItem.count());
-    const ced = digits(finTutor.cedula);
     const svc = cat.filter(s => s.rec && b.serv?.includes(s.k));
     const sname = (l: string) => l.split(' · ').pop()!;
+    const svcId = (k: string) => `psv-${k.replace(/\W/g, '')}-${id}`;
 
     await prisma.$transaction([
       prisma.alumno.create({
-        data: { id, code, nombres: b.nombre.trim(), apellidos: b.apellido.trim(), fnac: b.fnac, grado, sec, tanda, cuenta: 'ok', estado: 'Activo', tel: finTutor.tel, tutorId: finId },
+        data: { id, code, nombres: b.nombre.trim(), apellidos: b.apellido.trim(), fnac: b.fnac, grado, sec, tanda, cuenta: 'ok', estado: 'Activo', tel: finTutor.tel, tutorId: finId, tutorLegalId: legalId },
       }),
       prisma.persExpediente.create({ data: { alumnoId: id, data: JSON.stringify(ficha) } }),
       prisma.persDocumento.createMany({
         data: DOCS.map((n, i) => ({ id: `pdoc-${id}-${i}`, alumnoId: id, n, f: b.docs?.[i] ? 'recibido_' + slug(n) + '.pdf' : 'Sin archivo', est: b.docs?.[i] ? 'En revisión' : 'Pendiente', orden: i })),
       }),
       prisma.persServicio.createMany({
-        data: svc.map(s => ({ id: `psv-${s.k.replace(/\W/g, '')}-${id}`, alumnoId: id, kind: 'rec', catKey: s.k, name: sname(s.l), icon: s.icon, spec: s.spec, cost: s.price, corte: `Día ${String(dia).padStart(2, '0')} de cada mes` })),
+        data: svc.map(s => ({ id: svcId(s.k), alumnoId: id, kind: 'rec', catKey: s.k, name: sname(s.l), icon: s.icon, spec: s.spec, cost: s.price, corte: `Día ${String(dia).padStart(2, '0')} de cada mes` })),
       }),
       prisma.finCobroItem.createMany({
         data: [
-          ...vencs.map((v, i) => ({ id: `ins-${id}-c${v.m}`, kid: id, con: `Colegiatura ${MNAME[v.m]} ${v.y}`, al, vence: vencDMY(plan.dia, v.m, v.y), monto: montos[i], est: 'Pendiente', tipo: 'col', orden: base + i, tutorCed: ced })),
-          ...svc.flatMap((s, j) => meses.slice(idxHoy).map((m, i) => ({ id: `ins-${id}-${s.k.replace(/\W/g, '')}${m}`, kid: id, con: `${sname(s.l)} · ${MNAME[m]}`, al, vence: venc(m), monto: s.price, est: 'Pendiente', tipo: 'srv', orden: base + 100 + j * 20 + i, tutorCed: ced }))),
+          ...vencs.map((v, i) => ({ id: `ins-${id}-c${v.m}`, alumnoId: id, tutorId: finId, con: `Colegiatura ${MNAME[v.m]} ${v.y}`, al, vence: vencDMY(plan.dia, v.m, v.y), monto: montos[i], est: 'Pendiente', tipo: 'col', orden: base + i })),
+          ...svc.flatMap((s, j) => meses.slice(idxHoy).map((m, i) => ({ id: `ins-${id}-${s.k.replace(/\W/g, '')}${m}`, alumnoId: id, tutorId: finId, servicioId: svcId(s.k), con: `${sname(s.l)} · ${MNAME[m]}`, al, vence: venc(m), monto: s.price, est: 'Pendiente', tipo: 'srv', orden: base + 100 + j * 20 + i }))),
         ],
       }),
-      prisma.finPlan.update({ where: { id: plan.id }, data: { alumnos: { increment: 1 } } }),
-      prisma.persInscripcion.create({ data: { id: 'ins-' + id, alumnoId: id, ncf, factura, plan: plan.id, cuotas: vencs.length, firma: b.firma } }),
+      // Contrato del ciclo (plan con FK; «alumnos» del plan se cuenta desde aquí) y evidencia fiscal de la inscripción.
+      prisma.contrato.create({ data: { id: `ctr-${id}-${ciclo.y0}`, alumnoId: id, ciclo: ciclo.nombre, planId: plan.id, beca: null, ctr: `CTR-${ciclo.y0}-${id}`, firmado: b.firma === 'digital' ? hoy : '' } }),
+      prisma.persInscripcion.create({ data: { id: 'ins-' + id, alumnoId: id, ncf, factura, planId: plan.id, cuotas: vencs.length, firma: b.firma } }),
     ]);
-    // El contador «Inscritos» del catálogo de secciones sube con cada inscripción.
-    const sr = await prisma.catalogo.findUnique({ where: { id: cupo.id } });
-    if (sr) { const d = JSON.parse(sr.data) as Record<string, unknown>; await prisma.catalogo.update({ where: { id: sr.id }, data: { data: JSON.stringify({ ...d, insc: Math.max(Number(d.insc) || 0, cupo.used) + 1 }) } }); }
     await audit(req.user, 'Insert', { tabla: 'Inscripciones', id: code, prev: '—', next: `${ncf} · ${factura}`, ip: req.ip });
     const res: InsResp = { code, ncf, factura, cuotas: vencs.length };
     return res;

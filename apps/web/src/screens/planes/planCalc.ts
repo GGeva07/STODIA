@@ -22,10 +22,12 @@ export function planCalc(f: PlanForm, tandasLista?: string[], ciclo0?: number) {
     ? (tandasLista ?? Object.keys(f.tm ?? {})).map(t => {
         const a = parseFloat(f.tm?.[t] ?? '') || 0;
         const tt = Math.round(a * (1 - desc / 100) * 100) / 100;
-        return { l: t, a, total: tt, cuota: n ? Math.round((tt / n) * 100) / 100 : 0 };
+        return { l: t, a, total: tt, cuota: n ? Math.round((tt / n) * 100) / 100 : 0, sinPrecio: !(a > 0) };
       })
     : null;
-  return { n, anual, desc, total, cuota, sched, tandas };
+  /** Tandas del plan «por tanda» sin monto: no se calcula nada (ni se inscribe) hasta definirlo; la UI las avisa en vez de mostrar RD$ 0. */
+  const sinPrecio = tandas ? tandas.filter(t => t.sinPrecio).map(t => t.l) : [];
+  return { n, anual, desc, total, cuota, sched, tandas, sinPrecio };
 }
 
 export const moraLbl = (f: PlanForm) =>

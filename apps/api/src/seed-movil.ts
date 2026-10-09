@@ -3,7 +3,8 @@ import { prisma } from './db';
 
 const NOTAS: Record<string, [string, number][]> = {
   '0412': [['Matemáticas', 82], ['Lengua Española', 86.5], ['Inglés', 91], ['Ciencias Naturales', 84], ['Ciencias Sociales', 88.5]],
-  '0587': [['Lectoescritura', 93], ['Matemáticas', 90.5], ['Inglés', 95], ['Ciencias', 88]],
+  // Nombres EXACTOS del catálogo de materias (MobNota.materia se cruza por nombre hasta la Fase 2).
+  '0587': [['Taller de Lectoescritura', 93], ['Matemáticas', 90.5], ['Inglés', 95], ['Ciencias Naturales', 88]],
 };
 
 /** Idempotente (upsert con update vacío). Requiere que los alumnos ya estén sembrados. */

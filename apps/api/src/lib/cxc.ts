@@ -1,18 +1,16 @@
 import { prisma } from '../db';
 import { cfgGet } from './sisconfig';
-import { kidOf } from './personas';
 
 /**
  * CUENTAS POR COBRAR (CxC): única fuente de verdad de la deuda de los alumnos.
  *
  * Fuente: `FinCobroItem` con `paid = false` (es la cartera que el POS/Cobros, la inscripción y el expediente
- * crean y que el cobro va saldando; abonos parciales reducen `monto`). `MobCargo` es solo el espejo para el
- * portal móvil del tutor y NO se suma, para no contar dos veces el mismo cargo.
+ * crean y que el cobro va saldando; abonos parciales reducen `monto`).
  *
  * Un cargo está VENCIDO cuando su fecha de vencimiento (dd/mm/aaaa) es anterior a HOY en la zona horaria
  * de la institución (SisConfig 'perfil'.zonaHoraria, por defecto America/Santo_Domingo). Si la fecha no se
  * puede interpretar, se usa el estado guardado ('Vencida').
- * El alumno de un cargo se identifica con `kid`: el corto del prototipo (juan/sofia) o el id del alumno (ver kidOf).
+ * El alumno de un cargo se identifica con `alumnoId` (FK real a Alumno.id).
  */
 export const DEFAULT_TZ = 'America/Santo_Domingo';
 export const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -67,29 +65,29 @@ export function saldoCuenta(items: { monto: number; vence: string; est?: string 
   return { vencido: round2(vencido), porVencer: round2(noVencido), exigible: round2(exigible), total: round2(vencido + noVencido) };
 }
 
-export interface Cxc { vencido: number; porVencer: number; vencidoPorKid: Map<string, number> }
+export interface Cxc { vencido: number; porVencer: number; vencidoPorAlumno: Map<string, number> }
 
-/** Resumen de CxC (opcionalmente acotado a ciertos `kid`). */
-export async function cxcResumen(kids?: string[], tz?: string): Promise<Cxc> {
+/** Resumen de CxC (opcionalmente acotado a ciertos alumnos). */
+export async function cxcResumen(alumnoIds?: string[], tz?: string): Promise<Cxc> {
   const hoy = hoyISO(tz ?? await zonaHoraria());
-  const items = await prisma.finCobroItem.findMany({ where: { paid: false, ...(kids ? { kid: { in: kids } } : {}) }, select: { kid: true, monto: true, vence: true, est: true } });
-  const out: Cxc = { vencido: 0, porVencer: 0, vencidoPorKid: new Map() };
+  const items = await prisma.finCobroItem.findMany({ where: { paid: false, ...(alumnoIds ? { alumnoId: { in: alumnoIds } } : {}) }, select: { alumnoId: true, monto: true, vence: true, est: true } });
+  const out: Cxc = { vencido: 0, porVencer: 0, vencidoPorAlumno: new Map() };
   for (const i of items) {
-    if (esVencido(i, hoy)) { out.vencido += i.monto; out.vencidoPorKid.set(i.kid, (out.vencidoPorKid.get(i.kid) ?? 0) + i.monto); } else out.porVencer += i.monto;
+    if (esVencido(i, hoy)) { out.vencido += i.monto; out.vencidoPorAlumno.set(i.alumnoId, (out.vencidoPorAlumno.get(i.alumnoId) ?? 0) + i.monto); } else out.porVencer += i.monto;
   }
   out.vencido = round2(out.vencido); out.porVencer = round2(out.porVencer);
-  for (const [k, v] of out.vencidoPorKid) out.vencidoPorKid.set(k, round2(v));
+  for (const [k, v] of out.vencidoPorAlumno) out.vencidoPorAlumno.set(k, round2(v));
   return out;
 }
 
 /** Estado de cuenta derivado ('mora' si el alumno tiene saldo vencido, 'ok' si no). `Alumno.cuenta` guardado ya no se usa para decidir: es un valor derivado. */
 export async function cuentaDerivada(): Promise<(alumnoId: string) => 'mora' | 'ok'> {
   const r = await cxcResumen();
-  return id => ((r.vencidoPorKid.get(kidOf(id)) ?? 0) > 0 ? 'mora' : 'ok');
+  return id => ((r.vencidoPorAlumno.get(id) ?? 0) > 0 ? 'mora' : 'ok');
 }
 
 /** Saldo vencido por id de alumno (0 si no debe nada). */
 export async function saldoVencidoPorAlumno(alumnoIds: string[]): Promise<Record<string, number>> {
-  const r = await cxcResumen(alumnoIds.map(kidOf));
-  return Object.fromEntries(alumnoIds.map(id => [id, r.vencidoPorKid.get(kidOf(id)) ?? 0]));
+  const r = await cxcResumen(alumnoIds);
+  return Object.fromEntries(alumnoIds.map(id => [id, r.vencidoPorAlumno.get(id) ?? 0]));
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { LicenseProvider, useLicense } from '../components/system/License';
 import { UiProvider, useUi } from '../components/system/UiProvider';
@@ -6,6 +6,14 @@ import type { CfgCiclo, ConfigGlobal } from '@stodia/shared';
 import { NAV, canAccess, setAccessOverride, useAccessVersion } from '../lib/access';
 import { api, getConfig } from '../lib/api';
 import { useSession } from '../lib/session';
+import { preloadScreens } from '../screens';
+
+/** Fallback de la zona de contenido: aparece solo si la pantalla tarda más de 250 ms, para que las cargas rápidas no parpadeen. */
+function DelayedLoading() {
+  const [show, setShow] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setShow(true), 250); return () => clearTimeout(t); }, []);
+  return show ? <div className="py-10 text-center text-sm text-slate-400">Cargando…</div> : null;
+}
 
 const ORDEN_CICLO: Record<CfgCiclo['estado'], number> = { Activo: 0, Planificado: 1, Cerrado: 2 };
 const mono = "'JetBrains Mono',monospace";
@@ -131,6 +139,7 @@ function Shell() {
 
   useEffect(() => { if (user) api.get<ConfigGlobal>('/config').then(c => setAccessOverride(c.access)).catch(() => undefined); }, [user]);
   useEffect(() => { setMenu(''); setOpen(false); main.current?.scrollTo(0, 0); }, [loc.pathname]);
+  useEffect(() => { preloadScreens(); }, []);
   useEffect(() => {
     const h = (e: MouseEvent) => { if (headerMenus.current && !headerMenus.current.contains(e.target as Node)) setMenu(''); };
     const k = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(''); };
@@ -221,7 +230,7 @@ function Shell() {
               <span>Inicio</span><i className="ph ph-caret-right text-[10px]" /><span>{grp.g}</span><i className="ph ph-caret-right text-[10px]" /><span className="font-medium text-ink">{title}</span>
             </div>
           )}
-          {info && (info.estado === 'vencida' || info.estado === 'invalida' || info.estado === 'sin_licencia') && loc.pathname !== '/licencia' ? <ExpiredGate /> : <Outlet />}
+          {info && (info.estado === 'vencida' || info.estado === 'invalida' || info.estado === 'sin_licencia') && loc.pathname !== '/licencia' ? <ExpiredGate /> : <Suspense fallback={<DelayedLoading />}><Outlet /></Suspense>}
         </main>
       </div>
     </div>

@@ -3,38 +3,68 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "sqlserver"
   url      = env("DATABASE_URL")
 }
 
+// =====================================================================================================================
+// REGLAS DE INTEGRIDAD (Fase 1 de docs/db-relaciones.md)
+//  - Toda referencia a una entidad es una FK REAL al id interno (nunca al nombre, cedula o codigo).
+//  - onUpdate: NoAction siempre (los ids no se editan; Cascade en update provoca "multiple cascade paths" en SQL Server).
+//  - onDelete: NoAction (Prisma + SQL Server no admiten Restrict; en SQLite NoAction equivale) para TODO lo financiero, fiscal,
+//    academico, auditoria y documentos con valor propio. Un alumno/tutor con historial NO se borra: se desactiva (estado).
+//  - Cascade SOLO en PersExpediente / PersDocumento (y MobNota, tabla demostrativa) respecto del Alumno, y en las lineas de una venta.
+//  - SetNull en logs/historial que sobreviven a su referencia (ComLectura.alumnoId, CmnMensaje.tutorId, Tutor.userId).
+//  - El grafo de Cascade/SetNull es un bosque: ningun modelo se alcanza por dos caminos en cascada (error 1785 de SQL Server).
+//  - UNIQUE sobre columnas opcionales = indices FILTRADOS creados por src/lib/db-indices.ts (SQL Server solo admite un NULL en un UNIQUE normal).
+//  - Las referencias a la tabla generica Catalogo (grado/seccion/tanda, materia, docente, aula, caja, beca, metodo de pago...) siguen
+//    siendo logicas hasta la Fase 2 (catalogos tipados); aqui se verifican con scripts/fk-auditar.ts.
+// =====================================================================================================================
+
 model User {
-  id           String @id @default(cuid())
-  usuario      String @unique
+  id           String @id @default(cuid()) @db.NVarChar(100)
+  usuario      String @unique @db.NVarChar(100)
   nombre       String
   rol          String
   passwordHash String
   estado       String @default("Activo")
   /// Contraseña temporal: obliga a cambiarla en el primer ingreso.
   mustChange   Boolean @default(false)
+  // Cuenta del portal del tutor (a lo sumo una por tutor: indice unico filtrado UX_Tutor_userId).
+  tutores      Tutor[]
+  mensajes     CmnMensaje[]
+  recibos      FinRecibo[]
 }
 
 model Tutor {
-  id         String   @id
+  id         String   @id @db.NVarChar(100)
   nombre     String
-  cedula     String
+  /// Cedula normalizada: SOLO digitos (11), UNIQUE. La presentacion con guiones (000-0000000-0) la da lib/tutor-datos.fmtCed.
+  cedula     String   @unique @db.NVarChar(100)
   parentesco String
   tipo       String
   tel        String
   email      String?
   rnc        String?
-  usuario    String?
+  /// Cuenta de login del portal (User.id). NULL = sin acceso al portal.
+  userId     String?  @db.NVarChar(100)
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   estado     String   @default("Activo")
-  alumnos    Alumno[]
+  /// Alumnos de los que es tutor FINANCIERO (un solo tutor financiero vigente por alumno: Alumno.tutorId).
+  alumnos      Alumno[] @relation("TutorFinanciero")
+  /// Alumnos de los que es tutor LEGAL (Alumno.tutorLegalId).
+  alumnosLegal Alumno[] @relation("TutorLegal")
+  cobros       FinCobroItem[]
+  recibos      FinRecibo[]
+  intenciones  MobPagoIntencion[]
+  mensajes     CmnMensaje[]
+
+  @@index([userId])
 }
 
 model Alumno {
-  id        String  @id
-  code      String  @unique
+  id        String  @id @db.NVarChar(100)
+  code      String  @unique @db.NVarChar(100)
   nombres   String
   apellidos String
   fnac      String
@@ -46,77 +76,78 @@ model Alumno {
   alg       String  @default("")
   dir       String  @default("")
   tel       String  @default("")
-  tutorId   String?
-  tutor     Tutor?  @relation(fields: [tutorId], references: [id])
-  roster    AcadRoster?
+  /// Tutor FINANCIERO (obligatorio: un alumno no puede quedar sin responsable de pago).
+  tutorId   String  @db.NVarChar(100)
+  tutor     Tutor   @relation("TutorFinanciero", fields: [tutorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Tutor LEGAL (opcional; igual al financiero cuando son la misma persona).
+  tutorLegalId String? @db.NVarChar(100)
+  tutorLegal   Tutor?  @relation("TutorLegal", fields: [tutorLegalId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // 1 Alumno : 0..1 AcadRoster. Unicidad de AcadRoster.alumnoId = indice unico FILTRADO (WHERE alumnoId IS NOT NULL) creado por src/lib/db-indices.ts.
+  rosters       AcadRoster[]
+  expediente    PersExpediente?
+  documentos    PersDocumento[]
+  servicios     PersServicio[]
+  inscripciones PersInscripcion[]
+  contratos     Contrato[]
+  wallet        MobWallet?
+  notasMov      MobNota[]
+  accesos       MobAcceso[]
+  intenciones   MobPagoIntencion[]
+  carnet        ComCarnet?
+  lecturas      ComLectura[]
+  cobros        FinCobroItem[]
+  becas         FinBeca[]
+
+  @@index([tutorId])
+  @@index([tutorLegalId])
 }
 
-// Catálogos maestros genéricos (CAT_DEF): `data` = JSON serializado del registro.
+// Catálogos maestros genéricos (CAT_DEF): `data` = JSON serializado del registro. Se normalizan en la Fase 2.
 model Catalogo {
-  id     String @id
-  tipo   String
-  data   String
+  id     String @id @db.NVarChar(100)
+  tipo   String @db.NVarChar(100)
+  data   String @db.NVarChar(Max)
   estado String @default("Activo")
 
   @@index([tipo])
 }
 
 // ---- Móvil (portal tutor + pase de lista) ----
-// DEPRECADO: ya no se lee ni se siembra; el portal del tutor sale de FinCobroItem (lib/cxc.ts).
-model MobCargo {
-  id       String  @id
-  alumnoId String
-  concepto String
-  vence    String
-  monto    Float
-  estado   String // Vencida | Por vencer | Pendiente
-  pagado   Boolean @default(false)
-
-  @@index([alumnoId])
-}
-
+// Notas de demostración del portal cuando no hay AcadNota. `materia` = nombre de la materia del catálogo (FK en Fase 2).
 model MobNota {
-  id       String @id
-  alumnoId String
-  materia  String
+  id       String @id @db.NVarChar(100)
+  alumnoId String @db.NVarChar(100)
+  alumno   Alumno @relation(fields: [alumnoId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  materia  String @db.NVarChar(100)
   valor    Float
 
   @@index([alumnoId])
 }
 
 model MobWallet {
-  alumnoId String @id
+  alumnoId String @id @db.NVarChar(100)
+  alumno   Alumno @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   saldo    Float
   limite   Float
 }
 
 model MobAcceso {
-  id       String   @id @default(cuid())
-  alumnoId String
-  hora     String
+  id        String   @id @default(cuid()) @db.NVarChar(100)
+  alumnoId  String   @db.NVarChar(100)
+  alumno    Alumno   @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  hora      String
   resultado String // ok | alert | no
-  creado   DateTime @default(now())
+  creado    DateTime @default(now())
 
   @@index([alumnoId])
 }
 
-model MobAsistencia {
-  id        String  @id @default(cuid())
-  fecha     String
-  seccion   String
-  alumnoId  String
-  estado    String // P | T | AJ | AI
-  notificar Boolean @default(true)
-
-  @@unique([fecha, seccion, alumnoId])
-}
-
 // ---- Operación: comedor, planes de alimentación, comunicaciones ----
 model AliPlan {
-  id       String @id
+  id       String @id @db.NVarChar(100)
   name     String
   modelo   String // sub | wal
-  meals    String // JSON boolean[4]
+  meals    String // JSON boolean[] (posicional respecto del catalogo comidas, orden por id)
   precio   Float?
   freq     String
   dias     String
@@ -125,80 +156,118 @@ model AliPlan {
   limite   Float?
   canal    String
   saldo    String
-  diets    String // JSON boolean[4]
+  diets    String // JSON boolean[] (posicional respecto del catalogo dietas, orden por id; lib/ali-catalogos.alinearPlanes lo mantiene alineado)
   estado   String @default("Activo")
-  inscritos Int    @default(0)
+  // «Inscritos» = COUNT(ComCarnet.aliPlanId): se calcula, ya no se guarda.
+  carnets  ComCarnet[]
 }
 
 model AliMenu {
   orden Int    @id
   dia   String
   plato String
-  algs  String // JSON string[]
+  algs  String // JSON string[] (nombres del catalogo alergias)
 }
 
-// Carnet de comedor (EST-0412). wallet/spent = monedero virtual y consumo del día.
+// Carnet de comedor. Convencion UNICA: code = Alumno.code (p. ej. EST-2026-0412). El escaner tambien acepta la forma corta heredada EST-<Alumno.id>.
+// wallet/spent = monedero virtual y consumo del día.
 model ComCarnet {
-  code      String @id
+  code      String @id @db.NVarChar(100)
+  alumnoId  String @unique @db.NVarChar(100)
+  alumno    Alumno @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Plan de alimentación vigente (NULL = sin plan). `plan` es solo la etiqueta que se muestra en pantalla.
+  aliPlanId String? @db.NVarChar(100)
+  aliPlan   AliPlan? @relation(fields: [aliPlanId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   name      String
   grado     String
   plan      String
   ok        Boolean
-  allergies String // JSON string[]
+  allergies String // JSON string[] con los nombres CANONICOS del catalogo alergias (el DTO los muestra en mayusculas)
   restr     String
   limit     Float
   motivo    String @default("")
   wallet    Float
   spent     Float
+
+  @@index([aliPlanId])
 }
 
 model ComLectura {
-  id    String   @id @default(cuid())
-  t     String
-  n     String
-  s     String // ok | alert | no
-  creado DateTime @default(now())
+  id       String   @id @default(cuid()) @db.NVarChar(100)
+  t        String
+  /// Instantanea del nombre leido (el alumno puede cambiar de nombre o dejar de existir).
+  n        String
+  alumnoId String?  @db.NVarChar(100)
+  alumno   Alumno?  @relation(fields: [alumnoId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  s        String // ok | alert | no
+  creado   DateTime @default(now())
+
+  @@index([alumnoId])
 }
 
 model CmnMensaje {
   id     Int    @id @default(autoincrement())
   batch  String @default("")
   t      String
+  /// Instantanea del nombre del tutor destinatario.
   to     String
+  tutorId String? @db.NVarChar(100)
+  tutor   Tutor?  @relation(fields: [tutorId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   canal  String
   asunto String
   estado String // En cola | Enviando | Entregado | Fallido | Canal no configurado
+  /// Instantanea del usuario emisor (p. ej. usr_sistema para los avisos automaticos).
   by     String
-  cuerpo   String @default("")
+  /// Usuario emisor (NULL = sistema). NoAction: SQL Server rechaza dos caminos de cascada User->Tutor->CmnMensaje y User->CmnMensaje.
+  userId String? @db.NVarChar(100)
+  user   User?   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cuerpo   String @default("") @db.NVarChar(Max)
   destino  String @default("") // dirección real (correo) resuelta al encolar
-  error    String @default("") // último error real del proveedor
+  error    String @default("") @db.NVarChar(Max) // último error real del proveedor
   intentos Int    @default(0)
+
+  @@index([tutorId])
+  @@index([userId])
 }
 
 // Intención de pago del portal del tutor cuando no hay pasarela activa: queda pendiente hasta que el cajero verifica el pago.
 model MobPagoIntencion {
-  id          String    @id @default(cuid())
-  alumnoId    String
-  tutor       String
+  id          String    @id @default(cuid()) @db.NVarChar(100)
+  alumnoId    String    @db.NVarChar(100)
+  alumno      Alumno    @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tutorId     String    @db.NVarChar(100)
+  tutor       Tutor     @relation(fields: [tutorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   tipo        String // cargos | recarga
   monto       Float
-  detalle     String    @default("[]") // JSON: ids de FinCobroItem incluidos
-  estado      String    @default("pendiente") // pendiente | confirmada | rechazada
+  detalle     String    @default("[]") @db.NVarChar(Max) // JSON: ids de FinCobroItem incluidos
+  estado      String    @default("pendiente") @db.NVarChar(100) // pendiente | confirmada | rechazada
   creado      DateTime  @default(now())
   resuelto    DateTime?
-  resueltoPor String    @default("")
-  nota        String    @default("")
-  reciboId    String    @default("")
+  /// usuario (User.usuario) que la resolvio; NULL mientras esta pendiente.
+  resueltoPor String?
+  nota        String    @default("") @db.NVarChar(Max)
+  /// Recibo que la salda (NULL = sin recibo).
+  reciboId    String?   @db.NVarChar(100)
+  recibo      FinRecibo? @relation(fields: [reciboId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([estado])
   @@index([alumnoId])
+  @@index([tutorId])
+  @@index([reciboId])
 }
 
 // ---------- Finanzas (POS/Cobros, Kiosko, Inventario, Planes de Pago, Becas) ----------
 model FinCobroItem {
-  id       String  @id
-  tutorCed String?
-  kid      String
+  id       String  @id @db.NVarChar(100)
+  /// Alumno al que se le cobra (Alumno.id real; NO el codigo ni alias).
+  alumnoId String  @db.NVarChar(100)
+  alumno   Alumno  @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Tutor responsable de pagar este cargo (NULL = el del alumno).
+  tutorId  String? @db.NVarChar(100)
+  tutor    Tutor?  @relation(fields: [tutorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Servicio recurrente/unico que origino el cargo (NULL = colegiatura, recargo u otro cargo sin servicio).
+  servicioId String? @db.NVarChar(100)
+  servicio   PersServicio? @relation(fields: [servicioId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   con      String
   al       String
   vence    String
@@ -208,92 +277,147 @@ model FinCobroItem {
   paid     Boolean @default(false)
   abono    Boolean @default(false)
   orden    Int     @default(0)
+
+  @@index([alumnoId, paid])
+  @@index([tutorId])
+  @@index([servicioId])
 }
 
 model FinRecibo {
-  id        String  @id
-  ncf       String
+  id        String  @id @db.NVarChar(100)
+  ncf       String  @unique @db.NVarChar(100)
+  /// Instantanea del nombre del tutor en el comprobante emitido ("Consumidor final" si no hay tutor).
   tutor     String
+  tutorId   String? @db.NVarChar(100)
+  titular   Tutor?  @relation(fields: [tutorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Caja (id del catalogo cajas; FK real en Fase 2) y usuario que cobro.
+  cajaId    String? @db.NVarChar(100)
+  cajeroId  String? @db.NVarChar(100)
+  cajero    User?   @relation(fields: [cajeroId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   hora      String
   monto     Float
   est       String  @default("Activo")
-  metodo    String
   abono     Boolean @default(false)
   saldo     Float   @default(0)
   nc        String?
   change    Float   @default(0)
-  items     String  @default("[]")
-  pays      String  @default("[]")
+  /// JSON [{ con, monto, cobroItemId? }]: cobroItemId = FinCobroItem cobrado (ausente en lineas historicas sin cargo).
+  items     String  @default("[]") @db.NVarChar(Max)
+  /// JSON [{ m, r, amt }]: m = nombre EXACTO del catalogo metodosPago. El metodo del recibo se deriva (lib/recibos.metodoDe).
+  pays      String  @default("[]") @db.NVarChar(Max)
   createdAt DateTime @default(now())
+  servicios   PersServicio[]
+  intenciones MobPagoIntencion[]
+
+  @@index([tutorId])
+  @@index([cajeroId])
+  @@index([createdAt])
 }
 
 model FinCounter {
-  key   String @id
+  key   String @id @db.NVarChar(100)
   value Int
 }
 
 model FinPlan {
-  id      String @id
+  id      String @id @db.NVarChar(100)
   name    String
   estado  String @default("Activo")
-  alumnos Int    @default(0)
-  data    String
+  data    String @db.NVarChar(Max)
+  // «Alumnos» de un plan = COUNT(Contrato.planId): se calcula, ya no se guarda.
+  contratos     Contrato[]
+  inscripciones PersInscripcion[]
 }
 
 model FinBeca {
-  id        String @id
-  periodo   String
+  id        String @id @db.NVarChar(100)
+  periodo   String @db.NVarChar(100)
+  alumnoId  String @db.NVarChar(100)
+  alumno    Alumno @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Instantanea del nombre completo del beneficiario.
   est       String
   grado     String
-  tipo      String
-  regla     String
-  conceptos String
+  tipo      String // nombre EXACTO del catalogo becas (FK en Fase 2)
+  regla     String @db.NVarChar(Max)
+  conceptos String @db.NVarChar(Max) // nombres EXACTOS del catalogo conceptosBeca separados por ' · '
   exp       String
   estado    String
   aprob     String
   createdAt DateTime @default(now())
+
+  @@index([alumnoId])
 }
 
 model FinProducto {
-  id    String  @id
-  code  String  @unique
+  id    String  @id @db.NVarChar(100)
+  code  String  @unique @db.NVarChar(100)
   name  String
   cat   String
   price Float
   tax   Boolean @default(false)
   stock Int?
   icon  String
+  movimientos FinMovimiento[]
+  lineas      FinVentaItem[]
 }
 
 model FinMovimiento {
-  id        Int      @id @default(autoincrement())
-  t         String
-  tipo      String
-  name      String
-  q         String
-  ref       String
-  createdAt DateTime @default(now())
+  id         Int      @id @default(autoincrement())
+  t          String
+  tipo       String
+  productoId String   @db.NVarChar(100)
+  producto   FinProducto @relation(fields: [productoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Instantanea del nombre del producto.
+  name       String
+  q          String
+  /// Referencia visible: VTA-nnnn (salida) o ENT-nnnn (entrada).
+  ref        String
+  /// Venta que origino la salida (NULL en entradas o ventas anteriores al registro de lineas).
+  ventaId    String?  @db.NVarChar(100)
+  venta      FinVenta? @relation(fields: [ventaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt  DateTime @default(now())
+
+  @@index([productoId])
+  @@index([ventaId])
 }
 
 model FinVenta {
-  id        String   @id
+  id        String   @id @db.NVarChar(100)
   ncf       String
   total     Float
   metodo    String
   doc       String
   createdAt DateTime @default(now())
+  movimientos FinMovimiento[]
+  lineas      FinVentaItem[]
+}
+
+// Lineas de una venta del kiosko (producto, cantidad y precio al momento de vender).
+model FinVentaItem {
+  id         Int         @id @default(autoincrement())
+  ventaId    String      @db.NVarChar(100)
+  venta      FinVenta    @relation(fields: [ventaId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  productoId String      @db.NVarChar(100)
+  producto   FinProducto @relation(fields: [productoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  nombre     String
+  cantidad   Int
+  precio     Float
+  tax        Boolean     @default(false)
+
+  @@index([ventaId])
+  @@index([productoId])
 }
 
 // ---- Sistema (licencia, configuración, auditoría) ----
 model SisAudit {
-  id       String @id @default(cuid())
-  t        String // 'YYYY-MM-DD HH:mm:ss' UTC
+  id       String @id @default(cuid()) @db.NVarChar(100)
+  t        String @db.NVarChar(100) // 'YYYY-MM-DD HH:mm:ss' UTC
   usr      String
   accion   String // Insert | Update | Delete
   tabla    String
   registro String
-  prev     String @default("")
-  next     String @default("")
+  prev     String @default("") @db.NVarChar(Max)
+  next     String @default("") @db.NVarChar(Max)
   ip       String @default("")
 
   @@index([t])
@@ -301,43 +425,45 @@ model SisAudit {
 
 // Folio de verificación de documentos emitidos (boletines): folio + hash SHA-256 del contenido. NO es firma digital.
 model DocFolio {
-  folio      String   @id
+  folio      String   @id @db.NVarChar(100)
   tipo       String
   hash       String
-  detalle    String   @default("")
+  detalle    String   @default("") @db.NVarChar(Max)
   emitidoPor String   @default("")
   createdAt  DateTime @default(now())
 }
 
 // Clave/valor JSON: licencia, perfil, assets, ncf, ecf, ciclos, access
 model SisConfig {
-  clave String @id
-  valor String
+  clave String @id @db.NVarChar(100)
+  valor String @db.NVarChar(Max)
 }
 
 // ---------- Académico (Acad*) ----------
 // Nómina de una sección (mock del prototipo: STU_ATT).
 model AcadRoster {
-  id          String           @id
+  id          String           @id @db.NVarChar(100)
   // id de la sección del catálogo; solo manda para nómina sin Alumno enlazado (la de un Alumno sale de su grado/sección).
-  seccion     String
+  seccion     String @db.NVarChar(100)
   orden       Int
   nombre      String
   // Vínculo con Alumno cuando la demo los trata como el mismo alumno (p. ej. Juan 0412). Nulo = solo figura en la nómina del prototipo.
-  alumnoId    String?          @unique
-  alumno      Alumno?          @relation(fields: [alumnoId], references: [id])
+  alumnoId    String?          @db.NVarChar(100)
+  alumno      Alumno?          @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   notas       AcadNota[]
   asistencias AcadAsistencia[]
 
   @@index([seccion])
+  @@index([alumnoId])
 }
 
+// Las notas son historial academico con valor propio: NoAction (no se borran en cascada con la nomina).
 model AcadNota {
-  id       String     @id @default(cuid())
-  rosterId String
-  roster   AcadRoster @relation(fields: [rosterId], references: [id], onDelete: Cascade)
-  materia  String
-  periodo  String
+  id       String     @id @default(cuid()) @db.NVarChar(100)
+  rosterId String @db.NVarChar(100)
+  roster   AcadRoster @relation(fields: [rosterId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  materia  String @db.NVarChar(100)
+  periodo  String @db.NVarChar(100)
   c1       Float?
   c2       Float?
   c3       Float?
@@ -348,10 +474,10 @@ model AcadNota {
 }
 
 model AcadAsistencia {
-  id        String     @id @default(cuid())
-  rosterId  String
-  roster    AcadRoster @relation(fields: [rosterId], references: [id], onDelete: Cascade)
-  fecha     String
+  id        String     @id @default(cuid()) @db.NVarChar(100)
+  rosterId  String @db.NVarChar(100)
+  roster    AcadRoster @relation(fields: [rosterId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fecha     String @db.NVarChar(100)
   estado    String
   notificar Boolean    @default(true)
 
@@ -361,11 +487,11 @@ model AcadAsistencia {
 // Asignación docente x sección x materia (ids del catálogo). Una por (sección, materia).
 // aulas = JSON de ids de aula (catálogo) posibles (vacío = aula base de la sección; la primera es la predeterminada).
 model AcadAsignacion {
-  id        String @id @default(cuid())
-  docenteId String
-  seccionId String
-  materiaId String
-  aulas     String @default("[]")
+  id        String @id @default(cuid()) @db.NVarChar(100)
+  docenteId String @db.NVarChar(100)
+  seccionId String @db.NVarChar(100)
+  materiaId String @db.NVarChar(100)
+  aulas     String @default("[]") @db.NVarChar(Max)
 
   @@unique([seccionId, materiaId])
   @@index([docenteId])
@@ -374,16 +500,16 @@ model AcadAsignacion {
 // seccion = id de la sección del catálogo; slot = 'dia-bloque' (ej. '0-1') con materia = id de materia del catálogo.
 // Filas especiales slot='_aula:<materiaId>' guardan el aula elegida (id de aula) para materias con varias aulas posibles.
 model AcadHorario {
-  id      String @id @default(cuid())
-  seccion String
-  slot    String
-  materia String
+  id      String @id @default(cuid()) @db.NVarChar(100)
+  seccion String @db.NVarChar(100)
+  slot    String @db.NVarChar(100)
+  materia String @db.NVarChar(100)
 
   @@unique([seccion, slot])
 }
 
 model AcadExtra {
-  id         String @id
+  id         String @id @db.NVarChar(100)
   name       String
   cat        String
   kind       String
@@ -401,14 +527,17 @@ model AcadExtra {
 }
 
 // ---------- Personas (Directorio, Expediente 360, Inscripción) ----------
+// Ficha JSON (ExpFicha) SIN contrato ni tutor legal: esos son Contrato y Alumno.tutorLegalId. Sin valor propio fuera del alumno: Cascade.
 model PersExpediente {
-  alumnoId String @id
-  data     String @default("{}") // ficha JSON (ExpFicha)
+  alumnoId String @id @db.NVarChar(100)
+  alumno   Alumno @relation(fields: [alumnoId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  data     String @default("{}") @db.NVarChar(Max)
 }
 
 model PersDocumento {
-  id       String @id
-  alumnoId String
+  id       String @id @db.NVarChar(100)
+  alumnoId String @db.NVarChar(100)
+  alumno   Alumno @relation(fields: [alumnoId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   n        String
   f        String
   est      String // Validado | Pendiente | En revisión
@@ -418,8 +547,9 @@ model PersDocumento {
 }
 
 model PersServicio {
-  id       String @id
-  alumnoId String
+  id       String @id @db.NVarChar(100)
+  alumnoId String @db.NVarChar(100)
+  alumno   Alumno @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   kind     String // rec | once
   catKey   String
   name     String
@@ -429,29 +559,49 @@ model PersServicio {
   corte    String @default("")
   est      String @default("Activo") // Activo | Baja · dd/mm/aaaa
   alert    String @default("")
-  fecha    String @default("")
+  fecha    String @default("") @db.NVarChar(100)
   st       String @default("") // once: cobrado | cargado | prog
   mes      String @default("")
-  recibo   String @default("")
+  /// Recibo que cobró el servicio (once/cobrado); NULL = sin recibo.
+  reciboId String? @db.NVarChar(100)
+  recibo   FinRecibo? @relation(fields: [reciboId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cargos   FinCobroItem[]
 
   @@index([alumnoId])
-}
-
-model PersCupo {
-  id      String @id
-  tanda   String
-  seccion String
-  cap     Int
-  used    Int    @default(0)
+  @@index([reciboId])
 }
 
 model PersInscripcion {
-  id        String   @id
-  alumnoId  String
-  ncf       String
+  id        String   @id @db.NVarChar(100)
+  alumnoId  String   @db.NVarChar(100)
+  alumno    Alumno   @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Evidencia fiscal de la inscripcion: el NCF es unico.
+  ncf       String   @unique @db.NVarChar(100)
   factura   Float
-  plan      String
+  planId    String   @db.NVarChar(100)
+  plan      FinPlan  @relation(fields: [planId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   cuotas    Int
   firma     String
   createdAt DateTime @default(now())
+
+  @@index([alumnoId])
+  @@index([planId])
+}
+
+// Contrato de servicios educativos del alumno por ciclo (antes dentro de PersExpediente.data.contrato).
+model Contrato {
+  id       String  @id @db.NVarChar(100)
+  alumnoId String  @db.NVarChar(100)
+  alumno   Alumno  @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Ciclo lectivo (texto «2026–2027»; FK a Ciclo en Fase 2).
+  ciclo    String  @db.NVarChar(100)
+  planId   String  @db.NVarChar(100)
+  plan     FinPlan @relation(fields: [planId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Id del tipo de beca del catalogo becas (FK en Fase 2). NULL = sin beca.
+  beca     String? @db.NVarChar(100)
+  ctr      String  @default("")
+  firmado  String  @default("")
+
+  @@unique([alumnoId, ciclo])
+  @@index([planId])
 }

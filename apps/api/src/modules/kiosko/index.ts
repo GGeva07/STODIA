@@ -4,6 +4,7 @@ import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { nextSeq, nowHM, round2 } from '../../fin-utils';
 import { cfgGet } from '../../lib/sisconfig';
+import { metodoCatalogo } from '../../lib/recibos';
 
 const toMov = (m: any): Movimiento => ({ id: m.id, t: m.t, tipo: m.tipo, name: m.name, q: m.q, ref: m.ref });
 
@@ -33,12 +34,17 @@ const plugin: FastifyPluginAsync = async app => {
     const ncf = cf2 ? 'B01' + String(await nextSeq('b01')).padStart(8, '0') : 'B02' + String(await nextSeq('ncf')).padStart(8, '0');
     const got = cash && recvN > 0 ? recvN : total, change = cash && recvN > total ? round2(recvN - total) : 0;
     const hora = nowHM();
-    for (const { p, q } of rows) {
-      if (p.stock == null) continue;
-      await prisma.finProducto.update({ where: { id: p.id }, data: { stock: p.stock - q } });
-      await prisma.finMovimiento.create({ data: { t: hora, tipo: 'Salida', name: p.name, q: '−' + q, ref: id } });
-    }
-    await prisma.finVenta.create({ data: { id, ncf, total, metodo: pay, doc } });
+    const metodo = await metodoCatalogo(pay);
+    // Venta, lineas y salidas de inventario en UNA transaccion; la venta se crea primero porque las lineas y movimientos la referencian por FK.
+    await prisma.$transaction(async tx => {
+      await tx.finVenta.create({ data: { id, ncf, total, metodo, doc } });
+      await tx.finVentaItem.createMany({ data: rows.map(({ p, q }) => ({ ventaId: id, productoId: p.id, nombre: p.name, cantidad: q, precio: p.price, tax: p.tax })) });
+      for (const { p, q } of rows) {
+        if (p.stock == null) continue;
+        await tx.finProducto.update({ where: { id: p.id }, data: { stock: p.stock - q } });
+        await tx.finMovimiento.create({ data: { t: hora, tipo: 'Salida', productoId: p.id, name: p.name, q: '−' + q, ref: id, ventaId: id } });
+      }
+    });
     const res: VentaRes = {
       id, ncf, total, change, recv: got, hora, pay, cliente: cf2 ? razon.trim() + ' · RNC ' + rnc : 'Consumidor final',
       items: rows.map(l => ({ con: l.q + ' × ' + l.p.name, monto: l.p.price * l.q })).concat(itbis ? [{ con: 'ITBIS ' + +(itbisRate * 100).toFixed(2) + '%', monto: itbis }] : []),
@@ -54,7 +60,7 @@ const plugin: FastifyPluginAsync = async app => {
     if (!(q > 0)) return reply.code(400).send({ error: 'Cantidad inválida' });
     await prisma.finProducto.update({ where: { id: p.id }, data: { stock: p.stock + q } });
     const n = await nextSeq('ent');
-    await prisma.finMovimiento.create({ data: { t: nowHM(), tipo: 'Entrada', name: p.name, q: '+' + q, ref: 'ENT-' + String(n).padStart(4, '0') } });
+    await prisma.finMovimiento.create({ data: { t: nowHM(), tipo: 'Entrada', productoId: p.id, name: p.name, q: '+' + q, ref: 'ENT-' + String(n).padStart(4, '0') } });
     await audit(req.user, 'Update', { tabla: 'Inventario', id: p.id, prev: p.stock, next: p.stock + q, ip: req.ip });
     return { ok: true };
   });

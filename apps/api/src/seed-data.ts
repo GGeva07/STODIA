@@ -15,7 +15,7 @@ export const SEED_USERS: { usuario: string; nombre: string; rol: Rol }[] = [
 
 // id, nombres, apellidos, fnac, grado, sec, tanda, tutor, cuenta, estado, alergias, dir, tel
 export const DIR0: string[][] = [
-  ['0412', 'Juan Andrés', 'Mendoza Fernández', '2016-03-14', '5to', 'A', 'Matutina', 'Carlos Mendoza Pérez', 'mora', 'Activo', 'Maní, frutos secos, lactosa', 'C/ Los Robles #14, Arroyo Hondo', '809-555-0142'],
+  ['0412', 'Juan Andrés', 'Mendoza Fernández', '2016-03-14', '5to', 'A', 'Matutina', 'Carlos Mendoza Pérez', 'mora', 'Activo', 'Maní, Frutos secos, Lactosa', 'C/ Los Robles #14, Arroyo Hondo', '809-555-0142'],
   ['0587', 'Sofía', 'Mendoza Fernández', '2019-07-02', '2do', 'B', 'Matutina', 'Carlos Mendoza Pérez', 'ok', 'Activo', '', 'C/ Los Robles #14, Arroyo Hondo', '809-555-0142'],
   ['0398', 'Valeria', 'Ortiz Brito', '2017-11-21', '3ro', 'B', 'Matutina', 'Ana Brito de Ortiz', 'ok', 'Activo', '', 'Av. Independencia #220, Gazcue', '809-555-0310'],
   ['0455', 'Luis', 'Peña Durán', '2015-01-09', '6to', 'A', 'Matutina', 'Ramón Peña', 'mora', 'Activo', '', 'C/ 5 #8, Los Prados', '829-555-0921'],
@@ -53,7 +53,7 @@ export const CAT_SEED: Record<string, CatRow[]> = {
     { id: 't4', nombre: 'Nocturna', ini: '18:00', fin: '21:30', estado: 'Inactivo' },
   ],
   aulas: withIds('a', AULAS.map(([nombre, tipo, edif, pupitres]) => ({ nombre, tipo, edif, pupitres }))),
-  secciones: withIds('s', SECCIONES.map(([grado, seccion, tanda, aula, cap, insc]) => ({ grado, seccion, tanda, aula, cap, insc }))),
+  secciones: withIds('s', SECCIONES.map(([grado, seccion, tanda, aula, cap]) => ({ grado, seccion, tanda, aula, cap }))), // inscritos = COUNT(Alumno): se calcula
   materias: withIds('m', MATERIAS.map(([codigo, nombre, grados, horas]) => ({ codigo, nombre, grados, horas }))),
   rubricas: [
     { id: 'r1', nombre: 'Evaluación estándar de Primaria', materias: ['m1', 'm2'], escala: 'Numérica 0–100', crit: 'Tareas 20%, Participación 10%, Proyectos 20%, Exámenes 50%', minimo: 70, estado: 'Activo' },

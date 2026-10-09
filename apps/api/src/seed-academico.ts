@@ -65,8 +65,9 @@ export default async function seedAcademico() {
     await setCat('docentes', id, {}, { nombre, cedula: '001-' + String(5678901 + i * 1117).padStart(7, '0') + '-' + (i % 9), esp, email: usuario.replace('usr_', '') + '@lospinos.edu.do', usuario, rol, materias: [], secciones: [] });
   }
   await setCat('secciones', 's2', { aula: 'a3' });
-  const SEC: [string, string, string, string, string][] = [['s6', 'g7', 'B', 't2', 'a4'], ['s7', 'g5', 'B', 't1', 'a4'], ['s8', 'g4', 'A', 't2', 'a4'], ['s9', 'g3', 'A', 't3', 'a4'], ['s10', 'g3', 'B', 't1', 'a4']];
-  for (const [id, grado, seccion, tanda, aula] of SEC) await setCat('secciones', id, {}, { grado, seccion, tanda, aula, cap: 30, insc: 0 });
+  // s11 (3ro B Matutina) y s12 (4to C Matutina): los alumnos 0398/0566 y 0558 del Directorio de muestra pertenecen a ellas; sin estas filas apuntaban a secciones inexistentes.
+  const SEC: [string, string, string, string, string][] = [['s6', 'g7', 'B', 't2', 'a4'], ['s7', 'g5', 'B', 't1', 'a4'], ['s8', 'g4', 'A', 't2', 'a4'], ['s9', 'g3', 'A', 't3', 'a4'], ['s10', 'g3', 'B', 't1', 'a4'], ['s11', 'g4', 'B', 't1', 'a3'], ['s12', 'g5', 'C', 't1', 'a3']];
+  for (const [id, grado, seccion, tanda, aula] of SEC) await setCat('secciones', id, {}, { grado, seccion, tanda, aula, cap: 30 }); // «Inscritos» se calcula (no se guarda)
 
   // ---- Asignaciones docente x sección x materia (Rafael Almonte -> 5to A -> Matemáticas, etc.) ----
   for (const [seccionId, materiaId, docenteId, aulas] of ASIG) {

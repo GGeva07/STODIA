@@ -96,6 +96,9 @@ export default function PlanDrawer({ plan, mode: mode0, pin0 = '', plans, tandas
           <label className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2.5 text-[13px] font-medium" style={{ borderColor: f.porTanda ? '#BFDBFE' : '#E2E8F0', background: f.porTanda ? '#EFF6FF' : '#FFFFFF' }}>
             <input type="checkbox" checked={!!f.porTanda} onChange={toggleTanda} disabled={ro} className="h-4 w-4 accent-accent" style={{ cursor: ro ? 'not-allowed' : 'pointer' }} />Cuota diferenciada por tanda
           </label>
+          {f.porTanda && c.sinPrecio.length > 0 && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-warn-bg px-3 py-2 text-xs text-amber-800"><i className="ph ph-warning mt-px text-base" /><span><b>{c.sinPrecio.length === 1 ? 'Tanda sin precio' : c.sinPrecio.length + ' tandas sin precio'}:</b> {c.sinPrecio.join(', ')}. Mientras no se defina el monto, este plan no calcula cuotas ni permite inscribir en esa tanda{ro ? '. Pulsa Editar para configurarlo.' : '; guarda el plan con el monto de cada tanda.'}</span></div>
+          )}
           <div className="flex flex-col gap-2 rounded-md border border-slate-200 bg-slate-50 p-3" style={{ opacity: f.porTanda ? 1 : 0.6 }}>
             <div className="text-xs text-slate-600">{f.porTanda ? 'Monto anual base por tanda (RD$). El descuento del plan se aplica sobre cada monto.' : 'Desactivado: todas las tandas usan el monto anual base. Marca la casilla para fijar un monto por tanda.'}</div>
             {TANDAS.map(t => {
@@ -105,7 +108,7 @@ export default function PlanDrawer({ plan, mode: mode0, pin0 = '', plans, tandas
                   <span className="text-[13px] font-medium">{t}</span>
                   <input value={v} disabled={off} onChange={e => { const val = e.target.value.replace(/[^\d.]/g, ''); setF(p => ({ ...p, tm: { ...p.tm, [t]: val } })); setErr(''); }}
                     className="h-[34px] w-full rounded-md border px-2.5 text-right font-mono text-[13px] outline-none focus:border-accent"
-                    style={{ background: off ? '#F1F5F9' : '#FFFFFF', borderColor: ro ? '#E2E8F0' : v && !(parseFloat(v) > 0) ? '#F59E0B' : '#CBD5E1' }} />
+                    style={{ background: off ? '#F1F5F9' : '#FFFFFF', borderColor: f.porTanda && !(parseFloat(v) > 0) ? '#F59E0B' : ro ? '#E2E8F0' : '#CBD5E1' }} placeholder={f.porTanda ? 'Sin precio' : ''} />
                 </div>
               );
             })}
@@ -129,7 +132,7 @@ export default function PlanDrawer({ plan, mode: mode0, pin0 = '', plans, tandas
               <div className="grid grid-cols-[minmax(0,1fr)_100px_110px] gap-2 border-b border-slate-200 px-2.5 py-[7px] text-[11px] font-semibold uppercase text-slate-600"><span>Tanda</span><span className="text-right">Cuota</span><span className="text-right">Total</span></div>
               {c.tandas.map(x => (
                 <div key={x.l} className="grid grid-cols-[minmax(0,1fr)_100px_110px] gap-2 border-b border-slate-100 px-2.5 py-[7px] text-xs">
-                  <span>{x.l}</span><span className="text-right font-mono font-semibold">{fmt(x.cuota)}</span><span className="text-right font-mono text-slate-600">{fmt(x.total)}</span>
+                  <span>{x.l}</span>{x.sinPrecio ? <span className="col-span-2 text-right text-[11px] font-semibold text-amber-700">Tanda sin precio</span> : <><span className="text-right font-mono font-semibold">{fmt(x.cuota)}</span><span className="text-right font-mono text-slate-600">{fmt(x.total)}</span></>}
                 </div>
               ))}
             </div>

@@ -21,6 +21,7 @@ import { prisma } from './db';
 import { cxcResumen, esVencido, hoyISO, partesEnZona, round2, venceISO, zonaHoraria } from './lib/cxc';
 import { DOCS_DEFECTO, MNAME, anioDeMes, cicloActivo, cuotasDe, getFinanzas, mesesCiclo, mesesDe, planesPago, totalDe, vencDMY } from './lib/pers-fin';
 import type { PlanRow } from './lib/pers-fin';
+import { cajaDe } from './lib/recibos';
 import { DIR0, norm } from './seed-data';
 
 type Tx = Prisma.TransactionClient;
@@ -39,6 +40,16 @@ export const OBJ = {
 const CLAVE = 'demoGrande';
 const CLAVE_VENTAS = 'demoGrandeVentas';
 const ID0 = 1001; // ids de alumno 1001.. (los de la muestra llegan a 0587)
+/**
+ * Mezcla de Planes de Pago de las familias generadas (ENTRADA del generador: proporcion de 412 / 58 / 96). «Alumnos» de un plan ya no se guarda:
+ * el Centro de Control lo cuenta desde Contrato, y tras repartir los planes el generador los AJUSTA (ajustarPlanes) para que la proyeccion
+ * del ciclo calculada con esos conteos reales sea OBJ.proyeccion.
+ */
+const PESO_PLAN: Record<string, number> = { 'PLN-001': 412, 'PLN-002': 58, 'PLN-003': 96 };
+/** Planes de alimentacion que asigna el comedor generado (suscripcion = Plan Almuerzo Completo, monedero = Monedero Cafeteria; los siembra seed-operacion). */
+const ALI_PLAN = { sub: 'ALI-001', wal: 'ALI-004' } as const;
+/** Metodos de pago del recibo generado (nombres EXACTOS del catalogo metodosPago) con su prefijo de referencia. */
+const METODO_PAGO: readonly (readonly [string, number])[] = [['Efectivo', 35], ['Transferencia', 33], ['Tarjeta de Crédito', 27], ['Cheque', 5]];
 
 // ---------------- PRNG ----------------
 function mulberry32(a: number) {
@@ -81,12 +92,12 @@ const p2 = (n: number) => String(n).padStart(2, '0');
 const isoT = (d: Date) => d.toISOString().slice(0, 19).replace('T', ' ');
 
 interface Plan { row: PlanRow; w: number }
-interface Item { id: string; kid: string; con: string; al: string; vence: string; monto: number; est: string; tipo: string; paid: boolean; orden: number; tutorCed: string; ym: number }
+interface Item { id: string; alumnoId: string; tutorId: string; servicioId: string | null; con: string; al: string; vence: string; monto: number; est: string; tipo: string; paid: boolean; orden: number; ym: number }
 interface Kid {
   id: string; code: string; nombres: string; apellidos: string; fnac: string; grado: string; edad: number; tanda: string; tandaId: string; sec: string; secId: string;
   estado: 'Activo' | 'Inactivo' | 'Retirado'; sexo: 'M' | 'F'; alg: string; fam: Fam; comedor: 'sub' | 'wal' | ''; nuevo: boolean; beca: boolean; mora: number; comMora: boolean;
 }
-interface Fam { id: string; tutorId: string; nombre: string; cedula: string; ced: string; tel: string; email: string; dir: string; parentesco: string; plan: Plan; kids: Kid[]; apellidos: string }
+interface Fam { id: string; tutorId: string; nombre: string; cedula: string; tel: string; email: string; dir: string; parentesco: string; plan: Plan; kids: Kid[]; apellidos: string }
 
 /** Instante UTC dentro del mes (y, m) en horario diurno local (UTC-4 => 13..21 UTC); en el mes actual nunca en el futuro. */
 function fechaEn(y: number, m: number, cur: { y: number; m: number; d: number }, ahora: Date, sesgo = 1.3): Date {
@@ -97,7 +108,7 @@ function fechaEn(y: number, m: number, cur: { y: number; m: number; d: number },
   return new Date(t);
 }
 
-async function bulk<T>(rows: T[], fn: (chunk: T[]) => Promise<unknown>, n = 400) { for (let i = 0; i < rows.length; i += n) await fn(rows.slice(i, i + n)); }
+async function bulk<T>(rows: T[], fn: (chunk: T[]) => Promise<unknown>, n = 100) { for (let i = 0; i < rows.length; i += n) await fn(rows.slice(i, i + n)); }
 
 /** Proyeccion del ciclo = misma formula del dashboard (promedio ponderado por alumnos inscritos en cada plan activo). */
 function proyeccionPorTanda(planes: Plan[]): (tanda: string) => number {
@@ -106,22 +117,55 @@ function proyeccionPorTanda(planes: Plan[]): (tanda: string) => number {
   return t => (wTot > 0 ? planes.reduce((s, p) => s + anual(p.row, t) * p.w, 0) / wTot : planes.reduce((s, p) => s + anual(p.row, t), 0) / Math.max(1, planes.length));
 }
 
+/**
+ * Reparte los planes de las familias para que la PROYECCION DEL CICLO que calcula el Centro de Control (promedio ponderado por alumnos activos
+ * con contrato en cada plan activo = COUNT(Contrato)) sea la meta. Con P = sum(w_p * S_p) / W (W constante: solo se mueven alumnos entre planes
+ * activos), cada traslado de una familia de n alumnos del plan p al q cambia P en n*(S_q - S_p)/W; se aplican los traslados que mas acercan a la meta.
+ * Determinista (usa solo el orden de las familias, no el PRNG). Devuelve la proyeccion resultante.
+ */
+function ajustarPlanes(planes: Plan[], fams: Fam[], tandasBase: string[], contratosBase: Map<string, number>, meta: number, tol = 1500): number {
+  const anual = (p: PlanRow, t: string) => (p.porTanda && p.tm[t] !== undefined ? p.tm[t] : p.anual) * (1 - p.desc / 100);
+  const act = [...tandasBase, ...fams.flatMap(f => f.kids.filter(k => k.estado === 'Activo').map(k => k.tanda))];
+  const S = new Map(planes.map(p => [p.row.id, act.reduce((s, t) => s + anual(p.row, t), 0)]));
+  const w = new Map(planes.map(p => [p.row.id, contratosBase.get(p.row.id) ?? 0]));
+  const nAct = (f: Fam) => f.kids.filter(k => k.estado === 'Activo').length;
+  for (const f of fams) w.set(f.plan.row.id, (w.get(f.plan.row.id) ?? 0) + nAct(f));
+  const W = [...w.values()].reduce((a, b) => a + b, 0);
+  const num = () => planes.reduce((a, p) => a + (w.get(p.row.id) ?? 0) * (S.get(p.row.id) ?? 0), 0);
+  let cur = num();
+  for (let it = 0; it < 400 && Math.abs(cur / W - meta) > tol; it++) {
+    let mejor: { f: Fam; q: Plan; d: number } | null = null, mejorErr = Math.abs(cur / W - meta);
+    for (const f of fams) {
+      const n = nAct(f); if (!n) continue;
+      for (const q of planes) {
+        if (q.row.id === f.plan.row.id) continue;
+        const d = n * ((S.get(q.row.id) ?? 0) - (S.get(f.plan.row.id) ?? 0)), err = Math.abs((cur + d) / W - meta);
+        if (err < mejorErr) { mejorErr = err; mejor = { f, q, d }; }
+      }
+    }
+    if (!mejor) break;
+    const n = nAct(mejor.f);
+    w.set(mejor.f.plan.row.id, (w.get(mejor.f.plan.row.id) ?? 0) - n); w.set(mejor.q.row.id, (w.get(mejor.q.row.id) ?? 0) + n);
+    mejor.f.plan = mejor.q; cur += mejor.d;
+  }
+  return round2(cur / W);
+}
+
 export async function sembrarDemoGrande(): Promise<void> {
   if (!config.seedDemo) throw new Error('El seed de demostración grande solo se ejecuta con SEED_DEMO=true');
   if (await prisma.sisConfig.findUnique({ where: { clave: CLAVE } })) { console.log('seed demo grande: ya existe (usa seed:demo-grande:quitar para rehacerlo)'); return; }
   const t0 = Date.now();
 
   const tz = await zonaHoraria(), ahora = new Date(), hoy = hoyISO(tz, ahora), cur = partesEnZona(tz, ahora);
-  const [ciclo, fin, planesAll, planCnt, cat, activos, existentes, cxc0, becasN, insMes0] = await Promise.all([
-    cicloActivo(), getFinanzas(), planesPago(), prisma.finPlan.findMany({ select: { id: true, alumnos: true } }),
+  const [ciclo, fin, planesAll, ctrExist, cat, activos, existentes, cxc0, becasN, insMes0] = await Promise.all([
+    cicloActivo(), getFinanzas(), planesPago(), prisma.contrato.groupBy({ by: ['planId'], where: { alumno: { estado: 'Activo' } }, _count: { _all: true } }),
     prisma.catalogo.findMany({ where: { tipo: { in: ['grados', 'tandas', 'secciones'] } } }),
     prisma.alumno.findMany({ where: { estado: 'Activo' }, select: { tanda: true } }),
     prisma.alumno.findMany({ select: { grado: true, sec: true } }),
     cxcResumen(undefined, tz), prisma.finBeca.count(), prisma.persInscripcion.count(),
   ]);
   if (!planesAll.some(p => p.estado === 'Activo')) throw new Error('No hay Planes de Pago activos: siembra primero seed-finanzas');
-  const cntOf = new Map(planCnt.map(p => [p.id, p.alumnos]));
-  const planes: Plan[] = planesAll.filter(p => p.estado === 'Activo').map(row => ({ row, w: cntOf.get(row.id) ?? 0 }));
+  const planes: Plan[] = planesAll.filter(p => p.estado === 'Activo').map(row => ({ row, w: PESO_PLAN[row.id] ?? 0 }));
   const meses = mesesCiclo(planesAll), idxHoy = Math.max(0, meses.indexOf(cur.m));
   const y0 = ciclo.y0;
   const diaCorte = fin.diaCorte > 0 ? fin.diaCorte : 1;
@@ -183,7 +227,7 @@ export async function sembrarDemoGrande(): Promise<void> {
       let L = 65; while (usadas.has(String.fromCharCode(L))) L++;
       const letra = String.fromCharCode(L); usadas.add(letra); nSec++;
       const id = 'sg' + nSec; lista.push({ id, letra });
-      secRows.push({ id: 'secciones:' + id, tipo: 'secciones', estado: 'Activo', data: JSON.stringify({ id, estado: 'Activo', grado: gid, seccion: letra, tanda: tandaId(c.tanda), aula: 'a' + (1 + (nSec % 4)), cap: 30, insc: 0 }) });
+      secRows.push({ id: 'secciones:' + id, tipo: 'secciones', estado: 'Activo', data: JSON.stringify({ id, estado: 'Activo', grado: gid, seccion: letra, tanda: tandaId(c.tanda), aula: 'a' + (1 + (nSec % 4)), cap: 30 }) });
     }
     secDe.set(key, lista);
   }
@@ -199,14 +243,15 @@ export async function sembrarDemoGrande(): Promise<void> {
   const extra: Kid[] = [];
   const gx = (n: number, estado: Kid['estado']) => { for (let i = 0; i < n; i++) { const dest = pick(kids); const g = GRADOS.find(x => x.g === dest.grado)!; const k = esq(g, dest.tanda, estado); k.sec = dest.sec; k.secId = dest.secId; extra.push(k); if (estado === 'Inactivo') cuenta.set(dest.secId, (cuenta.get(dest.secId) ?? 0) + 1); } };
   gx(14, 'Retirado'); gx(8, 'Inactivo');
-  for (const r of secRows) { const d = JSON.parse(r.data); d.insc = cuenta.get(d.id) ?? 0; if (d.insc > d.cap) throw new Error('Sección sobre su cupo'); r.data = JSON.stringify(d); }
+  // «Inscritos» no se guarda en el catalogo (se calcula desde Alumno); aqui solo se valida el cupo.
+  for (const r of secRows) { const d = JSON.parse(r.data); if ((cuenta.get(d.id) ?? 0) > d.cap) throw new Error('Sección sobre su cupo'); }
 
   // ---- Familias (1-2 hijos de grados distintos y misma tanda), tutores ----
   const todos = [...kids, ...extra];
   const sinFam = new Set(todos);
   const fams: Fam[] = []; const cedUsadas = new Set<string>(); const nombresUsados = new Set<string>(); const telMuestra = new Set(DIR0.map(r => r[12]));
   const orden = shuffle([...todos]);
-  const cedulaNueva = () => { for (;;) { const d = String(int(0, 9_999_999)).padStart(7, '0'); const c = `999-${d}-${int(0, 9)}`; if (!cedUsadas.has(c)) { cedUsadas.add(c); return c; } } };
+  const cedulaNueva = () => { for (;;) { const d = String(int(0, 9_999_999)).padStart(7, '0'); const c = `999${d}${int(0, 9)}`; if (!cedUsadas.has(c)) { cedUsadas.add(c); return c; } } };
   const telNuevo = () => { for (;;) { const t = `809-555-01${p2(int(0, 99))}`; if (!telMuestra.has(t)) return t; } };
   const planDe = () => wpick(planes.map(p => [p, Math.max(1, p.w)] as const));
   const prob2 = 0.46;
@@ -225,7 +270,7 @@ export async function sembrarDemoGrande(): Promise<void> {
     const n = fams.length + 1, calle = `${pick(CALLES)} #${int(1, 180)}, ${pick(BARRIOS)}`;
     const ced = cedulaNueva();
     const fam: Fam = {
-      id: 'tg' + n, tutorId: 'tg' + n, nombre, cedula: ced, ced: ced.replace(/\D/g, ''), tel: telNuevo(),
+      id: 'tg' + n, tutorId: 'tg' + n, nombre, cedula: ced, tel: telNuevo(),
       email: `${norm(nombre.split(' ')[0])}.${norm(nombre.split(' ')[1]).replace(/\s/g, '')}${n}@example.do`,
       dir: calle, parentesco: madre ? 'Madre' : 'Padre', plan: planDe(), kids: hijos, apellidos: `${ap1} ${ap2}`,
     };
@@ -238,6 +283,8 @@ export async function sembrarDemoGrande(): Promise<void> {
   });
   const idHasta = ID0 + todos.length - 1;
   const activosGen = todos.filter(k => k.estado === 'Activo');
+  // La proyeccion del ciclo se calcula con los CONTEOS REALES de contratos por plan: se ajusta el reparto de planes a la meta.
+  const proyeccion = ajustarPlanes(planes, fams, activos.map(a => a.tanda), new Map(ctrExist.map(g => [g.planId, g._count._all])), OBJ.proyeccion);
 
   // ---- Inscripciones de este mes (nuevos) ----
   const nuevos = shuffle([...activosGen.filter(k => k.fam.plan.row.freq === 1)]).slice(0, Math.max(0, OBJ.inscripcionesMes - insMes0));
@@ -259,11 +306,11 @@ export async function sembrarDemoGrande(): Promise<void> {
       const ym = v.y * 12 + v.m - 1;
       if (k.nuevo && ym < ymCur) return; // se inscribio este mes: no tiene cuotas anteriores
       const monto = k.beca ? round2(montos[i] * 0.9) : montos[i];
-      lista.push({ id: `g-${k.id}-c${v.y}${p2(v.m)}`, kid: k.id, con: `Colegiatura ${MNAME[v.m]} ${v.y}`, al: alDe(k), vence: vencDMY(p.dia, v.m, v.y), monto, est: 'Pendiente', tipo: 'col', paid: false, orden: orden0++, tutorCed: k.fam.ced, ym });
+      lista.push({ id: `g-${k.id}-c${v.y}${p2(v.m)}`, alumnoId: k.id, tutorId: k.fam.tutorId, servicioId: null, con: `Colegiatura ${MNAME[v.m]} ${v.y}`, al: alDe(k), vence: vencDMY(p.dia, v.m, v.y), monto, est: 'Pendiente', tipo: 'col', paid: false, orden: orden0++, ym });
     });
     if (k.comedor === 'sub') for (const m of meses.slice(idxHoy)) {
       const y = anioDeMes(meses, y0, m);
-      lista.push({ id: `g-${k.id}-k${y}${p2(m)}`, kid: k.id, con: `Plan Comedor · ${MNAME[m]}`, al: alDe(k), vence: vencDMY(diaCorte, m, y), monto: 3200, est: 'Pendiente', tipo: 'com', paid: false, orden: orden0++, tutorCed: k.fam.ced, ym: y * 12 + m - 1 });
+      lista.push({ id: `g-${k.id}-k${y}${p2(m)}`, alumnoId: k.id, tutorId: k.fam.tutorId, servicioId: `psv-com-${k.id}`, con: `Plan Comedor · ${MNAME[m]}`, al: alDe(k), vence: vencDMY(diaCorte, m, y), monto: 3200, est: 'Pendiente', tipo: 'com', paid: false, orden: orden0++, ym: y * 12 + m - 1 });
     }
     for (const it of lista) {
       const v = venceISO(it.vence)!;
@@ -287,19 +334,19 @@ export async function sembrarDemoGrande(): Promise<void> {
     const m = (it.ym % 12) + 1, y = Math.floor(it.ym / 12), d = Math.min(28, (parseInt(it.vence.slice(0, 2), 10) || 1) + 6);
     const vence = vencDMY(d, m, y), v = venceISO(vence)!;
     if (v >= hoy) return null;
-    return { id: `g-${k.id}-m${y}${p2(m)}`, kid: k.id, con: `Recargo por mora · ${MNAME[m].slice(0, 3)}. (3%)`, al: alDe(k), vence, monto: round2(it.monto * 0.03), est: 'Vencida', tipo: 'mora', paid: false, orden: orden0++, tutorCed: k.fam.ced, ym: it.ym };
+    return { id: `g-${k.id}-m${y}${p2(m)}`, alumnoId: k.id, tutorId: k.fam.tutorId, servicioId: null, con: `Recargo por mora · ${MNAME[m].slice(0, 3)}. (3%)`, al: alDe(k), vence, monto: round2(it.monto * 0.03), est: 'Vencida', tipo: 'mora', paid: false, orden: orden0++, ym: it.ym };
   };
   for (const f of elegibles) {
     if (metaMora - S < 600) break;
     for (let kmes = wpick([[1, 35], [2, 35], [3, 30]] as const); kmes >= 1; kmes--) {
       const sel = deudaDe(f, kmes); if (!sel.length) continue;
       const rec: Item[] = [];
-      if (chance(0.4)) for (const k of f.kids) { const col = sel.filter(i => i.kid === k.id && i.tipo === 'col').sort((a, b) => a.ym - b.ym)[0]; const r = col && recargo(col, k); if (r) rec.push(r); }
+      if (chance(0.4)) for (const k of f.kids) { const col = sel.filter(i => i.alumnoId === k.id && i.tipo === 'col').sort((a, b) => a.ym - b.ym)[0]; const r = col && recargo(col, k); if (r) rec.push(r); }
       const deuda = sel.reduce((a, i) => a + i.monto, 0) + rec.reduce((a, i) => a + i.monto, 0);
       if (S + deuda > metaMora) continue;
       for (const i of sel) { i.paid = false; i.est = 'Vencida'; }
       morasNuevas.push(...rec); S += deuda; morosos.push(f);
-      for (const k of f.kids) { k.mora = 1; if (sel.some(i => i.kid === k.id && i.tipo === 'com')) k.comMora = true; }
+      for (const k of f.kids) { k.mora = 1; if (sel.some(i => i.alumnoId === k.id && i.tipo === 'com')) k.comMora = true; }
       break;
     }
   }
@@ -307,7 +354,7 @@ export async function sembrarDemoGrande(): Promise<void> {
   const resto = round2(metaMora - S);
   if (resto >= 1 && morosos.length) {
     const f = morosos[morosos.length - 1], k = f.kids[0];
-    morasNuevas.push({ id: `g-${k.id}-mx`, kid: k.id, con: `Recargo por mora · ${MNAME[((ymCur - 1) % 12) + 1].slice(0, 3)}. (3%)`, al: alDe(k), vence: vencDMY(Math.max(1, cur.d - 2), cur.m, cur.y), monto: resto, est: 'Vencida', tipo: 'mora', paid: false, orden: orden0++, tutorCed: k.fam.ced, ym: ymCur });
+    morasNuevas.push({ id: `g-${k.id}-mx`, alumnoId: k.id, tutorId: k.fam.tutorId, servicioId: null, con: `Recargo por mora · ${MNAME[((ymCur - 1) % 12) + 1].slice(0, 3)}. (3%)`, al: alDe(k), vence: vencDMY(Math.max(1, cur.d - 2), cur.m, cur.y), monto: resto, est: 'Vencida', tipo: 'mora', paid: false, orden: orden0++, ym: ymCur });
     S += resto;
   }
   items.push(...morasNuevas);
@@ -325,22 +372,26 @@ export async function sembrarDemoGrande(): Promise<void> {
   for (const r of recExist) yaMes.set(keyOf(r.createdAt), (yaMes.get(keyOf(r.createdAt)) ?? 0) + r.monto);
   for (const v of ventExist) yaMes.set(keyOf(v.createdAt), (yaMes.get(keyOf(v.createdAt)) ?? 0) + v.total);
 
-  interface Rec { id: string; ncf: string; tutor: string; hora: string; monto: number; metodo: string; abono: boolean; saldo: number; items: string; pays: string; createdAt: Date; usuario: string }
+  interface Linea { con: string; monto: number; cobroItemId?: string }
+  interface Rec { id: string; ncf: string; tutor: string; tutorId: string; cajaId: string | null; cajeroId: string | null; hora: string; monto: number; abono: boolean; saldo: number; items: string; pays: string; createdAt: Date; usuario: string; metodo: string }
+  // Cajeros del generador (usuarios de la demo) -> User.id y su caja del catalogo staff.
+  const cajeros = await Promise.all((await prisma.user.findMany({ where: { usuario: { in: ['usr_arosario', 'usr_palmanzar'] } } })).map(async u => [u.usuario, { id: u.id, caja: await cajaDe({ usuario: u.usuario, nombre: u.nombre }) }] as const));
+  const cajero = new Map(cajeros);
   const recibos: Rec[] = [];
   const hm = (d: Date) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
   const famsPago = fams.filter(f => f.kids.some(k => k.estado === 'Activo'));
   mesesN.forEach(({ y, m }, idx) => {
     const ym = y * 12 + m - 1, enCiclo = ym >= y0 * 12 + (meses[0] - 1);
     let falta = round2(OBJ.recaudoMeses[idx] - (yaMes.get(ym) ?? 0)); if (falta < 1) return;
-    const crear = (f: Fam): { con: string; monto: number }[] => {
-      const out: { con: string; monto: number }[] = [];
+    const crear = (f: Fam): Linea[] => {
+      const out: Linea[] = [];
       for (const k of f.kids.filter(x => x.estado === 'Activo')) {
         if (enCiclo) {
           const it = (itemsDe.get(k.id) ?? []).find(i => i.ym === ym && i.tipo === 'col'); if (!it || !it.paid) continue;
-          out.push({ con: `${it.con} · ${k.nombres.split(' ')[0]}`, monto: it.monto });
+          out.push({ con: `${it.con} · ${k.nombres.split(' ')[0]}`, monto: it.monto, cobroItemId: it.id });
           if (m === meses[0] && chance(0.7)) out.push({ con: `Reinscripción ${ciclo.nombre} · ${k.nombres.split(' ')[0]}`, monto: fin.inscripcion });
           if (m === meses[0] && chance(0.35)) out.push({ con: `Paquete de libros de texto · ${k.nombres.split(' ')[0]}`, monto: pick([6800, 8200, 9800]) });
-          const com = (itemsDe.get(k.id) ?? []).find(i => i.ym === ym && i.tipo === 'com'); if (com && chance(0.8)) out.push({ con: `${com.con} · ${k.nombres.split(' ')[0]}`, monto: com.monto });
+          const com = (itemsDe.get(k.id) ?? []).find(i => i.ym === ym && i.tipo === 'com'); if (com && chance(0.8)) out.push({ con: `${com.con} · ${k.nombres.split(' ')[0]}`, monto: com.monto, cobroItemId: com.id });
         } else if (f.plan.row.freq === 1) {
           out.push({ con: `Colegiatura ${MNAME[m]} ${y} · ${k.nombres.split(' ')[0]}`, monto: cuotasDe(f.plan.row, k.tanda)[0] });
           if (k.comedor === 'sub' && chance(0.6)) out.push({ con: `Plan Comedor · ${MNAME[m]} · ${k.nombres.split(' ')[0]}`, monto: 3200 });
@@ -348,11 +399,12 @@ export async function sembrarDemoGrande(): Promise<void> {
       }
       return out;
     };
-    const emitir = (f: Fam, its: { con: string; monto: number }[], abono: boolean, saldo: number) => {
+    const emitir = (f: Fam, its: Linea[], abono: boolean, saldo: number) => {
       const monto = round2(its.reduce((a, i) => a + i.monto, 0)), createdAt = fechaEn(y, m, cur, ahora, 1.1);
-      const metodo = wpick([['Efectivo', 35], ['Transferencia', 33], ['Tarjeta', 27], ['Cheque', 5]] as const);
-      const ref = metodo === 'Efectivo' ? '' : metodo === 'Transferencia' ? 'TRF-' + int(100000, 999999) : metodo === 'Tarjeta' ? 'AUT-' + int(100000, 999999) : 'CHQ-' + int(1000, 9999);
-      recibos.push({ id: '', ncf: '', tutor: f.nombre, hora: hm(createdAt), monto, metodo, abono, saldo, items: JSON.stringify(its), pays: JSON.stringify([{ m: metodo, r: ref, amt: monto }]), createdAt, usuario: chance(0.8) ? 'usr_arosario' : 'usr_palmanzar' });
+      const metodo = wpick(METODO_PAGO); // nombre EXACTO del catalogo metodosPago
+      const ref = metodo === 'Efectivo' ? '' : metodo === 'Transferencia' ? 'TRF-' + int(100000, 999999) : metodo.startsWith('Tarjeta') ? 'AUT-' + int(100000, 999999) : 'CHQ-' + int(1000, 9999);
+      const usuario = chance(0.8) ? 'usr_arosario' : 'usr_palmanzar', cj = cajero.get(usuario);
+      recibos.push({ id: '', ncf: '', tutor: f.nombre, tutorId: f.tutorId, cajaId: cj?.caja ?? null, cajeroId: cj?.id ?? null, hora: hm(createdAt), monto, abono, saldo, items: JSON.stringify(its), pays: JSON.stringify([{ m: metodo, r: ref, amt: monto }]), createdAt, usuario, metodo });
       falta = round2(falta - monto);
     };
     const cola = shuffle([...famsPago]); let guard = 0;
@@ -379,22 +431,22 @@ export async function sembrarDemoGrande(): Promise<void> {
     const ficha = {
       carnet: '', ingreso: `${MESES_L[ing.m - 1][0].toUpperCase()}${MESES_L[ing.m - 1].slice(1)} ${ing.y} · ${k.grado} ${k.sec}`, geo: '',
       medico: { sangre: pick(['O+', 'O+', 'A+', 'B+', 'O-', 'A-']), seguro: pick(['ARS Humano', 'ARS Universal', 'Senasa', 'ARS Palic', '']), poliza: '', condiciones: k.alg ? 'Alergia: ' + k.alg : '', planAlim: k.comedor === 'sub' ? 'Suscripción completa · Almuerzo' : k.comedor === 'wal' ? 'Monedero virtual' : '', planAlimExtra: '', emergenciaNombre: `${k.fam.nombre} (${k.fam.parentesco.toLowerCase()})`, emergenciaTel: k.fam.tel, alertaDetalle: k.alg ? 'Alergia registrada: ' + k.alg : '' },
-      conducta: { obs: [], record: 'Sin observaciones' }, hist: [], tutorLegalId: k.fam.tutorId,
-      contrato: { ciclo: ciclo.nombre, plan: k.fam.plan.row.id, beca: k.beca ? 'hermano' : 'none', ctr: `CTR-${y0}-${k.id}`, firmado: `${p2(int(1, 28))}/07/${y0}` },
+      conducta: { obs: [], record: 'Sin observaciones' }, hist: [], // contrato y tutor legal NO van en el JSON: son Contrato y Alumno.tutorLegalId
     };
     return { alumnoId: k.id, data: JSON.stringify(ficha) };
   });
+  const contratos = todos.map(k => ({ id: `ctr-${k.id}-${y0}`, alumnoId: k.id, ciclo: ciclo.nombre, planId: k.fam.plan.row.id, beca: k.beca ? 'hermano' : null, ctr: `CTR-${y0}-${k.id}`, firmado: `${p2(int(1, 28))}/07/${y0}` }));
   const docs = todos.flatMap(k => DOCS_DEFECTO.map((n, i) => {
     const ok = !k.nuevo && chance(0.93);
     return { id: `pdoc-${k.id}-${i}`, alumnoId: k.id, n, f: ok ? `${norm(n).replace(/\W+/g, '_')}_${k.id}.pdf` : 'Sin archivo', est: ok ? 'Validado' : k.nuevo && chance(0.5) ? 'En revisión' : 'Pendiente', orden: i };
   }));
-  const servicios = activosGen.filter(k => k.comedor === 'sub').map(k => ({ id: `psv-com-${k.id}`, alumnoId: k.id, kind: 'rec', catKey: 'com', name: 'Plan Almuerzo Completo', icon: 'ph ph-fork-knife', spec: 'Lunes a Viernes 12:30 PM', cost: 3200, corte: `Día ${p2(diaCorte)} de cada mes`, est: 'Activo', alert: k.alg ? 'Ver alergias' : '', fecha: '', st: '', mes: '', recibo: '' }));
+  const servicios = activosGen.filter(k => k.comedor === 'sub').map(k => ({ id: `psv-com-${k.id}`, alumnoId: k.id, kind: 'rec', catKey: 'com', name: 'Plan Almuerzo Completo', icon: 'ph ph-fork-knife', spec: 'Lunes a Viernes 12:30 PM', cost: 3200, corte: `Día ${p2(diaCorte)} de cada mes`, est: 'Activo', alert: k.alg ? 'Ver alergias' : '', fecha: '', st: '', mes: '', reciboId: null }));
 
   // ---- Comedor ----
   const carnets = activosGen.filter(k => k.comedor).map(k => {
-    const alg = k.alg ? k.alg.split(',').map(s => s.trim().toUpperCase()) : [], sub = k.comedor === 'sub';
+    const alg = k.alg ? k.alg.split(',').map(s => s.trim()) : [], sub = k.comedor === 'sub'; // nombres canonicos del catalogo alergias
     return {
-      code: 'EST-' + k.id, name: `${k.nombres} ${k.apellidos}`, grado: `${k.grado} ${k.sec} · ${k.tanda}`, plan: sub ? 'Suscripción completa · Almuerzo' : 'Monedero virtual', ok: !(sub && k.comMora),
+      code: k.code, alumnoId: k.id, aliPlanId: ALI_PLAN[sub ? 'sub' : 'wal'], name: `${k.nombres} ${k.apellidos}`, grado: `${k.grado} ${k.sec} · ${k.tanda}`, plan: sub ? 'Suscripción completa · Almuerzo' : 'Monedero virtual', ok: !(sub && k.comMora),
       allergies: JSON.stringify(alg), restr: alg.length ? 'Alergias registradas: ' + k.alg : 'Ninguna registrada.', limit: pick([200, 250, 300, 400]),
       motivo: sub && k.comMora ? `Almuerzo de ${MNAME[cur.m].toLowerCase()} no pagado · Referir a caja` : '', wallet: int(0, 1400), spent: chance(0.5) ? int(0, 250) : 0,
     };
@@ -412,7 +464,7 @@ export async function sembrarDemoGrande(): Promise<void> {
   const asist = rosters.flatMap(r => dias.filter(f => !(f === hoy && sinMarcar.has(r.seccion))).map(f => ({ rosterId: r.id, fecha: f, estado: wpick([['P', 93], ['T', 3], ['AJ', 2], ['AI', 2]] as const), notificar: true })));
 
   // ---- Becas ----
-  const becas = nBecas > 0 && bec ? [{ id: 'G' + bec.id, periodo: ciclo.nombre.replace('-', '–'), est: `${bec.nombres} ${bec.apellidos}`, grado: `${bec.grado} ${bec.sec}`, tipo: 'Plan Hermano', regla: '10%', conceptos: 'Solo colegiatura', exp: 'EXP-BEC-G' + bec.id, estado: 'Aprobada', aprob: `C. Vidal · ${p2(int(1, 6))}/09/${cur.y}` }] : [];
+  const becas = nBecas > 0 && bec ? [{ id: 'G' + bec.id, periodo: ciclo.nombre.replace('-', '–'), alumnoId: bec.id, est: `${bec.nombres} ${bec.apellidos}`, grado: `${bec.grado} ${bec.sec}`, tipo: 'Beca Plan Hermano', regla: '10%', conceptos: 'Colegiatura', exp: 'EXP-BEC-G' + bec.id, estado: 'Aprobada', aprob: `C. Vidal · ${p2(int(1, 6))}/09/${cur.y}` }] : [];
 
   // ---- Auditoria verosimil (ultimos 30 dias) ----
   const hace30 = ahora.getTime() - 30 * 864e5;
@@ -429,7 +481,7 @@ export async function sembrarDemoGrande(): Promise<void> {
 
   // ================= Escritura (una transaccion) =================
   const tutoresRows = fams.map(f => ({ id: f.tutorId, nombre: f.nombre, cedula: f.cedula, parentesco: f.parentesco, tipo: 'Financiero y académico', tel: f.tel, email: f.email }));
-  const alumnosRows = todos.map(k => ({ id: k.id, code: k.code, nombres: k.nombres, apellidos: k.apellidos, fnac: k.fnac, grado: k.grado, sec: k.sec, tanda: k.tanda, cuenta: k.mora ? 'mora' : 'ok', estado: k.estado, alg: k.alg, dir: k.fam.dir, tel: k.fam.tel, tutorId: k.fam.tutorId }));
+  const alumnosRows = todos.map(k => ({ id: k.id, code: k.code, nombres: k.nombres, apellidos: k.apellidos, fnac: k.fnac, grado: k.grado, sec: k.sec, tanda: k.tanda, cuenta: k.mora ? 'mora' : 'ok', estado: k.estado, alg: k.alg, dir: k.fam.dir, tel: k.fam.tel, tutorId: k.fam.tutorId, tutorLegalId: k.fam.tutorId }));
   await prisma.$transaction(async (tx: Tx) => {
     // El recaudo de los meses pasa a ser recibos reales: se respaldan y retiran las ventas historicas agregadas de seed-finanzas.
     if (ventasH.length) {
@@ -439,19 +491,21 @@ export async function sembrarDemoGrande(): Promise<void> {
     await tx.catalogo.createMany({ data: secRows });
     await bulk(tutoresRows, d => tx.tutor.createMany({ data: d }));
     await bulk(alumnosRows, d => tx.alumno.createMany({ data: d }));
+    // Orden dictado por las FK: alumno -> (expediente, documentos, contrato) -> recibos -> servicios -> cargos (referencian alumno, tutor y servicio) -> resto.
     await bulk(expedientes, d => tx.persExpediente.createMany({ data: d }));
     await bulk(docs, d => tx.persDocumento.createMany({ data: d }));
+    await bulk(contratos, d => tx.contrato.createMany({ data: d }));
+    await bulk(recibos, d => tx.finRecibo.createMany({ data: d.map(({ usuario: _u, metodo: _m, ...r }) => r) }));
     await bulk(servicios, d => tx.persServicio.createMany({ data: d }));
     await bulk(items, d => tx.finCobroItem.createMany({ data: d.map(({ ym: _ym, ...r }) => r) }));
-    await bulk(recibos, d => tx.finRecibo.createMany({ data: d.map(({ usuario: _u, ...r }) => r) }));
     await bulk(becas, d => tx.finBeca.createMany({ data: d }));
-    await bulk(inscripciones, d => tx.persInscripcion.createMany({ data: d.map(i => ({ id: 'ins-' + i.k.id, alumnoId: i.k.id, ncf: i.ncf, factura: i.factura, plan: i.k.fam.plan.row.id, cuotas: i.cuotas, firma: chance(0.75) ? 'digital' : 'fisica', createdAt: i.createdAt })) }));
+    await bulk(inscripciones, d => tx.persInscripcion.createMany({ data: d.map(i => ({ id: 'ins-' + i.k.id, alumnoId: i.k.id, ncf: i.ncf, factura: i.factura, planId: i.k.fam.plan.row.id, cuotas: i.cuotas, firma: chance(0.75) ? 'digital' : 'fisica', createdAt: i.createdAt })) }));
     await bulk(carnets, d => tx.comCarnet.createMany({ data: d }));
     await bulk(wallets, d => tx.mobWallet.createMany({ data: d }));
     await bulk(rosters, d => tx.acadRoster.createMany({ data: d }));
-    await bulk(asist, d => tx.acadAsistencia.createMany({ data: d }), 800);
+    await bulk(asist, d => tx.acadAsistencia.createMany({ data: d }), 200);
     await bulk(audit, d => tx.sisAudit.createMany({ data: d }));
-    await tx.sisConfig.create({ data: { clave: CLAVE, valor: JSON.stringify({ version: 1, creado: ahora.toISOString(), alumnoDesde: ID0, alumnoHasta: idHasta, alumnos: todos.length, activos: activosGen.length, tutores: fams.length, recibos: recibos.length, cobroItems: items.length, secciones: secRows.length }) } });
+    await tx.sisConfig.create({ data: { clave: CLAVE, valor: JSON.stringify({ version: 1, creado: ahora.toISOString(), alumnoDesde: ID0, alumnoHasta: idHasta, alumnos: todos.length, activos: activosGen.length, tutores: fams.length, recibos: recibos.length, cobroItems: items.length, secciones: secRows.length, proyeccion }) } });
   }, { timeout: 300_000, maxWait: 60_000 });
 
   console.log(`seed demo grande ok en ${((Date.now() - t0) / 1000).toFixed(1)}s: ${activosGen.length} activos (+${todos.length - activosGen.length} inactivos/retirados), ${fams.length} tutores, ${secRows.length} secciones, ${items.length} cargos, ${recibos.length} recibos, ${inscripciones.length} inscripciones del mes, mora generada RD$ ${S.toFixed(2)}`);
@@ -463,19 +517,23 @@ export async function quitarDemoGrande(): Promise<void> {
   if (!man) { console.log('seed demo grande: no hay nada que quitar'); return; }
   const m = JSON.parse(man.valor) as { alumnoDesde: number; alumnoHasta: number };
   const ids = Array.from({ length: m.alumnoHasta - m.alumnoDesde + 1 }, (_, i) => String(m.alumnoDesde + i));
-  const codes = ids.map(i => 'EST-' + i);
   const ventas = await prisma.sisConfig.findUnique({ where: { clave: CLAVE_VENTAS } });
   await prisma.$transaction(async (tx: Tx) => {
-    await tx.acadRoster.deleteMany({ where: { id: { startsWith: 'rg-' } } }); // cascada: notas y asistencia
+    // Orden INVERSO de las FK (hijos antes que padres): notas y asistencia ya no caen en cascada con la nomina (NoAction).
+    const rosters = (await tx.acadRoster.findMany({ where: { id: { startsWith: 'rg-' } }, select: { id: true } })).map(r => r.id);
+    await tx.acadAsistencia.deleteMany({ where: { rosterId: { in: rosters } } });
+    await tx.acadNota.deleteMany({ where: { rosterId: { in: rosters } } });
+    await tx.acadRoster.deleteMany({ where: { id: { in: rosters } } });
     await tx.sisAudit.deleteMany({ where: { id: { startsWith: 'ag-' } } });
     await tx.finCobroItem.deleteMany({ where: { id: { startsWith: 'g-' } } });
     await tx.finRecibo.deleteMany({ where: { id: { startsWith: 'REC-G' } } });
     await tx.finBeca.deleteMany({ where: { id: { startsWith: 'G' } } });
     await tx.persInscripcion.deleteMany({ where: { alumnoId: { in: ids } } });
     await tx.persServicio.deleteMany({ where: { alumnoId: { in: ids } } });
+    await tx.contrato.deleteMany({ where: { alumnoId: { in: ids } } });
     await tx.persDocumento.deleteMany({ where: { alumnoId: { in: ids } } });
     await tx.persExpediente.deleteMany({ where: { alumnoId: { in: ids } } });
-    await tx.comCarnet.deleteMany({ where: { code: { in: codes } } });
+    await tx.comCarnet.deleteMany({ where: { alumnoId: { in: ids } } });
     await tx.mobWallet.deleteMany({ where: { alumnoId: { in: ids } } });
     await tx.alumno.deleteMany({ where: { id: { in: ids } } });
     await tx.tutor.deleteMany({ where: { id: { startsWith: 'tg' } } });

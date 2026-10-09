@@ -63,12 +63,17 @@ export default function Screen() {
         <div className="flex flex-wrap items-center gap-3">
           {h.secciones.length > 1 && (
             <select aria-label="Sección" value={h.seccionId} onChange={e => setSec(e.target.value)} className="h-8 rounded-md border border-slate-300 bg-white px-2 text-[13px] text-ink">
-              {h.secciones.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+              {h.secciones.length > 12
+                ? [...new Set(h.secciones.map(s => s.grupo))].map(g => <optgroup key={g} label={g}>{h.secciones.filter(s => s.grupo === g).map(s => <option key={s.id} value={s.id}>{s.label} · {s.tanda}</option>)}</optgroup>)
+                : h.secciones.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
             </select>
           )}
           <div className="flex items-center gap-1.5 text-xs text-slate-600"><i className="ph ph-shield-check text-base text-green-600" />Validación en tiempo real: docente ocupado, aula ocupada, capacidad</div>
         </div>
       </div>
+      {totalH > h.dias.length * h.bloques.length && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-warn-bg px-3 py-2 text-xs text-amber-800"><i className="ph ph-warning mt-px text-base" /><span>La carga horaria de {h.seccion} suma <b>{totalH} h</b> y la semana solo tiene <b>{h.dias.length * h.bloques.length} bloques</b>: no cabe completa. Ajusta las horas semanales de las materias en Catálogos › Materias o saca de este grado las que no correspondan.</span></div>
+      )}
       <div className="flex flex-wrap items-start gap-3.5">
         <section
           onDragOver={e => e.preventDefault()}

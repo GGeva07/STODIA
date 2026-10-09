@@ -4,6 +4,7 @@ import { config } from './config';
 import authPlugin from './plugins/auth';
 import licensePlugin from './plugins/license';
 import { registerModules } from './plugins/modules';
+import { mensajeIntegridad } from './lib/errores';
 
 export async function buildApp() {
   // TRUST_PROXY: 'true' (confiar en X-Forwarded-*; solo si la API va tras el proxy nginx de la web, /api) o N saltos. Por defecto false.
@@ -24,6 +25,9 @@ export async function buildApp() {
 
   // Errores 5xx sin internals (stack, rutas, SQL) en producción; el detalle queda en el log del servidor.
   app.setErrorHandler((err, req, reply) => {
+    // Violaciones de FK / UNIQUE (Prisma P2003/P2002 -> SQL Server 547/2601): 409 amistoso en vez de 500.
+    const integ = mensajeIntegridad(err);
+    if (integ) { req.log.warn({ code: (err as { code?: string }).code }, 'integridad referencial'); return reply.code(integ.status).send({ error: integ.error }); }
     const status = err.statusCode && err.statusCode >= 400 ? err.statusCode : 500;
     if (status >= 500) {
       req.log.error(err);

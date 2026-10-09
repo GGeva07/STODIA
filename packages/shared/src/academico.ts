@@ -1,7 +1,7 @@
 /** Tipos del grupo académico (Matriz de Notas, Pase de Lista, Extracurriculares, Horarios, Catálogos). SOLO TIPOS. */
 
 // ---------- Asignaciones (docente x sección x materia) ----------
-export interface AcadAsigOpt { id: string; label: string; seccion: string; materia: string }
+export interface AcadAsigOpt { id: string; label: string; seccion: string; materia: string; tanda?: string; docente?: string }
 export interface AcadPeriodo { k: string; label: string }
 
 // ---------- Matriz de Notas ----------
@@ -25,7 +25,7 @@ export interface AcadAsisGuardado { guardados: number; notificados: number }
 /** `k` = id de materia del catálogo; `td` = id del docente; `aulas` solo si la materia admite más de un aula. */
 export interface AcadMateriaHorario { k: string; name: string; t: string; td: string; aula: string; h: number; aulas?: { nombre: string; pupitres: number }[] }
 export interface AcadHorarios {
-  seccionId: string; secciones: { id: string; label: string }[];
+  seccionId: string; secciones: { id: string; label: string; grupo?: string; tanda?: string }[];
   seccion: string; tanda: string; alumnos: number; aulaBase: string; pupitres: number;
   dias: string[]; bloques: string[]; materias: AcadMateriaHorario[];
   sched: Record<string, string>;

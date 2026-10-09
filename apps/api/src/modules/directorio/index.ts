@@ -3,7 +3,7 @@ import type { Alumno, DirCorte } from '@stodia/shared';
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { supervisorOk } from '../../fin-utils';
-import { READONLY_ROLES, toAlumno } from '../../lib/personas';
+import { READONLY_ROLES, dependenciasAlumno, toAlumno } from '../../lib/personas';
 import { cuentaDerivada, saldoVencidoPorAlumno } from '../../lib/cxc';
 import { fechaCorte } from '../../lib/pers-fin';
 
@@ -45,9 +45,13 @@ const plugin: FastifyPluginAsync = async app => {
     if (!(await supervisorOk(req, req.body?.pin, 'alumno.eliminar'))) return reply.code(403).send({ error: 'Clave de supervisor inválida. Intento registrado en auditoría.' });
     const a = await prisma.alumno.findUnique({ where: { id: req.params.id } });
     if (!a) return reply.code(404).send({ error: 'Alumno no encontrado' });
+    // Borrado LÓGICO por defecto: con historial (cobros, NCF, notas, monedero...) la FK NoAction lo impide y se responde 409 con la alternativa.
+    const dep = await dependenciasAlumno(a.id);
+    if (dep.length) return reply.code(409).send({ error: `No se puede eliminar a ${a.nombres} ${a.apellidos}: tiene historial (${dep.join(', ')}). Márcalo como Retirado o Inactivo para conservar su historial.` });
     await prisma.$transaction([
       prisma.persExpediente.deleteMany({ where: { alumnoId: a.id } }),
       prisma.persDocumento.deleteMany({ where: { alumnoId: a.id } }),
+      prisma.contrato.deleteMany({ where: { alumnoId: a.id } }),
       prisma.persServicio.deleteMany({ where: { alumnoId: a.id } }),
       prisma.alumno.delete({ where: { id: a.id } }),
     ]);

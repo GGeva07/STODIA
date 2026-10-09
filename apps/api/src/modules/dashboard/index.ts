@@ -3,7 +3,8 @@ import type { DashboardData } from '@stodia/shared';
 import { prisma } from '../../db';
 import { cfgGet } from '../../lib/sisconfig';
 import { cxcResumen, hoyISO, partesEnZona, round2, zonaHoraria } from '../../lib/cxc';
-import { kidOf } from '../../lib/personas';
+import { esEfectivo, parsePays } from '../../lib/recibos';
+import { alumnosPorPlan } from '../../lib/planes';
 
 /**
  * Centro de Control: todo se calcula desde la BD; una instalación sin datos devuelve ceros.
@@ -11,7 +12,7 @@ import { kidOf } from '../../lib/personas';
  *    de la institución, separados en Efectivo / resto (banco, tarjeta, transferencia, cheque). Barras: mismo cálculo, 6 meses.
  *  - Morosidad: CxC vencida (cargos impagos con vencimiento anterior a hoy) según lib/cxc.ts. Alumnos en mora: alumnos activos con CxC vencida.
  *  - Proyección del ciclo: por cada alumno activo, importe anual neto del plan vigente (promedio ponderado por alumnos inscritos en
- *    cada plan activo; si el plan es por tanda, el de la tanda del alumno). Sin planes activos: suma de los cargos de la cartera.
+ *    cada plan activo = COUNT(Contrato) de alumnos activos; si el plan es por tanda, el de la tanda del alumno). Sin planes activos: suma de los cargos de la cartera.
  *  - Matrícula: alumnos activos. Inscripciones del mes: PersInscripcion creadas en el mes. Becas: FinBeca en estado Pendiente.
  *  - Stock bajo: FinProducto con stock <= 5. Alertas NCF: consumo real (contadores) vs. rango y umbral de SisConfig 'ncf'.
  */
@@ -41,31 +42,32 @@ const plugin: FastifyPluginAsync = async app => {
     const desde = inicioMes(tz, meses[0].y, meses[0].m);
     const keyOf = (d: Date) => { const p = partesEnZona(tz, d); return p.y * 12 + p.m - 1; };
 
-    const [alumnos, rosterSecs, marcas, recibos, ventas, cxc, becasPendientes, productos, inscripcionesMes, planes, cobroTotal, ncf, ecf, ciclos, counters] = await Promise.all([
+    const [alumnos, rosterSecs, marcas, recibos, ventas, cxc, becasPendientes, productos, inscripcionesMes, planes, pesos, cobroTotal, ncf, ecf, ciclos, counters] = await Promise.all([
       prisma.alumno.findMany({ where: { estado: 'Activo' }, select: { id: true, tanda: true } }),
       prisma.acadRoster.groupBy({ by: ['seccion'], _count: { _all: true } }),
       prisma.acadAsistencia.findMany({ where: { fecha: hoy }, select: { estado: true } }),
-      prisma.finRecibo.findMany({ where: { est: 'Activo', createdAt: { gte: desde, lt: mesFin } }, select: { monto: true, metodo: true, createdAt: true } }),
+      prisma.finRecibo.findMany({ where: { est: 'Activo', createdAt: { gte: desde, lt: mesFin } }, select: { monto: true, pays: true, createdAt: true } }),
       prisma.finVenta.findMany({ where: { createdAt: { gte: desde, lt: mesFin } }, select: { total: true, metodo: true, createdAt: true } }),
       cxcResumen(undefined, tz),
       prisma.finBeca.count({ where: { estado: 'Pendiente' } }),
       prisma.finProducto.findMany({ select: { stock: true } }),
       prisma.persInscripcion.count({ where: { createdAt: { gte: mesIni, lt: mesFin } } }),
       prisma.finPlan.findMany({ where: { estado: 'Activo' } }),
+      alumnosPorPlan(true),
       prisma.finCobroItem.aggregate({ _sum: { monto: true } }),
       cfgGet('ncf'), cfgGet('ecf'), cfgGet('ciclos'),
       prisma.finCounter.findMany(),
     ]);
 
     // --- Recaudo del mes y de los últimos 6 meses ---
-    const mov = [...recibos.map(r => ({ v: r.monto, efe: r.metodo === 'Efectivo', k: keyOf(r.createdAt) })), ...ventas.map(v => ({ v: v.total, efe: v.metodo === 'Efectivo', k: keyOf(v.createdAt) }))];
+    const mov = [...recibos.map(r => ({ v: r.monto, efe: esEfectivo(parsePays(r.pays)), k: keyOf(r.createdAt) })), ...ventas.map(v => ({ v: v.total, efe: v.metodo === 'Efectivo', k: keyOf(v.createdAt) }))];
     const kCur = cur.y * 12 + cur.m - 1;
     const recaudoEfectivo = round2(mov.filter(x => x.k === kCur && x.efe).reduce((a, x) => a + x.v, 0));
     const recaudoBanco = round2(mov.filter(x => x.k === kCur && !x.efe).reduce((a, x) => a + x.v, 0));
     const barras = meses.map(({ y, m }) => ({ m: MESES[m - 1], v: round2(mov.filter(x => x.k === y * 12 + m - 1).reduce((a, x) => a + x.v, 0) / 1e6) }));
 
     // --- Alumnos en mora (consistente con la morosidad: misma CxC vencida) ---
-    const alumnosEnMora = alumnos.filter(a => (cxc.vencidoPorKid.get(kidOf(a.id)) ?? 0) > 0).length;
+    const alumnosEnMora = alumnos.filter(a => (cxc.vencidoPorAlumno.get(a.id) ?? 0) > 0).length;
 
     // --- Proyección del ciclo: matrícula activa x plan (ponderado) ---
     const anual = (d: Record<string, unknown>, tanda: string) => {
@@ -73,7 +75,7 @@ const plugin: FastifyPluginAsync = async app => {
       const bruto = Number(d.porTanda && tm[tanda] !== undefined ? tm[tanda] : d.anual) || 0;
       return bruto * (1 - (Number(d.desc) || 0) / 100);
     };
-    const pl = planes.map(p => ({ w: p.alumnos, d: JSON.parse(p.data) as Record<string, unknown> }));
+    const pl = planes.map(p => ({ w: pesos.get(p.id) ?? 0, d: JSON.parse(p.data) as Record<string, unknown> }));
     const wTot = pl.reduce((a, p) => a + p.w, 0);
     const proyeccionCiclo = pl.length
       ? round2(alumnos.reduce((sum, a) => sum + (wTot > 0 ? pl.reduce((s, p) => s + anual(p.d, a.tanda) * p.w, 0) / wTot : pl.reduce((s, p) => s + anual(p.d, a.tanda), 0) / pl.length), 0))

@@ -3,10 +3,14 @@ FROM node:20-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates sqlite3 \
     && rm -rf /var/lib/apt/lists/* && corepack enable
 WORKDIR /repo
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY apps/api apps/api
+# La fuente de verdad del schema es SQL Server; la imagen (SQLite) usa el schema generado para ese motor.
+RUN cd apps/api && node scripts/gen-schema.mjs sqlite --inplace
 RUN pnpm install --filter @stodia/api...
+# Explicito: garantiza el cliente SQLite aunque el postinstall de @prisma/client corra despues del de la API.
+RUN cd apps/api && pnpm exec prisma generate
 WORKDIR /repo/apps/api
 RUN pnpm build && tr -d '\r' < docker-entrypoint.sh > e.tmp && mv e.tmp docker-entrypoint.sh && chmod +x docker-entrypoint.sh
 ENV NODE_ENV=production PORT=3000 DATABASE_URL=file:/data/stodia.db

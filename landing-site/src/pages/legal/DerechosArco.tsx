@@ -80,7 +80,7 @@ export default function DerechosArco() {
         <p>Acusaremos recibo y responderemos en un plazo máximo de 10 días laborables, ampliable por otros 10 días laborables cuando la complejidad lo justifique (se lo comunicaremos), desde que la solicitud esté completa. Si la rechazamos, total o parcialmente, le explicaremos los motivos (por ejemplo, obligación legal de conservar datos académicos o fiscales) y las vías de reclamo. Si la solicitud es manifiestamente infundada o repetitiva podremos denegarla de forma motivada. Las respuestas se enviarán a un medio seguro.</p>
       </S>
       <S id="plantilla" title="6. Plantilla de solicitud">
-        <p>Complete el formulario; al pulsar el botón se abrirá su programa de correo con el mensaje prellenado. <b>No enviamos nada a ningún servidor</b>: usted revisa y envía el correo. Recuerde adjuntar su documento de identidad.</p>
+        <p>Complete el formulario; al pulsar el botón se abrirá su programa de correo con el mensaje prellenado. <b>Esta plantilla no envía nada a ningún servidor</b>: usted revisa y envía el correo. (Es distinto del formulario «Solicitar demo» de la página principal, que sí envía el mensaje a nuestro equipo por correo electrónico; vea la <Link to={LEGAL_ROUTES.privacidad}>Política de Privacidad</Link>.) Recuerde adjuntar su documento de identidad.</p>
         <form className="space-y-4 rounded-lg border border-slate-200 p-4" onSubmit={e => e.preventDefault()} aria-label="Plantilla de solicitud de derechos ARCO">
           <div>
             <label htmlFor="a-tipo" className="mb-1 block text-sm font-medium">Derecho que desea ejercer</label>

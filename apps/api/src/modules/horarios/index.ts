@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { AcadHorarios } from '@stodia/shared';
 import { prisma } from '../../db';
-import { DIAS, bloquesDe, loadCat, nombreCorto, nomina, seccionLabel, todasAsig, docenteDe, type Asig, type Cat } from '../../lib/academico';
+import { DIAS, bloquesDe, inscritosSeccion, loadCat, nombreCorto, nomina, seccionLabel, todasAsig, docenteDe, type Asig, type Cat } from '../../lib/academico';
 
 const ROLES = ['Super Admin', 'Director Académico', 'Docente'] as const;
 const AULA = '_aula:';
@@ -35,7 +35,7 @@ const plugin: FastifyPluginAsync = async app => {
 
   const cargar = async (c: Cat, all: Asig[], secs: Awaited<ReturnType<typeof seccionesPermitidas>>, sec: (typeof secs)[number] | null): Promise<AcadHorarios> => {
     const vacio: AcadHorarios = {
-      seccionId: '', secciones: secs.map(s => ({ id: s.id, label: seccionLabel(c, s) })), seccion: '', tanda: '', alumnos: 0, aulaBase: '', pupitres: 0,
+      seccionId: '', secciones: secs.map(s => ({ id: s.id, label: seccionLabel(c, s), grupo: `${c.grados.get(s.grado)?.nivel ?? ''} · ${c.grados.get(s.grado)?.grado ?? ''}`, tanda: c.tandas.get(s.tanda)?.nombre ?? '' })), seccion: '', tanda: '', alumnos: 0, aulaBase: '', pupitres: 0,
       dias: DIAS, bloques: [], materias: [], sched: {}, tbusy: {}, abusy: {}, cap: {},
     };
     if (!sec) return vacio;
@@ -70,7 +70,7 @@ const plugin: FastifyPluginAsync = async app => {
     const aulaBase = aulaNombre(c, sec.aula);
     return {
       ...vacio, seccionId: sec.id, seccion: seccionLabel(c, sec), tanda: c.tandas.get(sec.tanda)?.nombre ?? '',
-      alumnos: Math.max(Number(sec.insc) || 0, nom.length), aulaBase, pupitres: cap[aulaBase] ?? 0, bloques: bloquesDe(c, sec.tanda), materias, sched, tbusy, abusy, cap,
+      alumnos: Math.max(await inscritosSeccion(c, sec.id), nom.length), aulaBase, pupitres: cap[aulaBase] ?? 0, bloques: bloquesDe(c, sec.tanda), materias, sched, tbusy, abusy, cap,
     };
   };
 

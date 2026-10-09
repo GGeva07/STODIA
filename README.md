@@ -4,7 +4,7 @@ Sistema escolar vendido como **una instancia por cliente**. Monorepo pnpm (Node 
 
 ```
 apps/web        React + Vite + TS + Tailwind + react-router (la API se configura en runtime)
-apps/api        Fastify + TS + Prisma + SQLite
+apps/api        Fastify + TS + Prisma (SQL Server en desarrollo local · SQLite en el instalador/Docker de clientes)
 apps/desktop    Electron mínimo (carga la URL web del cliente)
 packages/shared Tipos TS compartidos (solo tipos)
 ```
@@ -22,6 +22,63 @@ pnpm desktop        # Electron; STODIA_URL=http://localhost:5173 pnpm desktop
 
 Usuarios sembrados (solo con `SEED_DEMO=true`, el modo dev; contraseña = `SEED_PASSWORD`, en dev `stodia123`): `usr_palmanzar` (Super Admin),
 `usr_cvidal` (Director), `usr_ralmonte` (Docente), `usr_arosario` (Cajero), `usr_jtejada` (Comedor), `c.mendoza` (Tutor).
+
+## Base de datos (SQL Server en desarrollo, SQLite en clientes)
+
+Prisma admite **un solo provider por schema**, y STODIA se usa en dos escenarios, por lo que hay UNA fuente de verdad y dos motores:
+
+| Escenario | Motor | Conexión (`DATABASE_URL`) |
+|---|---|---|
+| Desarrollo local en Windows (por defecto) | SQL Server (Express `SQLEXPRESS`) | `sqlserver://localhost:1433;database=stodia;integratedSecurity=true;trustServerCertificate=true` |
+| Instalador / Docker / Linux de clientes | SQLite | `file:/data/stodia.db` (lo fija `docker-compose.yml`; sin cambios) |
+| SQL Server en contenedor o en Linux | SQL Server con usuario | `sqlserver://host:1433;database=stodia;user=sa;password=...;trustServerCertificate=true` |
+
+- `apps/api/prisma/schema.prisma` es la **fuente principal** y está escrita para SQL Server (`provider = "sqlserver"`, con atributos `@db.NVarChar(...)`).
+- `apps/api/scripts/gen-schema.mjs` deriva el schema SQLite quitando los `@db.*`: `pnpm --filter @stodia/api db:schema:sqlite` escribe `prisma/schema.sqlite.prisma` (generado, ignorado por git).
+  El Dockerfile de la API lo ejecuta con `--inplace` DENTRO de la imagen antes de `pnpm install`, así `prisma generate`/`db push` del contenedor siguen usando SQLite sin cambios en `docker-entrypoint.sh`.
+- **Cambiar de motor en local**:
+  - A SQL Server: `DATABASE_URL` de SQL Server en `apps/api/.env`, `pnpm --filter @stodia/api db:generate` y `pnpm --filter @stodia/api db:push`.
+  - A SQLite: `DATABASE_URL="file:./dev.db"` en `.env`, `pnpm --filter @stodia/api db:generate:sqlite` y `pnpm --filter @stodia/api db:push:sqlite`. Para volver, `db:generate`.
+  (Detén la API antes de generar: en Windows el motor de Prisma queda bloqueado mientras corre.)
+- **Windows Authentication (`integratedSecurity=true`) solo funciona en Windows.** En Docker/Linux no aplica: usa `user=sa;password=...` (p. ej. un contenedor `mcr.microsoft.com/mssql/server`).
+- **Requisitos de SQL Server local**: protocolo TCP/IP habilitado (Prisma no usa memoria compartida) y escuchando en el puerto **1433 fijo**
+  (SQL Server Configuration Manager > Protocolos de SQLEXPRESS > TCP/IP > Direcciones IP > IPAll: `TCP Port = 1433`, `TCP Dynamic Ports` vacío; reiniciar el servicio con permisos de administrador).
+  Si el puerto cambiara (puerto dinámico), consulta el actual con `Get-NetTCPConnection -OwningProcess (Get-Process sqlservr).Id -State Listen` y ajusta SOLO `DATABASE_URL` en `.env` (el puerto no está en el código).
+  La base `stodia` debe existir (`CREATE DATABASE stodia COLLATE Modern_Spanish_CI_AI`); el esquema se aplica con `db:push` (no usa migraciones destructivas).
+- **Diferencias a tener presentes**: la collation `Modern_Spanish_CI_AI` hace las comparaciones insensibles a mayúsculas y acentos (ids y unicidad incluidos);
+  SQL Server no garantiza orden sin `ORDER BY` (`src/db.ts` ordena por clave primaria los `findMany` sin `orderBy` cuando el motor es SQL Server);
+  `AcadRoster.alumnoId` y `Tutor.userId` (opcionales) no llevan `@unique`: su unicidad la dan índices únicos filtrados creados por `src/lib/db-indices.ts` al arrancar (funciona en ambos motores).
+  No hay columnas `Json`, enums ni listas escalares: los datos JSON ya se guardan como texto (`NVarChar(Max)` en SQL Server), idénticos en ambos motores.
+- **Migrar datos de SQLite a SQL Server**: `pnpm --filter @stodia/api db:migrar [ruta.db] [--reemplazar]` (por defecto `prisma/preview.db`; solo lectura sobre el origen; sin `--reemplazar` omite las tablas que ya tienen filas; con él vacía el destino primero). Informa conteo y checksum por tabla.
+
+### Integridad referencial (Fase 1 de `docs/db-relaciones.md`)
+
+La base tiene **35 claves foráneas reales** (antes 4), idénticas en SQL Server y SQLite (Prisma activa `foreign_keys=ON`). Todas apuntan al **id interno** (nunca al nombre, cédula o código):
+
+- `onUpdate: NoAction` siempre. `onDelete: NoAction` (Prisma + SQL Server no admiten `Restrict`) para todo lo financiero, fiscal, académico y de auditoría: `FinCobroItem`, `FinRecibo`, `FinBeca`, `PersInscripcion`, `Contrato`, `PersServicio`, `MobWallet`, `AcadRoster/Nota/Asistencia`...
+- `Cascade` solo en `PersExpediente`, `PersDocumento` y `MobNota` (respecto del Alumno) y en las líneas de una venta (`FinVentaItem`). `SetNull` en `Tutor.userId`, `CmnMensaje.tutorId` y `ComLectura.alumnoId`. El grafo de cascadas es un bosque (sin "multiple cascade paths").
+- **Borrado lógico**: un alumno, tutor o catálogo con historial no se elimina, se desactiva (`estado`). Los endpoints de eliminar (Directorio, Tutores, Catálogos, Planes) comprueban el historial y responden **409 con un mensaje en español**; cualquier violación de FK que se escape (Prisma `P2003`/`P2002`) también se traduce a 409 (`src/app.ts`).
+- Cambios de modelo: `FinCobroItem.kid`→`alumnoId` (id real de Alumno, ya no `juan/sofia`), `tutorCed`→`tutorId`, `Tutor.usuario`→`Tutor.userId`, `Tutor.cedula` se guarda **solo con dígitos** (UNIQUE; `fmtCed` la presenta con guiones, la búsqueda acepta ambos), contrato y tutor legal salen del JSON del expediente a `Contrato` y `Alumno.tutorLegalId`, `ComCarnet.code` = `Alumno.code` + FK `alumnoId` (el lector acepta también `EST-<id>`), recibos con `tutorId/cajaId/cajeroId` y líneas `{con, monto, cobroItemId}`. Contadores que divergían (`FinPlan.alumnos`, `AliPlan.inscritos`, `secciones.insc`) ahora **se calculan**. Eliminados `MobCargo`, `PersCupo`, `MobAsistencia`.
+- Índices únicos filtrados (UNIQUE sobre columna NULLable): `UX_AcadRoster_alumnoId`, `UX_Tutor_userId` (`src/lib/db-indices.ts`). **`sqlcmd` debe ejecutarse con `-I`** (QUOTED_IDENTIFIER ON) para escribir en tablas con índices filtrados.
+- Las referencias a la tabla genérica `Catalogo` (grado/sección/tanda, materia, docente, aula, caja, tipo de beca, método de pago, alergias) siguen siendo lógicas hasta la **Fase 2**; `db:fk:auditar` las verifica.
+
+**Auditar** (solo lectura, ambos motores; sale con código 1 si hay huérfanos o duplicados):
+`pnpm --filter @stodia/api db:fk:auditar [--json]` — huérfanos de **todas** las FK del schema, `''` usados como "sin valor", duplicados que impedirían un UNIQUE, cédulas sin normalizar y las referencias lógicas a catálogos.
+
+**Reparar / normalizar** (idempotente; nunca borra filas; sin `--aplicar` solo muestra el plan):
+`pnpm --filter @stodia/api db:fk:reparar [-- --aplicar] [--crear-secciones]`
+
+**Actualizar una base anterior a la Fase 1** (SQL Server o SQLite con datos reales; *expandir → rellenar → contraer*). Con la API detenida:
+1. Respaldo (SQL Server: `BACKUP DATABASE stodia TO DISK=... WITH COPY_ONLY, CHECKSUM`; SQLite: copiar el `.db`).
+2. `pnpm --filter @stodia/api db:fk:reparar -- --aplicar` — **expande** (agrega las columnas nuevas NULLables, quita los DEFAULT de las columnas obsoletas que bloquean `db push` en SQL Server) y **rellena** desde las columnas viejas (alias `juan/sofia`→id, `tutorCed`→`tutorId`, cédulas a dígitos, `'Tarjeta'`→nombre del catálogo, carnets a `Alumno.code`, alergias canónicas...).
+3. `pnpm --filter @stodia/api db:fk:auditar` — revisa que no queden huérfanos/duplicados.
+4. `pnpm --filter @stodia/api exec prisma db push --accept-data-loss` (SQLite: `--schema prisma/schema.sqlite.prisma` tras `db:schema:sqlite`) — **contrae**: crea FK/UNIQUE/NOT NULL y elimina las columnas heredadas, ya copiadas.
+5. Otra vez `db:fk:reparar -- --aplicar` (rellena `Contrato` desde la ficha) y `db:fk:auditar` debe terminar en 0.
+En Docker (SQLite) el `docker-entrypoint.sh` hace todo esto solo (con copia `*.pre-fase1-*.bak` del `.db`). Lo que no se puede resolver con certeza (nombre de beneficiario ambiguo, carnet sin alumno, sección con grado repetido entre niveles) se informa y se deja intacto para revisión manual (`--crear-secciones` crea las secciones faltantes cuando el grado es inequívoco). Para migrar un SQLite a SQL Server, primero actualízalo así: `db:migrar` se detiene si el origen es anterior a la Fase 1.
+
+**`prisma migrate` (preparado, no activado)**: el desarrollo sigue con `db push`. El DDL completo vigente para SQL Server está en `docs/db-baseline-sqlserver.sql` (se regenera con `pnpm --filter @stodia/api db:baseline`). Para adoptar migraciones en una base ya existente: `mkdir prisma/migrations/0_fase1` → guardar ahí ese SQL como `migration.sql` → `prisma migrate resolve --applied 0_fase1` (marca la línea base sin ejecutarla) → desde ahí `prisma migrate dev/deploy`. No se versiona `prisma/migrations/` todavía para no mezclar el flujo `db push` de los contenedores SQLite.
+
+- **Datos de prueba de los catálogos maestros** (solo `SEED_DEMO=true`): `pnpm --filter @stodia/api seed:catalogos` (también lo ejecuta el seed). Es aditivo e idempotente y nunca modifica registros existentes.
 
 ## Docker
 
@@ -125,7 +182,7 @@ docker compose up -d api
 - **Modelos Prisma**: agregar al final de `apps/api/prisma/schema.prisma` (único archivo común inevitable; agregar solo `model`s nuevos).
   Catálogos maestros usan la tabla genérica `Catalogo` (`tipo` + `data` JSON).
 - **Tipos**: entidades en `packages/shared/src/index.ts`; importar con `import type { ... } from '@stodia/shared'`.
-- Esquema BD: `prisma db push` (sin migraciones todavía).
+- Esquema BD: `prisma db push` (sin migraciones todavía; baseline y pasos de `prisma migrate` en «Integridad referencial»). Toda referencia a una entidad es una FK real: sigue las reglas de `onDelete` de esa sección.
 
 ## UI global y servicios de sistema
 

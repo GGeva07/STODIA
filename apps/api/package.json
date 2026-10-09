@@ -13,7 +13,17 @@
     "build": "tsup",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/lib/license-core.test.ts"
+    "test": "tsx --test src/lib/license-core.test.ts",
+    "db:schema:sqlserver": "node scripts/gen-schema.mjs sqlserver",
+    "db:schema:sqlite": "node scripts/gen-schema.mjs sqlite",
+    "db:generate": "prisma generate",
+    "db:generate:sqlite": "node scripts/gen-schema.mjs sqlite && prisma generate --schema prisma/schema.sqlite.prisma",
+    "db:push:sqlite": "node scripts/gen-schema.mjs sqlite && prisma db push --skip-generate --schema prisma/schema.sqlite.prisma",
+    "db:migrar": "tsx scripts/migrar-sqlite-a-sqlserver.ts",
+    "seed:catalogos": "tsx src/seed-catalogos.ts",
+    "db:fk:auditar": "tsx scripts/fk-auditar.ts",
+    "db:fk:reparar": "tsx scripts/fk-reparar.ts",
+    "db:baseline": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",

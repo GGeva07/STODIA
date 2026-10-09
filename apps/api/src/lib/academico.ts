@@ -80,7 +80,7 @@ const esDireccion = (rol: string) => rol === 'Super Admin' || rol === 'Director 
 export function docenteDe(c: Cat, u: { usuario: string; nombre: string }): Row | undefined {
   return [...c.docentes.values()].find(d => norm(d.usuario) === norm(u.usuario)) ?? [...c.docentes.values()].find(d => norm(d.nombre) === norm(u.nombre));
 }
-export const optDe = (a: Asig): AcadAsigOpt => ({ id: a.id, label: `${a.materia} · ${a.seccion}`, seccion: a.seccion, materia: a.materia });
+export const optDe = (a: Asig): AcadAsigOpt => ({ id: a.id, label: `${a.materia} · ${a.seccion}`, seccion: a.seccion, materia: a.materia, tanda: a.tanda, docente: a.docente });
 
 /** Asignaciones visibles para el usuario (Super Admin / Director: todas; Docente: las suyas) y la elegida (`asig`, por defecto la primera). */
 export async function elegirAsig(c: Cat, user: { usuario: string; nombre: string; rol: string }, asig?: string) {
@@ -99,14 +99,21 @@ export async function nomina(c: Cat, seccionId: string): Promise<NomItem[]> {
   if (!s) return [];
   const g = c.grados.get(s.grado)?.grado, t = c.tandas.get(s.tanda)?.nombre;
   const [alumnos, legado] = await Promise.all([
-    prisma.alumno.findMany({ where: { grado: g ?? '', sec: s.seccion, ...(t ? { tanda: t } : {}), estado: 'Activo' }, include: { roster: { select: { id: true } } } }),
+    prisma.alumno.findMany({ where: { grado: g ?? '', sec: s.seccion, ...(t ? { tanda: t } : {}), estado: 'Activo' }, include: { rosters: { select: { id: true }, take: 1 } } }),
     prisma.acadRoster.findMany({ where: { seccion: seccionId, alumnoId: null } }),
   ]);
   const items: NomItem[] = [
-    ...alumnos.map(a => ({ key: a.roster?.id ?? `a:${a.id}`, nombre: `${a.apellidos}, ${a.nombres}`, alumnoId: a.id, rosterId: a.roster?.id ?? null })),
+    ...alumnos.map(a => ({ key: a.rosters[0]?.id ?? `a:${a.id}`, nombre: `${a.apellidos}, ${a.nombres}`, alumnoId: a.id, rosterId: a.rosters[0]?.id ?? null })),
     ...legado.map(r => ({ key: r.id, nombre: r.nombre, alumnoId: null, rosterId: r.id })),
   ];
   return items.sort((x, y) => x.nombre.localeCompare(y.nombre, 'es'));
+}
+/** Alumnos inscritos en la sección (no Retirados): se CALCULA desde Alumno (ya no hay contador guardado en el catálogo). */
+export async function inscritosSeccion(c: Cat, seccionId: string): Promise<number> {
+  const s = c.secciones.get(seccionId);
+  if (!s) return 0;
+  const g = c.grados.get(s.grado)?.grado, t = c.tandas.get(s.tanda)?.nombre;
+  return prisma.alumno.count({ where: { grado: g ?? '', sec: s.seccion, ...(t ? { tanda: t } : {}), estado: { not: 'Retirado' } } });
 }
 /** Devuelve el id de AcadRoster del item, creándolo (enlazado al Alumno) si aún no existe. */
 export async function materializar(item: NomItem, seccionId: string): Promise<string> {
