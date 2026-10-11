@@ -1,27 +1,26 @@
-# Una instancia por cliente. Variables en .env (generado por install.ps1 / install.sh).
 services:
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    image: stodia-api:local
+    image: stodia-api
     restart: unless-stopped
     environment:
       NODE_ENV: production
       DATABASE_URL: file:/data/stodia.db
       JWT_SECRET: ${JWT_SECRET:-}
-      SEED_DEMO: "false"                    # produccion: nunca siembra usuarios demo
+      SEED_DEMO: "false"
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_NAME: ${ADMIN_NAME:-Administrador}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}   # solo primer arranque; el instalador lo borra del .env
-      SUPERVISOR_PIN: ${SUPERVISOR_PIN:-}   # solo valor inicial (luego se cambia en Configuracion); idem
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SUPERVISOR_PIN: ${SUPERVISOR_PIN:-}
       INSTITUTION_NAME: ${INSTITUTION_NAME:-}
       TAX_ID: ${TAX_ID:-}
       ADDRESS: ${ADDRESS:-}
       CITY: ${CITY:-}
       PHONE: ${PHONE:-}
       CONTACT_EMAIL: ${CONTACT_EMAIL:-}
-      RNC_VERIFICADO: ${RNC_VERIFICADO:-}   # los escribe el instalador tras validar el RNC en la DGII (nunca la API key)
+      RNC_VERIFICADO: ${RNC_VERIFICADO:-}
       RNC_RAZON_SOCIAL: ${RNC_RAZON_SOCIAL:-}
       RNC_NOMBRE_COMERCIAL: ${RNC_NOMBRE_COMERCIAL:-}
       RNC_ESTADO: ${RNC_ESTADO:-}
@@ -30,8 +29,8 @@ services:
       TIMEZONE: ${TIMEZONE:-America/Santo_Domingo}
       TZ: ${TIMEZONE:-America/Santo_Domingo}
       LICENSE_KEY: ${LICENSE_KEY:-}
-      CORS_ORIGIN: ${CORS_ORIGIN:-}         # origen(es) de la web, p. ej. http://192.168.1.10:8080 (la app movil siempre se permite)
-      TRUST_PROXY: ${TRUST_PROXY:-false}    # true solo si la API va tras el proxy nginx de la web (API_URL=/api)
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://stodiademo.synsetsolutions.com}
+      TRUST_PROXY: ${TRUST_PROXY:-true}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
@@ -40,8 +39,7 @@ services:
     volumes:
       - stodia-data:/data
     ports:
-      # API_BIND=127.0.0.1 cuando va tras el proxy /api (no exponer el puerto directo: X-Forwarded-For seria falsificable)
-      - "${API_BIND:-0.0.0.0}:${API_PORT:-3000}:3000"
+      - ${API_BIND:-127.0.0.1}:${API_PORT:-3107}:3000
 
   web:
     build:
@@ -51,23 +49,24 @@ services:
     depends_on:
       - api
     environment:
-      API_URL: ${API_URL:-http://localhost:3000}
+      API_URL: ${API_URL:-https://stodiademo.synsetsolutions.com}
       INSTITUTION_NAME: ${INSTITUTION_NAME:-}
-      API_PROXY_TARGET: http://api:3000   # habilita /api/ en el mismo origen (API_URL=/api)
+      API_PROXY_TARGET: http://api:3000
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - ${WEB_PORT:-8080}:80
 
-  # Respaldo diario opcional de la BD (copia consistente con sqlite3 .backup, rotacion 14 dias en /data/backups).
-  #   docker compose --profile backup up -d backup
   backup:
-    image: stodia-api:local
-    profiles: ["backup"]
+    image: stodia-api
+    profiles:
+      - backup
     restart: unless-stopped
     depends_on:
       - api
     environment:
       TZ: ${TIMEZONE:-America/Santo_Domingo}
-    entrypoint: ["sh", "-c"]
+    entrypoint:
+      - sh
+      - -c
     command:
       - |
         while true; do
@@ -82,4 +81,4 @@ services:
       - stodia-data:/data
 
 volumes:
-  stodia-data:
+  stodia-data: null
