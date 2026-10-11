@@ -6,6 +6,7 @@ import { useToast, Modal } from '../../components/system/UiProvider';
 import { btnPrimary, card, pill, pillBase, th, type PillTone } from '../../components/system/styles';
 import { errMsg, fmt } from '../../components/finanzas/fin';
 import SideDrawer from '../../components/finanzas/SideDrawer';
+import { SL_MSG } from '../../lib/ciclo';
 
 const thw = th.replace('whitespace-nowrap ', '');
 const MNAME: Record<number, string> = { 1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre' };
@@ -19,18 +20,19 @@ const Section = ({ title, aside, children }: { title: string; aside?: string; ch
 );
 
 /** Pestaña "Servicios y Contrato" (prototipo L1106-1201 + drawers L1850-1921). */
-export default function Servicios({ data, reload, canWrite }: { data: ExpedienteResp; reload: () => Promise<void>; canWrite: boolean }) {
+export default function Servicios({ data, reload, canWrite, sl = false }: { data: ExpedienteResp; reload: () => Promise<void>; canWrite: boolean; sl?: boolean }) {
   const toast = useToast();
   const navigate = useNavigate();
   const { alumno, ficha, servicios, ref } = data;
-  const [cycle, setCycle] = useState(ref.ciclos[0]);
+  const cycle = ref.ciclos[0]; // el ciclo lo elige el selector global de la barra lateral (Fase 2D)
   const [edit, setEdit] = useState<{ id: string; draft: string } | null>(null);
   const [drawer, setDrawer] = useState<{ key: string; spec: string; mes: number } | null>(null);
   const [confirm, setConfirm] = useState<{ cc: ExpCatalogoItem; spec: string; mes: number; msg: string } | null>(null);
   const [baja, setBaja] = useState<{ s: ExpServicio; date: string; chk: boolean } | null>(null);
 
   const ro = cycle !== ref.ciclos[0] || !canWrite;
-  const auditoria = cycle !== ref.ciclos[0];
+  const auditoria = sl; // ciclo que no es el activo: modo auditoría (solo lectura)
+  const slT = sl ? SL_MSG : undefined;
   const MONTHS = ref.meses;
   const monthsFrom = (m: number) => MONTHS.length - MONTHS.indexOf(m);
   const plan = ref.planes[ficha.contrato.plan] as (typeof ref.planes)[string] | undefined;
@@ -83,13 +85,11 @@ export default function Servicios({ data, reload, canWrite }: { data: Expediente
     <div className="flex flex-col gap-3.5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-[18px]">
-          <select value={cycle} onChange={e => setCycle(e.target.value)} aria-label="Ciclo lectivo" className="h-[30px] cursor-pointer rounded-full border border-slate-300 bg-white px-3 text-xs font-semibold">
-            {ref.ciclos.map((c, i) => <option key={c} value={c}>Ciclo Lectivo: {c.replace('–', ' – ')}{i ? ' (auditoría)' : ''}</option>)}
-          </select>
+          <span className="inline-flex h-[30px] items-center rounded-full border border-slate-300 bg-white px-3 text-xs font-semibold">Ciclo Lectivo: {cycle.replace('–', ' – ')}{sl ? ' (auditoría)' : ''}</span>
           <span className="text-xs text-slate-600">Compromiso mensual recurrente <b className="font-mono text-ink">{fmt(monthly)}</b></span>
           <span className="text-xs text-slate-600">Total contratado para el ciclo <b className="font-mono text-ink">{fmt(cycleTot)}</b></span>
         </div>
-        <button disabled={ro || !ref.catalogo.length} onClick={() => setDrawer({ key: ref.catalogo[0].k, spec: ref.catalogo[0].spec, mes: ref.mesActual })} className={`${btnPrimary} ${ro || !ref.catalogo.length ? 'opacity-45' : ''}`}><i className="ph ph-plus" />Asignar Nuevo Servicio / Concepto</button>
+        <button disabled={ro || !ref.catalogo.length} title={slT} onClick={() => setDrawer({ key: ref.catalogo[0].k, spec: ref.catalogo[0].spec, mes: ref.mesActual })} className={`${btnPrimary} ${ro || !ref.catalogo.length ? 'opacity-45' : ''}`}><i className="ph ph-plus" />Asignar Nuevo Servicio / Concepto</button>
       </div>
       {ref.avisos.length > 0 && !auditoria && <div className="flex flex-col gap-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{ref.avisos.map(t => <span key={t} className="flex items-center gap-2"><i className="ph ph-warning" />{t}</span>)}</div>}
       {auditoria && <div className="flex items-center gap-2 rounded-md bg-mute-bg px-3 py-2 text-xs text-slate-700"><i className="ph ph-eye" />Modo auditoría · contrato {cycle} en solo lectura.</div>}
@@ -98,14 +98,14 @@ export default function Servicios({ data, reload, canWrite }: { data: Expediente
         <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-5 p-4">
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-slate-500">Esquema de pago asignado</span>
-            <select value={ficha.contrato.plan} disabled={ro} onChange={e => setContrato({ plan: e.target.value }, 'Esquema actualizado · la cartera futura se reprogramará al guardar el contrato', 'info')} className={selCls}>
+            <select value={ficha.contrato.plan} disabled={ro} title={slT} onChange={e => setContrato({ plan: e.target.value }, 'Esquema actualizado · la cartera futura se reprogramará al guardar el contrato', 'info')} className={selCls}>
               {!plan && <option value="">Sin plan asignado</option>}{Object.entries(ref.planes).map(([k, p]) => <option key={k} value={k}>{p.name}</option>)}
             </select>
             <span className="text-xs text-slate-600">Cuota bruta <b className="font-mono text-ink">{fmt(gross)}</b></span>
           </div>
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-slate-500">Beca o convenio</span>
-            <select value={ficha.contrato.beca} disabled={ro} onChange={e => { const needs = !!ref.becas[e.target.value]?.aprobacion; void setContrato({ beca: e.target.value }, needs ? 'Beca enviada a aprobación del Director Financiero; no impacta CxC hasta aprobarse' : 'Beca actualizada', needs ? 'warn' : 'info'); }} className={selCls}>
+            <select value={ficha.contrato.beca} disabled={ro} title={slT} onChange={e => { const needs = !!ref.becas[e.target.value]?.aprobacion; void setContrato({ beca: e.target.value }, needs ? 'Beca enviada a aprobación del Director Financiero; no impacta CxC hasta aprobarse' : 'Beca actualizada', needs ? 'warn' : 'info'); }} className={selCls}>
               <option value="none">Sin beca ni convenio</option>{Object.entries(ref.becas).map(([k, b]) => <option key={k} value={k}>{Math.round(b.pct * 10000) / 100}% – {b.nombre}</option>)}
             </select>
             <div className="flex flex-wrap items-center gap-2">

@@ -10,6 +10,8 @@ export const TONE = {
   info: ['#DBEAFE', '#1D4ED8'], mute: ['#F1F5F9', '#475569'],
 } as const;
 
+/** RNC (9 dígitos: 1-31-55678-2) o cédula (11: 001-0023940-1) con su formato habitual; otro largo se devuelve tal cual. */
+export const fmtDoc = (v: string) => { const d = (v ?? '').replace(/D/g, ''); return d.length === 9 ? `${d[0]}-${d.slice(1, 3)}-${d.slice(3, 8)}-${d[8]}` : d.length === 11 ? `${d.slice(0, 3)}-${d.slice(3, 10)}-${d[10]}` : v; };
 export const errMsg = (e: unknown) => (e instanceof ApiError || e instanceof Error ? e.message : 'Error inesperado');
 
 export const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();

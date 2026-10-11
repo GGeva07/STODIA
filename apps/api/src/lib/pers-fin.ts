@@ -2,6 +2,7 @@ import type { CfgFinanzas, ExpCatalogoItem, InsPlan, PersPlan } from '@stodia/sh
 import { prisma } from '../db';
 import { CFG_DEFAULTS, cfgGet } from './sisconfig';
 import { partesEnZona, round2, zonaHoraria } from './cxc';
+import { anioInicio, cicloActivoRow } from './ciclo';
 
 /**
  * Lo que Personas (Expediente / Inscripción / Directorio) necesita de la configuración del cliente: ciclo activo, Planes de Pago,
@@ -18,25 +19,26 @@ export const DOCS_DEFECTO = ['Acta de nacimiento', 'Registro de vacunación', 'F
 
 export const getFinanzas = async (): Promise<CfgFinanzas> => ({ ...CFG_DEFAULTS.finanzas, ...(await cfgGet('finanzas')) });
 
-/** Documentos que se piden al inscribir (SisConfig 'docsRequeridos', lista de textos; por defecto los de la demo). */
+/** Documentos que se piden al inscribir (tabla TipoDocumento: activos y `requerido`, en su orden). asegurarCatalogosBase siembra los de siempre. */
+export async function tiposDocumentoRequeridos(): Promise<{ id: string; nombre: string }[]> {
+  return (await prisma.tipoDocumento.findMany({ where: { requerido: true, estado: 'Activo' }, orderBy: [{ orden: 'asc' }, { id: 'asc' }] })).map(t => ({ id: t.id, nombre: t.nombre }));
+}
 export async function docsRequeridos(): Promise<string[]> {
-  const row = await prisma.sisConfig.findUnique({ where: { clave: 'docsRequeridos' } });
-  try { const l = row ? (JSON.parse(row.valor) as unknown) : null; if (Array.isArray(l) && l.length && l.every(x => typeof x === 'string')) return l as string[]; } catch { /* usa el valor por defecto */ }
-  return DOCS_DEFECTO;
+  const l = (await tiposDocumentoRequeridos()).map(t => t.nombre);
+  return l.length ? l : DOCS_DEFECTO;
 }
 
 // ---- Ciclo lectivo ----
-export interface CicloInfo { nombre: string; y0: number; configurado: boolean; otros: string[] }
+export interface CicloInfo { id: string | null; nombre: string; y0: number; configurado: boolean; otros: string[] }
+/** Ciclo ACTIVO (tabla Ciclo). Sin ciclo activo se calcula el del ano en curso con `configurado: false`. */
 export async function cicloActivo(): Promise<CicloInfo> {
-  const ciclos = await cfgGet('ciclos');
-  const act = ciclos.find(c => c.estado === 'Activo');
-  const yr = act ? /(\d{4})/.exec(act.n)?.[1] : undefined;
-  const otros = (a: string) => ciclos.map(c => c.n).filter(n => n !== a).sort().reverse();
-  if (act && yr) return { nombre: act.n, y0: Number(yr), configurado: true, otros: otros(act.n) };
+  const [act, todos] = await Promise.all([cicloActivoRow(), prisma.ciclo.findMany({ select: { nombre: true } })]);
+  const otros = (a: string) => todos.map(c => c.nombre).filter(n => n !== a).sort().reverse();
+  if (act) return { id: act.id, nombre: act.nombre, y0: anioInicio(act.nombre), configurado: true, otros: otros(act.nombre) };
   const { y, m } = partesEnZona(await zonaHoraria());
   const y0 = m >= MES_INICIO_DEFECTO ? y : y - 1;
   const nombre = `${y0}–${y0 + 1}`;
-  return { nombre, y0, configurado: false, otros: otros(nombre) };
+  return { id: null, nombre, y0, configurado: false, otros: otros(nombre) };
 }
 
 // ---- Planes de pago ----
@@ -45,11 +47,11 @@ export interface PlanRow {
   moraTipo: string; moraVal: number; porTanda: boolean; anual: number; tm: Record<string, number>;
 }
 export async function planesPago(): Promise<PlanRow[]> {
-  const rows = await prisma.finPlan.findMany({ orderBy: { id: 'asc' } });
+  const rows = await prisma.finPlan.findMany({ orderBy: { id: 'asc' }, include: { tandas: { include: { tanda: { select: { nombre: true } } } } } });
   return rows.map(r => {
     const f = JSON.parse(r.data) as Record<string, unknown>;
     const num = (k: string, d = 0) => { const v = parseFloat(String(f[k] ?? '')); return Number.isFinite(v) ? v : d; };
-    const tm = Object.fromEntries(Object.entries((f.tm ?? {}) as Record<string, string>).map(([t, v]) => [t, parseFloat(v) || 0]));
+    const tm = Object.fromEntries(r.tandas.map(t => [t.tanda.nombre, t.monto])); // importe anual por tanda (FinPlanTanda)
     const n = Math.max(1, Math.round(num('n', 1)));
     return {
       id: r.id, name: r.name, estado: r.estado, n, freq: Math.round(num('freq', 1)), start: Math.round(num('start', MES_INICIO_DEFECTO)) || MES_INICIO_DEFECTO,
@@ -110,17 +112,18 @@ export function mesesCiclo(planes: PlanRow[]): number[] {
 export const anioDeMes = (meses: number[], y0: number, m: number) => (m >= meses[0] ? y0 : y0 + 1);
 export const vencDMY = (dia: number, m: number, y: number) => `${String(dia).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`;
 
-// ---- Becas (Catalogo 'becas') ----
+/** Regla de una beca legible: «50%» (modo pct) o «RD$ 2,000.00» (modo monto). */
+export const reglaBeca = (b: { modo: string; valor: number }) => (b.modo === 'pct' ? b.valor + '%' : 'RD$ ' + Number(b.valor || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+
+// ---- Becas (tabla TipoBeca) ----
 export interface BecaDef { key: string; nombre: string; pct: number; aprobacion: boolean }
 export async function becasCatalogo(): Promise<BecaDef[]> {
-  const rows = await prisma.catalogo.findMany({ where: { tipo: 'becas', estado: 'Activo' }, orderBy: { id: 'asc' } });
+  const rows = await prisma.tipoBeca.findMany({ where: { estado: 'Activo' }, orderBy: { id: 'asc' } });
   const out: BecaDef[] = [];
   for (const r of rows) {
-    const d = JSON.parse(r.data) as Record<string, unknown>;
-    const raw = Number(d.pct ?? d.porcentaje ?? 0);
-    const pct = raw > 1 ? raw / 100 : raw;
-    const nombre = String(d.nombre ?? d.name ?? d.tipo ?? '').trim();
-    if (nombre && pct > 0) out.push({ key: String(d.id ?? r.id.split(':').pop()), nombre, pct, aprobacion: d.aprobacion === true || d.requiereAprobacion === true });
+    const pct = r.pct > 1 ? r.pct / 100 : r.pct; // TipoBeca.pct es un porcentaje (25 = 25%); el contrato de la API lo expone como fraccion
+    const nombre = r.nombre.trim();
+    if (nombre && pct > 0) out.push({ key: r.id, nombre, pct, aprobacion: r.requiereAprobacion });
   }
   return out;
 }
@@ -128,15 +131,14 @@ export async function becasCatalogo(): Promise<BecaDef[]> {
 // ---- Servicios: catálogo universal armado con los catálogos reales ----
 export async function catalogoServicios(): Promise<ExpCatalogoItem[]> {
   const [rutas, ali, extras, prods] = await Promise.all([
-    prisma.catalogo.findMany({ where: { tipo: 'rutas', estado: 'Activo' }, orderBy: { id: 'asc' } }),
+    prisma.rutaTransporte.findMany({ where: { estado: 'Activo' }, orderBy: { id: 'asc' } }),
     prisma.aliPlan.findMany({ where: { estado: 'Activo', modelo: 'sub' }, orderBy: { id: 'asc' } }),
     prisma.acadExtra.findMany({ where: { estado: 'Abierta' }, orderBy: { id: 'asc' } }),
-    prisma.finProducto.findMany({ orderBy: { id: 'asc' } }),
+    prisma.finProducto.findMany({ orderBy: { id: 'asc' }, include: { categoria: true } }),
   ]);
   const out: ExpCatalogoItem[] = [];
   for (const r of rutas) {
-    const d = JSON.parse(r.data) as { id?: string; nombre?: string; sectores?: string; tarifa?: number };
-    if (d.nombre && Number(d.tarifa) > 0) out.push({ k: `rt:${r.id.split(':').pop()}`, l: `Transporte · Ruta ${d.nombre}`, cat: 'Recurrente opcional', freq: 'Mensual', mora: 'Aplica mora', price: Number(d.tarifa), rec: true, icon: 'ph ph-bus', spec: `Ruta ${d.nombre}${d.sectores ? ` · ${d.sectores}` : ''}` });
+    if (r.nombre && r.tarifa > 0) out.push({ k: `rt:${r.id}`, l: `Transporte · Ruta ${r.nombre}`, cat: 'Recurrente opcional', freq: 'Mensual', mora: 'Aplica mora', price: r.tarifa, rec: true, icon: 'ph ph-bus', spec: `Ruta ${r.nombre}${r.sectores ? ` · ${r.sectores}` : ''}` });
   }
   for (const p of ali) {
     if (p.freq === 'Mensual' && (p.precio ?? 0) > 0) out.push({ k: `ali:${p.id}`, l: `Comedor · ${p.name}`, cat: 'Recurrente opcional', freq: 'Mensual', mora: p.mora ? 'Aplica mora' : 'Sin mora', price: p.precio!, rec: true, icon: 'ph ph-fork-knife', spec: p.dias, food: true });
@@ -149,7 +151,7 @@ export async function catalogoServicios(): Promise<ExpCatalogoItem[]> {
       : { k: `ext:${e.id}`, l: `Curso · ${e.name}`, cat: 'Esporádico', freq: 'Por demanda', mora: 'Sin mora', price: e.costo, rec: false, icon: '', spec });
   }
   for (const p of prods) {
-    const serv = p.cat === 'Servicios';
+    const serv = p.categoria.nombre === 'Servicios';
     out.push({ k: `prd:${p.id}`, l: p.name, cat: serv ? 'Esporádico' : 'Materiales', freq: serv ? 'Por demanda' : 'Eventual', mora: 'Sin mora', price: p.price, rec: false, icon: '', spec: '' });
   }
   return out;

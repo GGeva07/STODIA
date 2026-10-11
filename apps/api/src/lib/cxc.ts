@@ -1,5 +1,6 @@
 import { prisma } from '../db';
 import { cfgGet } from './sisconfig';
+import { cicloIdActivo } from './ciclo';
 
 /**
  * CUENTAS POR COBRAR (CxC): única fuente de verdad de la deuda de los alumnos.
@@ -26,6 +27,13 @@ export function partesEnZona(tz: string, d = new Date()) {
   return { y: Number(p.year), m: Number(p.month), d: Number(p.day) };
 }
 export const hoyISO = (tz: string, d = new Date()) => { const { y, m, d: dd } = partesEnZona(tz, d); return `${y}-${String(m).padStart(2, '0')}-${String(dd).padStart(2, '0')}`; };
+
+/** Dia calendario ISO (YYYY-MM-DD) en la zona `tz` -> instante UTC de su 00:00. */
+export const inicioDia = (iso: string, tz: string): Date => {
+  const [y, m, d] = iso.split('-').map(Number), guess = Date.UTC(y, m - 1, d);
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(new Date(guess)).map(x => [x.type, Number(x.value)]));
+  return new Date(guess - (Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - guess));
+};
 
 /** dd/mm/aaaa -> aaaa-mm-dd (null si no es una fecha válida). */
 export function venceISO(s: string): string | null {
@@ -67,10 +75,14 @@ export function saldoCuenta(items: { monto: number; vence: string; est?: string 
 
 export interface Cxc { vencido: number; porVencer: number; vencidoPorAlumno: Map<string, number> }
 
-/** Resumen de CxC (opcionalmente acotado a ciertos alumnos). */
-export async function cxcResumen(alumnoIds?: string[], tz?: string): Promise<Cxc> {
+/**
+ * Resumen de CxC (opcionalmente acotado a ciertos alumnos) del ciclo ACTIVO: la deuda de un ciclo cerrado NO entra en la morosidad, el recaudo del mes
+ * ni la proyeccion (ciclo cerrado = historial, no cobros pendientes). `cicloId` permite consultar otro ciclo (Fase 2D).
+ */
+export async function cxcResumen(alumnoIds?: string[], tz?: string, cicloId?: string): Promise<Cxc> {
   const hoy = hoyISO(tz ?? await zonaHoraria());
-  const items = await prisma.finCobroItem.findMany({ where: { paid: false, ...(alumnoIds ? { alumnoId: { in: alumnoIds } } : {}) }, select: { alumnoId: true, monto: true, vence: true, est: true } });
+  const ciclo = cicloId ?? await cicloIdActivo();
+  const items = await prisma.finCobroItem.findMany({ where: { paid: false, cicloId: ciclo, ...(alumnoIds ? { alumnoId: { in: alumnoIds } } : {}) }, select: { alumnoId: true, monto: true, vence: true, est: true } });
   const out: Cxc = { vencido: 0, porVencer: 0, vencidoPorAlumno: new Map() };
   for (const i of items) {
     if (esVencido(i, hoy)) { out.vencido += i.monto; out.vencidoPorAlumno.set(i.alumnoId, (out.vencidoPorAlumno.get(i.alumnoId) ?? 0) + i.monto); } else out.porVencer += i.monto;
@@ -81,13 +93,13 @@ export async function cxcResumen(alumnoIds?: string[], tz?: string): Promise<Cxc
 }
 
 /** Estado de cuenta derivado ('mora' si el alumno tiene saldo vencido, 'ok' si no). `Alumno.cuenta` guardado ya no se usa para decidir: es un valor derivado. */
-export async function cuentaDerivada(): Promise<(alumnoId: string) => 'mora' | 'ok'> {
-  const r = await cxcResumen();
+export async function cuentaDerivada(cicloId?: string): Promise<(alumnoId: string) => 'mora' | 'ok'> {
+  const r = await cxcResumen(undefined, undefined, cicloId);
   return id => ((r.vencidoPorAlumno.get(id) ?? 0) > 0 ? 'mora' : 'ok');
 }
 
 /** Saldo vencido por id de alumno (0 si no debe nada). */
-export async function saldoVencidoPorAlumno(alumnoIds: string[]): Promise<Record<string, number>> {
-  const r = await cxcResumen(alumnoIds);
+export async function saldoVencidoPorAlumno(alumnoIds: string[], cicloId?: string): Promise<Record<string, number>> {
+  const r = await cxcResumen(alumnoIds, undefined, cicloId);
   return Object.fromEntries(alumnoIds.map(id => [id, r.vencidoPorAlumno.get(id) ?? 0]));
 }

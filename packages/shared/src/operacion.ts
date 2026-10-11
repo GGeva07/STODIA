@@ -51,6 +51,11 @@ export interface DashboardData {
   asistenciaIncidencias: number; asistenciaPresentes: number; asistenciaSinMarcar: number; asistenciaSeccion: string;
   becasPendientes: number; alumnosEnMora: number; stockBajo: number; ecfCargado: boolean;
   /** Estado de cada secuencia NCF configurada (consumo real vs rango autorizado). */
-  ncf: { pref: string; tipo: string; estado: 'Vigente' | 'Por agotar' | 'Agotada'; restantes: number; total: number }[];
+  ncf: { pref: string; tipo: string; estado: 'Vigente' | 'Por agotar' | 'Agotada' | 'Vencida' | 'Por vencer'; restantes: number; total: number; modalidad?: 'FISICA' | 'ELECTRONICA'; vence?: string | null; diasParaVencer?: number | null }[];
+  /** Tipos de comprobante emitibles desde Cobros (CREDITO_FISCAL, CONSUMO...) sin ninguna secuencia disponible en su modalidad configurada. */
+  ncfSinSecuencia?: string[];
   barras: { m: string; v: number }[];
+  /** Fase 2D: solo cuando el Centro de Control muestra un ciclo NO activo (selector de ciclo). `historico` = ciclo cerrado: morosidad = saldo pendiente historico del ciclo,
+   *  proyeccion = lo contratado, asistencia = acumulado del ciclo, sin alertas operativas (NCF/stock/e-CF). `mesRef` = mes que representan "Recaudo del mes" y la ultima barra. */
+  historico?: boolean; cicloEstado?: string; mesRef?: string;
 }

@@ -12,13 +12,21 @@ export interface AcadNotasMatriz {
   comps: { k: string; n: string; w: number }[]; rows: AcadNotasFila[];
   nivel: string; minimo: number; rubrica: string; tanda?: string;
   asigId: string; asignaciones: AcadAsigOpt[]; periodos: AcadPeriodo[];
+  /** Fase 2D: ciclo lectivo de la matriz (el elegido en el selector; por defecto el activo). */
+  ciclo?: string;
 }
 export interface AcadNotaGuardada { t: string; usr: string; ip: string; prev: string; next: string }
 
 // ---------- Pase de Lista ----------
 export type AcadMarca = 'P' | 'T' | 'AJ' | 'AI';
 export interface AcadAsisCard { rosterId: string; nombre: string; estado: AcadMarca | null; notificar: boolean }
-export interface AcadAsisDia { seccion: string; tanda: string; fecha: string; bloque: string; cards: AcadAsisCard[]; asigId: string; asignaciones: AcadAsigOpt[] }
+/** Asistencia RESUMIDA de un alumno en un ciclo cerrado (AsistenciaResumen sumada de sus periodos). */
+export interface AcadAsisResumen { rosterId: string; nombre: string; dias: number; presentes: number; tardanzas: number; ausJust: number; ausInjust: number }
+export interface AcadAsisDia {
+  seccion: string; tanda: string; fecha: string; bloque: string; cards: AcadAsisCard[]; asigId: string; asignaciones: AcadAsigOpt[];
+  /** Fase 2D: ciclo consultado. En un ciclo NO activo no hay pase de lista diario: `resumen` trae la asistencia resumida por alumno y `cards` va vacio. */
+  ciclo?: string; resumen?: AcadAsisResumen[];
+}
 export interface AcadAsisGuardado { guardados: number; notificados: number }
 
 // ---------- Horarios ----------
@@ -27,6 +35,8 @@ export interface AcadMateriaHorario { k: string; name: string; t: string; td: st
 export interface AcadHorarios {
   seccionId: string; secciones: { id: string; label: string; grupo?: string; tanda?: string }[];
   seccion: string; tanda: string; alumnos: number; aulaBase: string; pupitres: number;
+  /** Fase 2D: ciclo lectivo del horario. */
+  ciclo?: string;
   dias: string[]; bloques: string[]; materias: AcadMateriaHorario[];
   sched: Record<string, string>;
   /** Restricciones (otras secciones) para la validación en vivo; el servidor las revalida al guardar. tbusy: por id de docente. */

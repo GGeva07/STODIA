@@ -6,7 +6,8 @@ import { useToast } from '../../components/system/UiProvider';
 import { errMsg } from '../../components/finanzas/fin';
 import { runPrint } from '../../components/finanzas/print';
 import { docLista } from '../../components/academico/printDocs';
-import { pill, pillBase, type PillTone } from '../../components/system/styles';
+import { card, pill, pillBase, th, td, type PillTone } from '../../components/system/styles';
+import { SL_MSG, useSoloLectura } from '../../lib/ciclo';
 
 type Marca = AcadMarca | null;
 const ST: Record<AcadMarca, { label: string; tone: PillTone; icon: string; border: string }> = {
@@ -25,6 +26,7 @@ const longDate = (iso: string) => new Date(iso + 'T12:00:00').toLocaleDateString
 
 export default function Screen() {
   const toast = useToast();
+  const sl = useSoloLectura(); // Fase 2D: ciclo que no es el activo = sin pase de lista (solo asistencia resumida)
   const [d, setD] = useState<AcadAsisDia | null>(null);
   const [att, setAtt] = useState<Marca[]>([]);
   const [notify, setNotify] = useState<boolean[]>([]);
@@ -41,7 +43,41 @@ export default function Screen() {
   if (!d.asigId) return <div className="flex flex-col gap-1"><h1 className="m-0 text-xl font-semibold tracking-[-0.01em]">Pase de Lista</h1><p className="text-[13px] text-slate-600">No tienes secciones asignadas. Pide al administrador que te asigne en Catálogos › Docentes.</p></div>;
   const cnt = (k: Marca) => att.filter(x => x === k).length;
 
+  // Ciclo cerrado: el detalle diario no se conserva; se muestra el RESUMEN por alumno (AsistenciaResumen) en solo lectura.
+  if (d.resumen) {
+    const tot = d.resumen.reduce((a, r) => ({ dias: a.dias + r.dias, p: a.p + r.presentes, t: a.t + r.tardanzas, aj: a.aj + r.ausJust, ai: a.ai + r.ausInjust }), { dias: 0, p: 0, t: 0, aj: 0, ai: 0 });
+    return (
+      <div className="flex flex-col gap-3.5">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="m-0 text-xl font-semibold tracking-[-0.01em]">Pase de Lista</h1>
+            <p className="mt-1 text-[13px] text-slate-600">Asistencia resumida del ciclo {d.ciclo} · {d.seccion || 'sin sección'}{d.tanda ? ` · ${d.tanda}` : ''} · solo lectura</p>
+          </div>
+          <AsigSelect options={d.asignaciones} value={d.asigId} onChange={setAsig} />
+        </div>
+        <section className={`${card} overflow-auto`}>
+          <table className="w-full min-w-[640px] border-collapse text-[13px]">
+            <thead><tr><th className={th}>Estudiante</th><th className={`${th} text-right`}>Días lectivos</th><th className={`${th} text-right`}>Presentes</th><th className={`${th} text-right`}>Tardanzas</th><th className={`${th} text-right`}>Aus. justificadas</th><th className={`${th} text-right`}>Aus. injustificadas</th><th className={`${th} text-right`}>% asistencia</th></tr></thead>
+            <tbody>
+              {d.resumen.map(r => (
+                <tr key={r.rosterId} className="h-9">
+                  <td className={td}>{r.nombre}</td>
+                  <td className={`${td} text-right font-mono`}>{r.dias}</td><td className={`${td} text-right font-mono`}>{r.presentes}</td><td className={`${td} text-right font-mono`}>{r.tardanzas}</td>
+                  <td className={`${td} text-right font-mono`}>{r.ausJust}</td><td className={`${td} text-right font-mono`}>{r.ausInjust}</td>
+                  <td className={`${td} text-right font-mono font-medium`}>{r.dias ? `${(r.presentes / r.dias * 100).toFixed(1)}%` : '—'}</td>
+                </tr>
+              ))}
+              {d.resumen.length === 0 && <tr><td colSpan={7} className="px-3 py-6 text-center text-[13px] text-slate-500">Sin asistencia resumida para esta sección en el ciclo {d.ciclo}.</td></tr>}
+            </tbody>
+            {d.resumen.length > 0 && <tfoot><tr className="h-9 bg-slate-50 font-semibold"><td className={td}>Total de la sección</td><td className={`${td} text-right font-mono`}>{tot.dias}</td><td className={`${td} text-right font-mono`}>{tot.p}</td><td className={`${td} text-right font-mono`}>{tot.t}</td><td className={`${td} text-right font-mono`}>{tot.aj}</td><td className={`${td} text-right font-mono`}>{tot.ai}</td><td className={`${td} text-right font-mono`}>{tot.dias ? `${(tot.p / tot.dias * 100).toFixed(1)}%` : '—'}</td></tr></tfoot>}
+          </table>
+        </section>
+      </div>
+    );
+  }
+
   const save = async () => {
+    if (sl) { toast(SL_MSG, 'warn'); return; }
     const un = cnt(null);
     if (un) { toast(`Faltan ${un} estudiantes por marcar`, 'warn'); return; }
     setBusy(true);

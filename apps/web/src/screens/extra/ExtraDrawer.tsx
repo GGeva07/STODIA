@@ -1,3 +1,4 @@
+import { SL_MSG, useSoloLectura } from '../../lib/ciclo';
 import { useState } from 'react';
 import type { AcadExtra, AcadExtraInput } from '@stodia/shared';
 import SideDrawer from '../../components/finanzas/SideDrawer';
@@ -21,6 +22,7 @@ interface Props {
 
 /** Panel lateral Ver / Editar / Nueva actividad o curso (xd del prototipo). */
 export default function ExtraDrawer({ item, mode, onClose, onEdit, onDelete, onSave }: Props) {
+  const sl = useSoloLectura(); // Fase 2D: ciclo que no es el activo
   const [f, setF] = useState<AcadExtra>(item ?? BLANK);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -72,11 +74,11 @@ export default function ExtraDrawer({ item, mode, onClose, onEdit, onDelete, onS
         {err && <div className="flex items-center gap-1.5 text-xs font-medium text-red-600"><i className="ph ph-warning-circle" />{err}</div>}
       </div>
       <div className="flex justify-between gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
-        {mode !== 'create' && <button onClick={() => onDelete(f)} className="flex h-9 items-center gap-1.5 rounded-md border border-red-300 bg-white px-3 text-[13px] font-medium text-red-600"><i className="ph ph-trash" />Eliminar</button>}
+        {mode !== 'create' && <button onClick={() => onDelete(f)} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-9 items-center gap-1.5 rounded-md border border-red-300 bg-white px-3 text-[13px] font-medium text-red-600 disabled:opacity-50"><i className="ph ph-trash" />Eliminar</button>}
         <span className="flex-1" />
         <div className="flex gap-2">
           <button onClick={onClose} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">{ro ? 'Cerrar' : 'Cancelar'}</button>
-          <button onClick={primary} disabled={busy} className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white hover:bg-accent-dark disabled:opacity-60"><i className={ro ? 'ph ph-pencil-simple' : 'ph ph-floppy-disk'} />{ro ? 'Editar' : mode === 'create' ? 'Crear actividad' : 'Guardar cambios'}</button>
+          <button onClick={primary} disabled={busy || sl} title={sl ? SL_MSG : undefined} className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white hover:bg-accent-dark disabled:opacity-60"><i className={ro ? 'ph ph-pencil-simple' : 'ph ph-floppy-disk'} />{ro ? 'Editar' : mode === 'create' ? 'Crear actividad' : 'Guardar cambios'}</button>
         </div>
       </div>
     </SideDrawer>

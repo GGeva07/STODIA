@@ -1,6 +1,6 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { Component, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { fmt } from './fin';
+import { fmt, fmtDoc } from './fin';
 import { cajaSync } from './caja';
 import { nombreLegal, rncTxt, ciudadTxt, usePerfil } from './perfil';
 
@@ -32,9 +32,15 @@ export const B = {
   }),
 };
 
-/** docTirilla del prototipo. */
-export function docTirilla(r: { id: string; ncf: string; tutor: string; hora: string; monto: number; items: { con: string; monto: number }[]; pays: { m: string; r?: string; amt: number }[]; change: number; abono?: boolean; saldo?: number }, cajero = '', fecha = hoyDMY()): PDoc {
+/**
+ * docTirilla del prototipo. Si el recibo trae los datos del comprobante que fija la API (fecha, cajero, caja, sucursal, estado), la tirilla sale SOLO de ellos:
+ * asi la de un recibo recien emitido y la reimpresion desde el historial son identicas. Sin ellos (Venta Rapida) usa la caja/cajero/fecha de la sesion.
+ */
+export function docTirilla(r: { id: string; ncf: string; tutor: string; hora: string; monto: number; items: { con: string; monto: number }[]; pays: { m: string; r?: string; amt: number }[]; change: number; abono?: boolean; saldo?: number; est?: string; nc?: string; fecha?: string; cajero?: string; caja?: string; sucursal?: string;
+  tipoComprobante?: { codigo: string; nombre: string; modalidad: string }; clienteRnc?: string; clienteNombre?: string; regimenEspecial?: string; estadoDgii?: string }, cajero = '', fecha = hoyDMY()): PDoc {
   const cj = cajaSync();
+  const electronico = r.tipoComprobante?.modalidad === 'ELECTRONICA';
+  const caja = r.caja ?? cj.caja, sucursal = r.sucursal ?? cj.sucursal, anulado = r.est === 'Anulado';
   const items = (r.items || []).map(i => [i.con, fmt(i.monto)]);
   const tot: [string, string, boolean?][] = [
     ...(r.pays || []).map(p => [p.m + (p.r ? ' ' + p.r : ''), fmt(p.amt)] as [string, string]),
@@ -43,31 +49,56 @@ export function docTirilla(r: { id: string; ncf: string; tutor: string; hora: st
     ...(r.change > 0 ? [['Cambio', fmt(r.change)] as [string, string]] : []),
   ];
   return {
-    kind: 'tirilla', name: 'Tirilla ' + r.id, file: 'recibo_' + r.id + '.pdf', format: 'Tirilla 80 mm', sign: [], sede: [cj.caja, cj.sucursal ? 'Sucursal ' + cj.sucursal : ''].filter(Boolean).join(' · '),
-    pages: [{ title: r.abono ? 'Recibo de abono' : 'Recibo de pago', sub: '', blocks: [
-      B.kv([['Recibo', r.id], ['NCF', r.ncf], ['Fecha', fecha + ' ' + r.hora], ['Cajero', cajero], ['Tutor', r.tutor]]),
+    kind: 'tirilla', name: 'Tirilla ' + r.id, file: 'recibo_' + r.id + '.pdf', format: 'Tirilla 80 mm', sign: [], sede: [caja, sucursal ? 'Sucursal ' + sucursal : ''].filter(Boolean).join(' · '),
+    pages: [{ title: anulado ? 'Recibo ANULADO' : r.abono ? 'Recibo de abono' : 'Recibo de pago', sub: anulado && r.nc ? 'Nota de crédito ' + r.nc : '', blocks: [
+      B.kv([['Recibo', r.id], [electronico ? 'e-NCF' : 'NCF', r.ncf], ...(r.tipoComprobante ? [['Comprobante', `${r.tipoComprobante.nombre} (${r.tipoComprobante.codigo}…)`] as [string, string]] : []), ['Fecha', (r.fecha ?? fecha) + ' ' + r.hora], ['Cajero', r.cajero ?? cajero], ['Tutor', r.tutor],
+        ...(r.clienteRnc ? [['RNC/Cédula', fmtDoc(r.clienteRnc)] as [string, string]] : []), ...(r.clienteNombre ? [['Razón social', r.clienteNombre] as [string, string]] : []), ...(r.regimenEspecial ? [['Régimen especial', r.regimenEspecial] as [string, string]] : [])]),
       B.table(['Concepto', 'Monto'], items, ['1fr', 'auto'], ['left', 'right']),
       B.total(tot),
+      ...(electronico && r.estadoDgii === 'PendienteEnvio' ? [B.text('e-NCF pendiente de envío a la DGII')] : []),
       B.text('Gracias por su pago. Conserve este comprobante.'),
     ] }],
   };
 }
 
 // ---- estado global mínimo (doc abierto + botón ocupado) ----
+// El estado y el root viven en globalThis: si el módulo se vuelve a evaluar (HMR en desarrollo mientras se edita este archivo) la copia nueva reutiliza el MISMO
+// store y el MISMO root de #print-root; antes cada evaluación reiniciaba `st`/`root` y hacía un createRoot() duplicado sobre el contenedor ya existente.
 type St = { busy: string | null; doc: PDoc | null };
-let st: St = { busy: null, doc: null };
-const subs = new Set<() => void>();
-const set = (p: Partial<St>) => { st = { ...st, ...p }; subs.forEach(f => f()); };
-const sub = (f: () => void) => { subs.add(f); return () => { subs.delete(f); }; };
-let root: Root | null = null;
+const G = globalThis as unknown as { __stodiaPrint?: { st: St; subs: Set<() => void>; root: Root | null } };
+const S = (G.__stodiaPrint ??= { st: { busy: null, doc: null }, subs: new Set(), root: null });
+const set = (p: Partial<St>) => { S.st = { ...S.st, ...p }; S.subs.forEach(f => f()); };
+const sub = (f: () => void) => { S.subs.add(f); return () => { S.subs.delete(f); }; };
+const getSt = () => S.st;
+
+/** Si el visor lanza al renderizar, React desmonta todo el root y las siguientes impresiones fallan en silencio hasta recargar: este límite lo evita y muestra el error. */
+class HostBoundary extends Component<{ children: ReactNode }, { err: Error | null }> {
+  state = { err: null as Error | null };
+  static getDerivedStateFromError(err: Error) { return { err }; }
+  componentDidCatch(err: Error) { console.error('[print] no se pudo renderizar el documento', err); }
+  render() {
+    if (!this.state.err) return this.props.children;
+    const cerrar = () => { this.setState({ err: null }); closePrint(); };
+    return (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 120, display: 'grid', placeItems: 'center' }}>
+        <div role="alert" style={{ background: '#fff', borderRadius: 8, padding: 20, maxWidth: 420, fontSize: 13 }}>
+          <b>No se pudo generar la vista previa de impresión.</b>
+          <div style={{ color: '#64748B', margin: '8px 0 14px' }}>{this.state.err.message}</div>
+          <button onClick={cerrar} style={{ height: 34, padding: '0 14px', borderRadius: 6, border: '1px solid #CBD5E1', background: '#fff', cursor: 'pointer' }}>Cerrar</button>
+        </div>
+      </div>
+    );
+  }
+}
 
 function ensureHost() {
-  if (root) return;
   let el = document.getElementById('print-root');
-  if (!el) { el = document.createElement('div'); el.id = 'print-root'; document.body.appendChild(el); }
-  root = createRoot(el);
-  root.render(<PrintHost />);
+  if (!el) { el = document.createElement('div'); el.id = 'print-root'; document.body.appendChild(el); S.root = null; }
+  if (!S.root) S.root = createRoot(el);
+  S.root.render(<HostBoundary><PrintHost /></HostBoundary>);
 }
+// HMR: el root ya montado sigue con el PrintHost de la versión anterior del módulo; se vuelve a renderizar con el nuevo.
+if (typeof document !== 'undefined' && S.root) ensureHost();
 
 /** Iniciales del logo del encabezado («Colegio Los Pinos, SRL» → LP): ignora el tipo de centro y la forma societaria. */
 export function inicialesDe(nombre: string) {
@@ -78,7 +109,7 @@ export function inicialesDe(nombre: string) {
 
 /** Muestra «Generando…» 650 ms y abre la vista previa (runPrint del prototipo). */
 export function runPrint(key: string, doc: PDoc | null | undefined) {
-  if (!doc || st.busy) return;
+  if (!doc || S.st.busy) return;
   ensureHost();
   set({ busy: key });
   setTimeout(() => set({ busy: null, doc }), 650);
@@ -87,7 +118,7 @@ export const closePrint = () => set({ doc: null });
 
 /** Estado del botón de impresión (pbtn del prototipo): etiqueta, icono y animación. */
 export function usePrintBusy() {
-  const s = useSyncExternalStore(sub, () => st);
+  const s = useSyncExternalStore(sub, getSt);
   return (key: string, label: string, icon: string) => {
     const b = s.busy === key;
     return { label: b ? 'Generando…' : label, icon: b ? 'ph ph-circle-notch' : icon, spin: b ? 'spin 0.8s linear infinite' : 'none' };
@@ -164,7 +195,7 @@ export async function descargarPdf(doc: PDoc, opts: { porAlumno?: boolean } = {}
 }
 
 function PrintHost() {
-  const s = useSyncExternalStore(sub, () => st);
+  const s = useSyncExternalStore(sub, getSt);
   const doc = s.doc;
   const [pdfBusy, setPdfBusy] = useState<'pdf' | 'zip' | null>(null);
   const [msg, setMsg] = useState<{ t: string; ok: boolean } | null>(null);

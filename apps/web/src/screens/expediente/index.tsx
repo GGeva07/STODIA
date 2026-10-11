@@ -11,6 +11,7 @@ import { cartaDoc, printCarta } from '../../components/personas/printCarta';
 import { descargarPdf, hoyDMY } from '../../components/finanzas/print';
 import { usePerfil } from '../../components/finanzas/perfil';
 import Servicios from './Servicios';
+import { SL_MSG, useCiclo } from '../../lib/ciclo';
 
 const TABS = [['personal', 'Datos personales'], ['academico', 'Historial académico'], ['cuenta', 'Estado de cuenta'], ['servicios', 'Servicios y Contrato'], ['medico', 'Médico y alimenticio'], ['docs', 'Documentación'], ['familia', 'Red familiar']] as const;
 type Tab = (typeof TABS)[number][0];
@@ -31,6 +32,7 @@ function Expediente() {
   const navigate = useNavigate();
   const toast = useToast();
   const perfil = usePerfil();
+  const { soloLectura: sl } = useCiclo(); // Fase 2D: otro ciclo = solo lectura (contrato, servicios y documentos deshabilitados)
   const colegio = (perfil?.nombre ?? '').toUpperCase(), rncP = perfil?.rnc ?? '';
   const [data, setData] = useState<ExpedienteResp | null>(null);
   const [error, setError] = useState('');
@@ -49,6 +51,7 @@ function Expediente() {
   const nombre = `${a.nombres.split(' ')[0]} ${a.apellidos}`;
   const curso = `${a.grado} ${a.sec}`;
   const canWrite = !!user && !READONLY.includes(user.rol);
+  const cd = data.cicloDetalle;
   const vencido = cuenta.filter(i => !i.paid && i.est === 'Vencida').reduce((t, i) => t + i.monto, 0);
   const pendiente = cuenta.filter(i => !i.paid && i.est !== 'Vencida').reduce((t, i) => t + i.monto, 0);
   const mora = vencido > 0 || (cuenta.length === 0 && a.cuenta === 'mora');
@@ -167,6 +170,26 @@ function Expediente() {
 
       {tab === 'academico' && (
         <div className="grid items-start gap-3.5 [grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr))]">
+          {cd && (
+            <section className={`${card} [grid-column:1/-1]`}>
+              <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-slate-200 px-3.5 py-3"><span className="text-sm font-semibold">Notas del ciclo {cd.ciclo}</span><span className="text-xs text-slate-500">{cd.promedio != null ? <>Promedio del ciclo <b className={mono}>{cd.promedio.toFixed(1)}</b></> : 'Sin notas registradas en este ciclo'}</span></div>
+              {cd.notas.length > 0 && (
+                <div className="overflow-auto">
+                  <div className="grid min-w-[560px] grid-cols-[minmax(0,1fr)_70px_70px_70px_70px_80px] gap-2 border-b border-slate-200 bg-slate-50 px-3.5 py-2 text-[11px] font-semibold uppercase text-slate-600"><span>Materia</span><span className="text-right">P1</span><span className="text-right">P2</span><span className="text-right">P3</span><span className="text-right">P4</span><span className="text-right">Promedio</span></div>
+                  {cd.notas.map(n => (
+                    <div key={n.materia} className="grid h-9 min-w-[560px] grid-cols-[minmax(0,1fr)_70px_70px_70px_70px_80px] items-center gap-2 border-b border-slate-100 px-3.5 text-[13px]">
+                      <span>{n.materia}</span>{[0, 1, 2, 3].map(k => <span key={k} className={`${mono} text-right text-xs`}>{n.p[k] != null ? n.p[k]!.toFixed(1) : '—'}</span>)}<span className={`${mono} text-right text-[13px] font-semibold`}>{n.prom != null ? n.prom.toFixed(1) : '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="px-3.5 py-3 text-[13px] text-slate-600">
+                {cd.asistencia
+                  ? <>Asistencia resumida: <b>{cd.asistencia.presentes}</b> presentes de {cd.asistencia.dias} días lectivos · {cd.asistencia.tardanzas} tardanzas · {cd.asistencia.ausJust} ausencias justificadas · {cd.asistencia.ausInjust} injustificadas</>
+                  : 'Sin asistencia resumida registrada para este ciclo.'}
+              </div>
+            </section>
+          )}
           <section className={card}>
             <div className="border-b border-slate-200 px-3.5 py-3 text-sm font-semibold">Promedios históricos</div>
             <div className="grid grid-cols-[110px_70px_1fr_60px_110px] gap-2 border-b border-slate-200 bg-slate-50 px-3.5 py-2 text-[11px] font-semibold uppercase text-slate-600"><span>Ciclo</span><span>Grado</span><span className="text-right">Promedio</span><span className="text-center">Letra</span><span /></div>
@@ -214,7 +237,7 @@ function Expediente() {
         </div>
       )}
 
-      {tab === 'servicios' && <Servicios data={data} reload={reload} canWrite={canWrite} />}
+      {tab === 'servicios' && <Servicios data={data} reload={reload} canWrite={canWrite && !sl} sl={sl} />}
 
       {tab === 'medico' && (
         <div className="flex flex-col gap-3.5">
@@ -242,7 +265,7 @@ function Expediente() {
               <i className="ph ph-file-text text-[22px] text-slate-500" />
               <div className="min-w-[180px] flex-1"><div className="font-medium">{d.n}</div><div className={`${mono} text-xs text-slate-500`}>{d.f}</div></div>
               <span className={`${pillBase} w-[81px] ${pill[DOC_TONE[d.est]]}`}>{d.est}</span>
-              {canWrite && <button onClick={() => subirDoc(d)} className="flex h-[30px] items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium hover:bg-slate-100"><i className="ph ph-upload-simple" />{d.est === 'Pendiente' ? 'Cargar' : 'Reemplazar'}</button>}
+              {canWrite && <button onClick={() => subirDoc(d)} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-[30px] items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium hover:bg-slate-100 disabled:opacity-50"><i className="ph ph-upload-simple" />{d.est === 'Pendiente' ? 'Cargar' : 'Reemplazar'}</button>}
             </div>
           ))}
         </section>

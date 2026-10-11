@@ -1,5 +1,11 @@
-/** Semilla del grupo académico (mock del prototipo: STU_ATT, G0, X0, SCHED0). Idempotente: no pisa registros existentes. */
+/**
+ * Semilla del grupo académico (mock del prototipo: STU_ATT, G0, X0, SCHED0). Idempotente: no pisa registros existentes.
+ * Los catálogos (aulas, materias, rúbrica, docentes, secciones) los siembra seed-estructura.ts en tablas tipadas; aquí van las asignaciones,
+ * la nómina heredada de 5to A, las notas, los horarios y las actividades extracurriculares.
+ */
 import { prisma } from './db';
+import { gradosDeRango, resolverRefs } from './lib/extras';
+import { cicloIdActivo, periodoId } from './lib/ciclo';
 
 const STU_ATT = ['Abreu Castillo, Daniela', 'Báez Rosario, Miguel', 'Castillo Peña, Amanda', 'De la Cruz, Héctor', 'Espinal Ortiz, Camila', 'Fernández Gil, Tomás', 'Guzmán Reyes, Laura', 'Hernández Polanco, Iván', 'Jiménez Taveras, Paula', 'Mendoza Fernández, Juan', 'Núñez Almonte, Gabriela', 'Ortiz Brito, Samuel', 'Peña Durán, Lucía', 'Quezada Mejía, Andrés', 'Rodríguez Sosa, Elena', 'Santana Vólquez, Diego'];
 const G0 = [['92', '88', '95', '90', ''], ['78', '81', '74', '80', ''], ['85', '90', '87', '', ''], ['65', '70', '68', '72', ''], ['95', '97', '93', '96', '94'], ['72', '75', '80', '', ''], ['88', '84', '91', '86', ''], ['58', '66', '61', '64', ''], ['90', '86', '89', '92', ''], ['82', '79', '85', '88', ''], ['98', '96', '99', '97', '100'], ['74', '69', '77', '', '']];
@@ -18,15 +24,6 @@ const X0: (string | number)[][] = [
   ['Ajedrez', 'Académico', 'act', 'Prof. Andrés Mota', 'Biblioteca', 'Mar y Jue', '2:30 – 3:30 PM', '1ro – 6to', 20, 0, 0],
 ];
 
-/** Lee/crea/parchea una fila de catálogo (Catalogo tipo:id). Los parches de la demo se reaplican siempre para reproducir el escenario del prototipo. */
-async function setCat(tipo: string, id: string, patch: Record<string, unknown>, crear?: Record<string, unknown>) {
-  const key = `${tipo}:${id}`, cur = await prisma.catalogo.findUnique({ where: { id: key } });
-  if (!cur && !crear) return;
-  const data = { ...(cur ? JSON.parse(cur.data) : { id, estado: 'Activo', ...crear }), ...patch, id };
-  const estado = cur?.estado ?? (data.estado as string) ?? 'Activo';
-  await prisma.catalogo.upsert({ where: { id: key }, update: { data: JSON.stringify({ ...data, estado }) }, create: { id: key, tipo, data: JSON.stringify(data), estado } });
-}
-const PRIM = ['g2', 'g3', 'g4', 'g5', 'g6', 'g7'];
 const MID: Record<string, string> = { mat: 'm1', len: 'm2', cie: 'm3', soc: 'm4', ing: 'm5', efi: 'm6', art: 'm7' };
 // sección -> [slot, materia (clave del prototipo)] de las OTRAS secciones del prototipo (TBUSY/ABUSY), ahora como horarios reales guardados.
 const OTROS: Record<string, [string, string][]> = {
@@ -42,49 +39,32 @@ const ASIG: [string, string, string, string[]][] = [
   ['s6', 'm5', 'd6', []], ['s6', 'm3', 'd7', ['a5']], ['s7', 'm3', 'd7', ['a5']], ['s8', 'm6', 'd9', ['a6']], ['s9', 'm7', 'd10', ['a7', 'a2']],
   ['s10', 'm2', 'd5', []], ['s10', 'm6', 'd9', ['a6']],
 ];
+/** Aula elegida entre las posibles (antes la fila `_aula:` del horario de 5to A): Ed. Artística de s1 en la Sala Audiovisual. */
+const ELEGIDAS: Record<string, string> = { 's1|m7': 'a7' };
 
 export default async function seedAcademico() {
-  // ---- Catálogos del colegio demo alineados con el prototipo (aulas, materias, rúbrica, docentes y secciones que usa la grilla de horarios) ----
-  await setCat('aulas', 'a2', { nombre: 'Aula 14', pupitres: 32 });
-  await setCat('aulas', 'a5', { nombre: 'Lab. Ciencias', pupitres: 30 });
-  await setCat('aulas', 'a6', { nombre: 'Cancha', pupitres: 80 });
-  await setCat('aulas', 'a7', { nombre: 'Sala Audiovisual', pupitres: 25 });
-  await setCat('materias', 'm1', { grados: PRIM, horas: 5 });
-  await setCat('materias', 'm2', { grados: PRIM, horas: 5 });
-  await setCat('materias', 'm3', { nombre: 'Ciencias Naturales', grados: PRIM, horas: 3 });
-  await setCat('materias', 'm4', { grados: PRIM, horas: 3 });
-  await setCat('materias', 'm5', { grados: [...PRIM, 'g8'], horas: 4 });
-  await setCat('materias', 'm6', { grados: PRIM, horas: 2 });
-  await setCat('materias', 'm7', { codigo: 'ART-01', nombre: 'Ed. Artística', grados: PRIM, horas: 2 }, {});
-  await setCat('rubricas', 'r1', { materias: ['m1', 'm2', 'm3', 'm4', 'm5', 'm7'], crit: 'Razonamiento 17.5%, Comunicación 17.5%, Modelación 17.5%, Resolución 17.5%, Examen 30%' });
-  const DOC: [string, string, string, string, string][] = [
-    ['d5', 'Carmen Vidal', 'Lengua Española', 'usr_cvidal', 'Director Académico'], ['d6', 'Kevin Smith', 'Inglés', 'usr_smith', 'Docente'], ['d7', 'Luisa Batista', 'Ciencias Naturales', 'usr_batista', 'Docente'],
-    ['d8', 'Juan Marte', 'Ciencias Sociales', 'usr_marte', 'Docente'], ['d9', 'José Cruz', 'Educación Física', 'usr_cruz', 'Docente'], ['d10', 'Mariana Rosario', 'Educación Artística', 'usr_mrosario', 'Docente'],
-  ];
-  for (const [i, [id, nombre, esp, usuario, rol]] of DOC.entries()) {
-    await setCat('docentes', id, {}, { nombre, cedula: '001-' + String(5678901 + i * 1117).padStart(7, '0') + '-' + (i % 9), esp, email: usuario.replace('usr_', '') + '@lospinos.edu.do', usuario, rol, materias: [], secciones: [] });
-  }
-  await setCat('secciones', 's2', { aula: 'a3' });
-  // s11 (3ro B Matutina) y s12 (4to C Matutina): los alumnos 0398/0566 y 0558 del Directorio de muestra pertenecen a ellas; sin estas filas apuntaban a secciones inexistentes.
-  const SEC: [string, string, string, string, string][] = [['s6', 'g7', 'B', 't2', 'a4'], ['s7', 'g5', 'B', 't1', 'a4'], ['s8', 'g4', 'A', 't2', 'a4'], ['s9', 'g3', 'A', 't3', 'a4'], ['s10', 'g3', 'B', 't1', 'a4'], ['s11', 'g4', 'B', 't1', 'a3'], ['s12', 'g5', 'C', 't1', 'a3']];
-  for (const [id, grado, seccion, tanda, aula] of SEC) await setCat('secciones', id, {}, { grado, seccion, tanda, aula, cap: 30 }); // «Inscritos» se calcula (no se guarda)
-
-  // ---- Asignaciones docente x sección x materia (Rafael Almonte -> 5to A -> Matemáticas, etc.) ----
+  const cicloId = await cicloIdActivo(), periodo1 = (await periodoId(cicloId, '1'))!;
+  // ---- Asignaciones docente x sección x materia (Rafael Almonte -> 5to A, 5to B y 6to A -> Matemáticas, etc.) ----
+  // Pueden existir ya como «heredadas» del perfil del docente (seed-estructura): aquí pasan a ser explícitas. Si ya son explícitas no se tocan.
   for (const [seccionId, materiaId, docenteId, aulas] of ASIG) {
-    await prisma.acadAsignacion.upsert({ where: { seccionId_materiaId: { seccionId, materiaId } }, update: {}, create: { seccionId, materiaId, docenteId, aulas: JSON.stringify(aulas) } });
+    const cur = await prisma.acadAsignacion.findUnique({ where: { cicloId_seccionId_materiaId: { cicloId, seccionId, materiaId } }, include: { aulas: true } });
+    const a = !cur
+      ? await prisma.acadAsignacion.create({ data: { cicloId, docenteId, seccionId, materiaId, heredada: false }, include: { aulas: true } })
+      : cur.heredada ? await prisma.acadAsignacion.update({ where: { id: cur.id }, data: { docenteId, heredada: false }, include: { aulas: true } }) : cur;
+    if (!a.aulas.length && aulas.length) await prisma.asignacionAula.createMany({ data: aulas.map((aulaId, orden) => ({ asignacionId: a.id, aulaId, orden })) });
+    const el = ELEGIDAS[`${seccionId}|${materiaId}`];
+    if (el && !a.aulaElegidaId) await prisma.acadAsignacion.update({ where: { id: a.id }, data: { aulaElegidaId: el } });
   }
 
   // ---- Nómina heredada de 5to A (la demo la lista aunque no esté en el Directorio); los enlazados salen de Alumno ----
-  await prisma.acadRoster.updateMany({ where: { seccion: '5to A' }, data: { seccion: 's1' } });
-  await prisma.acadNota.updateMany({ where: { materia: 'Matemáticas' }, data: { materia: 'm1' } });
   for (const [i, nombre] of STU_ATT.entries()) {
     const id = 'r5a-' + String(i + 1).padStart(2, '0');
-    await prisma.acadRoster.upsert({ where: { id }, update: {}, create: { id, seccion: 's1', orden: i + 1, nombre } });
+    await prisma.acadRoster.upsert({ where: { id }, update: {}, create: { id, seccionId: 's1', orden: i + 1, nombre } });
     if (i < G0.length) {
       const [c1, c2, c3, c4, ex] = G0[i].map(v => (v === '' ? null : Number(v)));
       await prisma.acadNota.upsert({
-        where: { rosterId_materia_periodo: { rosterId: id, materia: 'm1', periodo: '1' } },
-        update: {}, create: { rosterId: id, materia: 'm1', periodo: '1', c1, c2, c3, c4, ex },
+        where: { rosterId_materiaId_periodoId: { rosterId: id, materiaId: 'm1', periodoId: periodo1 } },
+        update: {}, create: { rosterId: id, materiaId: 'm1', periodoId: periodo1, c1, c2, c3, c4, ex },
       });
     }
   }
@@ -100,17 +80,18 @@ export default async function seedAcademico() {
   const horarios: [string, string, string][] = [
     ...Object.entries(SCHED0).map(([slot, m]) => ['s1', slot, MID[m]] as [string, string, string]),
     ...Object.entries(OTROS).flatMap(([sec, l]) => l.map(([slot, m]) => [sec, slot, MID[m]] as [string, string, string])),
-    ['s1', '_aula:m7', 'a7'],
   ];
-  for (const [seccion, slot, materia] of horarios) {
-    await prisma.acadHorario.upsert({ where: { seccion_slot: { seccion, slot } }, update: {}, create: { seccion, slot, materia } });
+  for (const [seccionId, slot, materiaId] of horarios) {
+    await prisma.acadHorario.upsert({ where: { cicloId_seccionId_slot: { cicloId, seccionId, slot } }, update: {}, create: { cicloId, seccionId, slot, materiaId } });
   }
   for (const [i, r] of X0.entries()) {
     const id = 'EXT-' + String(i + 1).padStart(3, '0');
     const cupo = r[8] as number, inscritos = r[9] as number;
-    await prisma.acadExtra.upsert({
-      where: { id }, update: {},
-      create: { id, name: r[0] as string, cat: r[1] as string, kind: r[2] as string, instructor: r[3] as string, lugar: r[4] as string, dias: r[5] as string, hora: r[6] as string, grados: r[7] as string, cupo, inscritos, costo: r[10] as number, ini: (r[11] as string) || '', sem: (r[12] as number) || 0, estado: inscritos >= cupo ? 'Cupo lleno' : 'Abierta' },
+    if (await prisma.acadExtra.findUnique({ where: { id } })) continue;
+    const refs = await resolverRefs(prisma, r[3] as string, r[4] as string), gs = await gradosDeRango(prisma, r[7] as string);
+    if (!gs) throw new Error('Grados de la actividad no reconocidos: ' + r[7]);
+    await prisma.acadExtra.create({
+      data: { id, name: r[0] as string, cat: r[1] as string, kind: r[2] as string, instructor: r[3] as string, docenteId: refs.docenteId, lugar: r[4] as string, aulaId: refs.aulaId, dias: r[5] as string, hora: r[6] as string, cupo, inscritos, costo: r[10] as number, ini: (r[11] as string) || '', sem: (r[12] as number) || 0, estado: inscritos >= cupo ? 'Cupo lleno' : 'Abierta', grados: { create: gs.map(gradoId => ({ gradoId })) } },
     });
   }
   console.log('seed académico ok');

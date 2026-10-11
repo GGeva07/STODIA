@@ -63,7 +63,7 @@ function Test-LicenseSignature($v) {
 $Val = @{
     url   = { param($v) (NoQ $v) -and ($v -match '^(https?://\S+|/api)$') }
     text  = { param($v) (NoQ $v) -and $v.Length -ge 1 -and $v.Length -le 200 }
-    rnc   = { param($v) ($v -match '^[0-9 -]+$') -and (($v -replace '\D', '').Length -eq 9) }
+    rnc   = { param($v) Test-RncFormat $v }
     phone = { param($v) $v -match '^[0-9+() .-]{7,20}$' }
     mail  = { param($v) (NoQ $v) -and $v -match '^[^@\s]+@[^@\s]+\.[^@\s]+$' }
     from  = { param($v) (NoQ $v) -and $v.Length -le 200 -and $v -match '^[^@]+@[^@\s]+$' }
@@ -139,10 +139,182 @@ function Wait-Health($url, $secs) {
     return $false
 }
 
+# >>> RNC (verificación en la DGII; las pruebas extraen este bloque)
+# API de solo lectura. La clave va aquí a propósito (no es crítica): se rota cambiando esta constante o con STODIA_RNC_API_KEY.
+# Nunca se imprime ni se escribe en .env/logs.
+$script:RncApiUrl = 'https://rncvalidator.synsetsolutions.com'
+if ($env:STODIA_RNC_API_URL) { $script:RncApiUrl = $env:STODIA_RNC_API_URL.TrimEnd('/') }
+$script:RncApiKey = 'pXKKt5Xakkx4pNLCbZxNnKJiq64c9XXA'
+if ($env:STODIA_RNC_API_KEY) { $script:RncApiKey = $env:STODIA_RNC_API_KEY }
+$script:RncTimeout = 10
+if ($env:STODIA_RNC_TIMEOUT) { $script:RncTimeout = [int]$env:STODIA_RNC_TIMEOUT }
+$script:RncStop = @('srl', 'sa', 'sas', 'eirl', 'ltd', 'de', 'del', 'la', 'las', 'los', 'el', 'y', 'colegio', 'centro', 'educativo')
+
+# 9 dígitos (empresa) u 11 (persona física/cédula); admite guiones, puntos y espacios.
+function Test-RncFormat($v) {
+    if ($null -eq $v) { return $false }
+    $s = [string]$v
+    if ($s -notmatch '^[0-9 .-]+$') { return $false }
+    $n = ($s -replace '\D', '').Length
+    return ($n -eq 9 -or $n -eq 11)
+}
+# Una línea, sin controles ni comilla simple (el .env va entre comillas simples).
+function RncClean($v) {
+    if ($null -eq $v) { return '' }
+    $s = ([string]$v) -replace '[\x00-\x1F]+', ' '
+    return $s.Replace("'", [string][char]0x2019).Trim()
+}
+function Get-RncTokens($s) {
+    $n = ([string]$s).Normalize([System.Text.NormalizationForm]::FormD)
+    $n = (($n -replace '\p{Mn}', '').ToLowerInvariant()) -replace '[^a-z0-9]+', ' '
+    return @($n.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) | Where-Object { $_.Length -ge 2 -and $script:RncStop -notcontains $_ } | Select-Object -Unique)
+}
+# % de coincidencia de tokens sobre la lista más corta.
+function Get-RncScore($a, $b) {
+    $a = @($a); $b = @($b)
+    if ($a.Count -eq 0 -or $b.Count -eq 0) { return 0 }
+    $c = @($a | Where-Object { $b -contains $_ }).Count
+    return [int][math]::Floor(100 * $c / [math]::Min($a.Count, $b.Count))
+}
+
+# Consulta la DGII (timeout 10 s; 1 reintento solo ante error de red/5xx).
+# Status: ok | inactive | notfound | unavailable (+ Motivo, Razon, Comercial, Estado)
+function Invoke-RncQuery([string]$rnc) {
+    $r = @{ Status = 'unavailable'; Motivo = ''; Razon = ''; Comercial = ''; Estado = '' }
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
+    for ($try = 1; $try -le 2; $try++) {
+        $retry = $false; $code = 0; $text = ''
+        $r.Status = 'unavailable'; $r.Motivo = ''
+        try {
+            $req = [System.Net.HttpWebRequest]::Create("$($script:RncApiUrl)/api/v1/rnc/$rnc")
+            $req.Method = 'GET'
+            $req.Timeout = $script:RncTimeout * 1000
+            $req.ReadWriteTimeout = $script:RncTimeout * 1000
+            $req.UserAgent = 'stodia-installer'
+            $req.Accept = 'application/json'
+            $req.Headers.Add('x-api-key', $script:RncApiKey)
+            $resp = $req.GetResponse()
+            $code = [int]$resp.StatusCode
+            $sr = New-Object System.IO.StreamReader($resp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+            $text = $sr.ReadToEnd(); $sr.Close(); $resp.Close()
+        } catch [System.Net.WebException] {
+            $ex = $_.Exception
+            if ($ex.Response) { $code = [int]$ex.Response.StatusCode; $ex.Response.Close() }
+            elseif ($ex.Status -eq [System.Net.WebExceptionStatus]::Timeout) { $code = -1; $r.Motivo = 'tiempo de espera agotado' }
+            else { $code = -1; $r.Motivo = 'sin conexión con el servicio' }
+        } catch {
+            $code = -1; $r.Motivo = 'sin respuesta del servicio (tiempo agotado o red)'
+        }
+        if ($code -eq -1) { $retry = $true }
+        elseif ($code -eq 200) {
+            $d = $null
+            try { $j = $text | ConvertFrom-Json; $d = $j.data } catch { $d = $null }
+            if ($null -eq $d -or $d -isnot [System.Management.Automation.PSCustomObject]) {
+                $r.Status = 'unavailable'; $r.Motivo = 'respuesta inválida del servicio'
+            } else {
+                $r.Razon = RncClean $d.razon_social; $r.Comercial = RncClean $d.nombre_comercial
+                $e1 = (RncClean $d.estatus).ToUpperInvariant(); $e2 = (RncClean $d.regimen).ToUpperInvariant()
+                if ($e1 -eq 'ACTIVO' -or $e2 -eq 'ACTIVO') { $r.Status = 'ok'; $r.Estado = 'ACTIVO' }
+                else {
+                    $r.Status = 'inactive'
+                    $r.Estado = $e1; if (-not $r.Estado) { $r.Estado = $e2 }; if (-not $r.Estado) { $r.Estado = 'NO INFORMADO' }
+                }
+            }
+        }
+        elseif ($code -eq 404) { $r.Status = 'notfound' }
+        elseif ($code -eq 401 -or $code -eq 403) { $r.Motivo = "clave de la API rechazada (HTTP $code)" }
+        elseif ($code -eq 429) { $r.Motivo = 'límite de consultas excedido (HTTP 429)' }
+        elseif ($code -ge 500 -and $code -le 599) { $r.Motivo = "servicio no disponible (HTTP $code)"; $retry = $true }
+        else { $r.Motivo = "respuesta inesperada (HTTP $code)" }
+        if ($retry -and $try -lt 2) { continue }
+        break
+    }
+    return $r
+}
+
+# Flujo completo. Devuelve @{ Abort; TaxId; Inst; Verificado; Razon; Comercial; Estado; At }. Abort = salir con código 2.
+# $mode: 'omitir' = continuar sin verificar ante B/C/D (también en desatendido). $unattended = hay archivo de respuestas.
+function Resolve-Rnc([string]$taxId, [string]$inst, [string]$mode, [bool]$unattended) {
+    $res = @{ Abort = $false; TaxId = $taxId; Inst = $inst; Verificado = 'false'; Razon = ''; Comercial = ''; Estado = ''; At = '' }
+    $mode = ([string]$mode).ToLowerInvariant()
+    $nf = 0
+    :rncloop while ($true) {
+        $res.TaxId = ($res.TaxId -replace '\D', '')
+        Write-Host "Verificando el RNC $($res.TaxId) en la DGII..."
+        $q = Invoke-RncQuery $res.TaxId
+        switch ($q.Status) {
+            'ok' {
+                $shown = $q.Razon
+                if ($q.Comercial) { $shown = "$($q.Razon) ($($q.Comercial))" }
+                Write-Host "RNC verificado en la DGII: $shown · ACTIVO" -ForegroundColor Green
+                $ut = Get-RncTokens $res.Inst
+                if ($ut.Count -gt 0) {
+                    $s1 = Get-RncScore $ut (Get-RncTokens $q.Razon); $s2 = Get-RncScore $ut (Get-RncTokens $q.Comercial)
+                    if ($s1 -lt 50 -and $s2 -lt 50) {
+                        Write-Host "AVISO: el nombre de la institución ('$($res.Inst)') no se parece a la razón social ni al nombre comercial registrados para este RNC. Revisa que el RNC sea el correcto." -ForegroundColor Yellow
+                        if (-not $unattended) {
+                            $a = Read-Host '¿Usar la razón social oficial como nombre de la institución? [s/N]'
+                            if ($a -match '^\s*[sSyY]' -and $q.Razon) { $res.Inst = $q.Razon }
+                        }
+                    }
+                }
+                if (-not $unattended) {
+                    $a = Read-Host '¿Es esta la institución? [S/n]'
+                    if ($a -match '^\s*[nN]') {
+                        $res.TaxId = Get-Answer 'TAX_ID' 'RNC / ID fiscal (9 dígitos empresa u 11 persona física)' '' $Val.rnc 'El RNC debe tener 9 dígitos (empresa) u 11 (persona física/cédula)'
+                        continue rncloop
+                    }
+                }
+                $res.Verificado = 'true'; $res.Razon = $q.Razon; $res.Comercial = $q.Comercial; $res.Estado = 'ACTIVO'
+                $res.At = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+                return $res
+            }
+            'inactive' {
+                Write-Host "El RNC existe en la DGII pero su estado NO es activo: $($q.Estado) ($($q.Razon))." -ForegroundColor Yellow
+                $res.Razon = $q.Razon; $res.Comercial = $q.Comercial; $res.Estado = $q.Estado
+                if ($mode -eq 'omitir') { Write-Host 'Se continúa SIN verificar (RNC_VERIFICACION=omitir). RNC no verificado.' -ForegroundColor Yellow; return $res }
+                if ($unattended) { Write-Host 'ERROR: instalación desatendida abortada: el RNC no está activo en la DGII (RNC_VERIFICACION=omitir para continuar sin verificar).' -ForegroundColor Red; $res.Abort = $true; return $res }
+                $a = Read-Host 'Escribe otro RNC, o FORZAR para continuar bajo tu responsabilidad'
+                if ($a -ceq 'FORZAR') { Write-Host 'Se continúa SIN verificar. RNC no verificado.' -ForegroundColor Yellow; return $res }
+                $res.Razon = ''; $res.Comercial = ''; $res.Estado = ''
+                if (Test-RncFormat $a) { $res.TaxId = $a } else { Write-Host '  -> RNC inválido (9 u 11 dígitos)' -ForegroundColor Yellow }
+            }
+            'notfound' {
+                Write-Host 'RNC no encontrado en el padrón de la DGII.' -ForegroundColor Yellow
+                $nf++
+                if ($mode -eq 'omitir') { Write-Host 'Se continúa SIN verificar (RNC_VERIFICACION=omitir). RNC no verificado.' -ForegroundColor Yellow; return $res }
+                if ($unattended) { Write-Host 'ERROR: instalación desatendida abortada: RNC no encontrado en el padrón de la DGII (RNC_VERIFICACION=omitir para continuar sin verificar).' -ForegroundColor Red; $res.Abort = $true; return $res }
+                if ($nf -ge 3) {
+                    $a = Read-Host 'Tres intentos sin éxito. Escribe FORZAR para continuar bajo tu responsabilidad, o Enter para abortar'
+                    if ($a -ceq 'FORZAR') { Write-Host 'Se continúa SIN verificar. RNC no verificado.' -ForegroundColor Yellow; return $res }
+                    Write-Host 'ERROR: instalación abortada: RNC no encontrado.' -ForegroundColor Red; $res.Abort = $true; return $res
+                }
+                $a = Read-Host 'Escribe otro RNC (9 u 11 dígitos), o FORZAR para continuar bajo tu responsabilidad'
+                if ($a -ceq 'FORZAR') { Write-Host 'Se continúa SIN verificar. RNC no verificado.' -ForegroundColor Yellow; return $res }
+                if (Test-RncFormat $a) { $res.TaxId = $a } else { Write-Host '  -> RNC inválido (9 u 11 dígitos)' -ForegroundColor Yellow }
+            }
+            default {
+                Write-Host "No se pudo verificar el RNC ($($q.Motivo))." -ForegroundColor Yellow
+                if ($mode -eq 'omitir') { Write-Host 'Se continúa SIN verificar (RNC_VERIFICACION=omitir). RNC no verificado.' -ForegroundColor Yellow; return $res }
+                if ($unattended) { Write-Host 'ERROR: instalación desatendida abortada: no se pudo verificar el RNC (RNC_VERIFICACION=omitir para continuar sin verificar).' -ForegroundColor Red; $res.Abort = $true; return $res }
+                $a = Read-Host 'Escribe SI para continuar SIN verificar el RNC, o Enter para reintentar'
+                if ($a -match '^\s*[sS][iíIÍ]\s*$') { Write-Host 'Se continúa SIN verificar. RNC no verificado.' -ForegroundColor Yellow; return $res }
+            }
+        }
+    }
+}
+# <<< RNC
+
 Write-Host '== Instalación de STODIA ==' -ForegroundColor Cyan
 $apiUrl    = (Get-Answer 'API_URL' 'URL pública de la API (o /api para servirla tras el proxy de la web)' 'http://localhost:3000' $Val.url 'Debe empezar con http:// o https://, o ser /api').TrimEnd('/')
 $inst      = Get-Answer 'INSTITUTION_NAME' 'Nombre de la institución' '' $Val.text 'Obligatorio (sin comilla simple)'
-$taxId     = (Get-Answer 'TAX_ID' 'RNC / ID fiscal (9 dígitos)' '' $Val.rnc 'El RNC debe tener 9 dígitos') -replace '\D', ''
+$taxId     = (Get-Answer 'TAX_ID' 'RNC / ID fiscal (9 dígitos empresa u 11 persona física)' '' $Val.rnc 'El RNC debe tener 9 dígitos (empresa) u 11 (persona física/cédula)') -replace '\D', ''
+# Valida el RNC contra la DGII ANTES de pedir el resto y de crear nada (puede ajustar $taxId/$inst).
+$rncMode = $env:RNC_VERIFICACION
+if ($Config -and -not $rncMode) { $rncMode = $answers['RNC_VERIFICACION'] }
+$rnc = Resolve-Rnc $taxId $inst $rncMode ([bool]$Config)
+if ($rnc.Abort) { exit 2 }
+$taxId = $rnc.TaxId; $inst = $rnc.Inst
 $address   = Get-Answer 'ADDRESS' 'Dirección' '' $Val.text 'Obligatoria'
 $city      = Get-Answer 'CITY' 'Ciudad / provincia' '' $Val.text 'Obligatoria'
 $phone     = Get-Answer 'PHONE' 'Teléfono' '' $Val.phone 'Teléfono inválido (7 a 20 dígitos/símbolos)'
@@ -229,7 +401,12 @@ $lines = @(
     "TIMEZONE='$tz'",
     "CURRENCY='$currency'",
     "JWT_SECRET='$jwt'",
-    "SEED_DEMO='false'"
+    "SEED_DEMO='false'",
+    "RNC_VERIFICADO='$($rnc.Verificado)'",
+    "RNC_RAZON_SOCIAL='$($rnc.Razon)'",
+    "RNC_NOMBRE_COMERCIAL='$($rnc.Comercial)'",
+    "RNC_ESTADO='$($rnc.Estado)'",
+    "RNC_VERIFICADO_AT='$($rnc.At)'"
 )
 if ($doSmtp) {
     $lines += "SMTP_HOST='$($smtp.HOST)'"
@@ -273,6 +450,7 @@ if ($apiUrl -eq '/api') { $apiShown = "$webShown/api" }
 Write-Host ''
 Write-Host '=========== STODIA instalado ===========' -ForegroundColor Green
 Write-Host "Institución : $inst"
+if ($rnc.Verificado -eq 'true') { Write-Host "RNC         : $taxId (verificado en la DGII)" } else { Write-Host "RNC         : $taxId (NO verificado: confírmalo luego en Configuración)" -ForegroundColor Yellow }
 Write-Host "Web         : http://localhost:$webPort   (pública: $webShown)"
 Write-Host "API         : $apiShown   (salud: http://localhost:$apiPort/health)"
 Write-Host "Admin       : usuario '$adminUser'"

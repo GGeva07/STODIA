@@ -4,6 +4,12 @@ import type { Rol, ScreenId } from '@stodia/shared';
 /** NAV del prototipo (L2342-2350): [id, título, clase de ícono Phosphor]. */
 export interface NavGroup { g: string; items: [ScreenId, string, string][] }
 
+/**
+ * Pantallas que existen (ruta, permisos RBAC, migas) pero NO se listan en el menú lateral ni en la paleta ⌘K
+ * porque dependen de un contexto previo: el Expediente 360 solo se abre eligiendo un alumno en el Directorio.
+ */
+export const MENU_OCULTO: ReadonlySet<string> = new Set(['expediente']);
+
 export const NAV: NavGroup[] = [
   { g: 'General', items: [['dashboard', 'Dashboard', 'ph-squares-four']] },
   { g: 'Académico', items: [['notas', 'Matriz de Notas', 'ph-table'], ['asistencia', 'Pase de Lista', 'ph-user-check'], ['horarios', 'Horarios', 'ph-calendar-dots'], ['extra', 'Extracurriculares', 'ph-medal']] },

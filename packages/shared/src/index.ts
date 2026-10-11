@@ -97,6 +97,7 @@ export interface Alumno {
   grado: string;         // etiqueta ('5to')
   sec: string;           // 'A'
   tanda: string;         // 'Matutina'
+  seccionId?: string;    // id de la sección (FK Seccion): grado/sec/tanda se calculan de ella
   tutor: string;         // nombre del tutor financiero
   tutorId?: string;
   cuenta: CuentaEstado;
@@ -182,6 +183,7 @@ export interface Comunicacion {
 }
 export * from './movil';
 export * from './finanzas';
+export * from './notas';
 export * from './sistema';
 export * from './operacion';
 export * from './academico';

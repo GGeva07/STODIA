@@ -3,15 +3,16 @@ import type { PlanForm, PlanPagoFin } from '@stodia/shared';
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { nextSeq, supervisorOk } from '../../fin-utils';
-import { alumnosPorPlan } from '../../lib/planes';
+import { cicloReq } from '../../lib/ciclo';
+import { PLAN_INC, alumnosPorPlan, datosConTm, datosSinTm, guardarTandasPlan } from '../../lib/planes';
 
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 /** «alumnos» = contratos del ciclo activo con este plan (calculado, no guardado). */
-const toPlan = (r: { id: string; data: string }, alumnos: number): PlanPagoFin => ({ ...(JSON.parse(r.data) as PlanForm), id: r.id, alumnos });
+const toPlan = (r: { id: string; data: string; tandas: { monto: number; tanda: { nombre: string } }[] }, alumnos: number): PlanPagoFin => ({ ...(datosConTm(r) as unknown as PlanForm), id: r.id, alumnos });
 
-/** Tandas definidas por la institución (Catálogo 'tandas'). */
+/** Tandas definidas por la institución (tabla Tanda). */
 async function tandasActivas(): Promise<string[]> {
-  return (await prisma.catalogo.findMany({ where: { tipo: 'tandas' }, orderBy: { id: 'asc' } })).map(r => String((JSON.parse(r.data) as { nombre?: string }).nombre ?? '')).filter(Boolean);
+  return (await prisma.tanda.findMany({ orderBy: { id: 'asc' } })).map(t => t.nombre).filter(Boolean);
 }
 
 function validate(f: PlanForm, TANDAS: string[]): string | null {
@@ -33,13 +34,18 @@ const plugin: FastifyPluginAsync = async app => {
   const dupName = async (name: string, exceptId?: string) => (await prisma.finPlan.findMany()).some(p => p.id !== exceptId && norm(p.name) === norm(name));
   const newId = async () => 'PLN-' + String(await nextSeq('pln')).padStart(3, '0');
 
-  app.get('/', auth, async () => { const n = await alumnosPorPlan(); return (await prisma.finPlan.findMany({ orderBy: { id: 'asc' } })).map(r => toPlan(r, n.get(r.id) ?? 0)); });
+  app.get('/', auth, async req => { const n = await alumnosPorPlan(false, (await cicloReq(req)).id); return (await prisma.finPlan.findMany({ orderBy: { id: 'asc' }, include: PLAN_INC })).map(r => toPlan(r, n.get(r.id) ?? 0)); });
 
   app.post<{ Body: PlanForm }>('/', auth, async (req, reply) => {
     const f = { ...req.body, name: req.body.name?.trim() ?? '' };
     const err = validate(f, await tandasActivas()) ?? ((await dupName(f.name)) ? 'Ya existe un plan con ese nombre.' : null);
     if (err) return reply.code(400).send({ error: err });
-    const cr = await prisma.finPlan.create({ data: { id: await newId(), name: f.name, estado: f.estado, data: JSON.stringify(f) } });
+    const id = await newId();
+    const cr = await prisma.$transaction(async tx => {
+      await tx.finPlan.create({ data: { id, name: f.name, estado: f.estado, data: datosSinTm(f) } });
+      await guardarTandasPlan(tx, id, f.tm);
+      return tx.finPlan.findUniqueOrThrow({ where: { id }, include: PLAN_INC });
+    });
     await audit(req.user, 'Insert', { tabla: 'PlanesPago', id: cr.id, next: cr.name, ip: req.ip });
     return toPlan(cr, 0);
   });
@@ -52,16 +58,25 @@ const plugin: FastifyPluginAsync = async app => {
     const err = validate(f, await tandasActivas()) ?? ((await dupName(f.name, req.params.id)) ? 'Ya existe un plan con ese nombre.' : null);
     if (err) return reply.code(400).send({ error: err });
     const prevP = await prisma.finPlan.findUnique({ where: { id: req.params.id } });
-    const up = await prisma.finPlan.update({ where: { id: req.params.id }, data: { name: f.name, estado: f.estado, data: JSON.stringify(f) } });
+    const up = await prisma.$transaction(async tx => {
+      await tx.finPlan.update({ where: { id: req.params.id }, data: { name: f.name, estado: f.estado, data: datosSinTm(f) } });
+      await guardarTandasPlan(tx, req.params.id, f.tm);
+      return tx.finPlan.findUniqueOrThrow({ where: { id: req.params.id }, include: PLAN_INC });
+    });
     await audit(req.user, 'Update', { tabla: 'PlanesPago', id: up.id, prev: prevP?.name, next: up.name, ip: req.ip });
     return toPlan(up, (await alumnosPorPlan()).get(up.id) ?? 0);
   });
 
   app.post<{ Params: { id: string } }>('/:id/duplicar', auth, async (req, reply) => {
-    const src = await prisma.finPlan.findUnique({ where: { id: req.params.id } });
+    const src = await prisma.finPlan.findUnique({ where: { id: req.params.id }, include: PLAN_INC });
     if (!src) return reply.code(404).send({ error: 'Plan no encontrado' });
     const name = src.name + ' (copia)';
-    const dup = await prisma.finPlan.create({ data: { id: await newId(), name, estado: 'Inactivo', data: JSON.stringify({ ...JSON.parse(src.data), name, estado: 'Inactivo' }) } });
+    const nid = await newId(), form = { ...datosConTm(src), name, estado: 'Inactivo' } as unknown as PlanForm;
+    const dup = await prisma.$transaction(async tx => {
+      await tx.finPlan.create({ data: { id: nid, name, estado: 'Inactivo', data: datosSinTm(form) } });
+      await guardarTandasPlan(tx, nid, form.tm);
+      return tx.finPlan.findUniqueOrThrow({ where: { id: nid }, include: PLAN_INC });
+    });
     await audit(req.user, 'Insert', { tabla: 'PlanesPago', id: dup.id, prev: src.id, next: name, ip: req.ip });
     return toPlan(dup, 0);
   });
@@ -73,7 +88,7 @@ const plugin: FastifyPluginAsync = async app => {
     // Alumnos con contrato (cualquier ciclo) o con inscripción registrada: el plan es historial fiscal/contractual, solo se desactiva.
     const [ctr, ins] = await Promise.all([prisma.contrato.count({ where: { planId: p.id } }), prisma.persInscripcion.count({ where: { planId: p.id } })]);
     if (ctr > 0 || ins > 0) return reply.code(409).send({ error: `No se puede eliminar: ${ctr} contrato(s) y ${ins} inscripción(es) usan este plan. Reasígnalos o márcalo Inactivo.` });
-    await prisma.finPlan.delete({ where: { id: p.id } });
+    await prisma.$transaction([prisma.finPlanTanda.deleteMany({ where: { planId: p.id } }), prisma.finPlan.delete({ where: { id: p.id } })]);
     await audit(req.user, 'Delete', { tabla: 'PlanesPago', id: p.id, prev: p.name, ip: req.ip });
     return { ok: true };
   });

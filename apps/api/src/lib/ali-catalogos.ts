@@ -1,54 +1,47 @@
 import { prisma } from '../db';
+import { asegurarCatalogosBase } from './catalogos-tipados';
 
 /**
- * Catálogos de Alimentación sobre la tabla genérica Catalogo (id = '<tipo>:<NN>', data = {id, nombre}).
- * Se siembran con los valores base (los de la demo) solo si el tipo no tiene filas; después el cliente es dueño de ellos.
- * Los planes (AliPlan.meals / AliPlan.diets) guardan banderas por POSICIÓN del catálogo (orden por id).
+ * Catálogos de Alimentación sobre TABLAS TIPADAS (Comida, Dieta, Alergia; Fase 2B). Los planes (AliPlan) guardan sus comidas y dietas en las tablas
+ * puente AliPlanComida / AliPlanDieta. La API de Alimentación conserva la forma histórica: meals / diets = banderas por POSICIÓN respecto de la lista de
+ * comidas / dietas ACTIVAS ordenadas por id (la misma que devuelve `catalogos`); aquí se traducen de y hacia las filas puente.
  */
-export const ALI_TIPOS = ['comidas', 'dietas', 'alergias'] as const;
-export type AliTipo = (typeof ALI_TIPOS)[number];
-const BASE: Record<AliTipo, string[]> = {
-  comidas: ['Desayuno', 'Merienda AM', 'Almuerzo', 'Merienda PM'],
-  dietas: ['Sin gluten', 'Sin lácteos', 'Sin maní / frutos secos', 'Vegetariano'],
-  alergias: ['Maní', 'Frutos secos', 'Lactosa', 'Gluten', 'Huevo', 'Mariscos'],
-};
+export type AliTipo = 'comidas' | 'dietas' | 'alergias';
 export const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes'];
 
-export async function ensureCatalogosAli() {
-  for (const tipo of ALI_TIPOS) {
-    if (await prisma.catalogo.count({ where: { tipo } })) continue;
-    for (const [i, nombre] of BASE[tipo].entries()) {
-      const id = String(i + 1).padStart(2, '0');
-      await prisma.catalogo.upsert({ where: { id: `${tipo}:${id}` }, update: {}, create: { id: `${tipo}:${id}`, tipo, data: JSON.stringify({ id, nombre, estado: 'Activo' }), estado: 'Activo' } });
-    }
-  }
+/** Catálogos ACTIVOS (id + nombre) ordenados por id: el orden define la posición de cada bandera de meals / diets. */
+export async function catalogosAliFilas() {
+  await asegurarCatalogosBase();
+  const where = { estado: 'Activo' }, orderBy = { id: 'asc' as const }, select = { id: true, nombre: true };
+  const [comidas, dietas, alergias] = await Promise.all([prisma.comida.findMany({ where, orderBy, select }), prisma.dieta.findMany({ where, orderBy, select }), prisma.alergia.findMany({ where, orderBy, select })]);
+  return { comidas, dietas, alergias };
 }
 export async function catalogosAli(): Promise<Record<AliTipo, string[]>> {
-  await ensureCatalogosAli();
-  const rows = await prisma.catalogo.findMany({ where: { tipo: { in: [...ALI_TIPOS] }, estado: 'Activo' }, orderBy: { id: 'asc' } });
-  const out: Record<AliTipo, string[]> = { comidas: [], dietas: [], alergias: [] };
-  for (const r of rows) out[r.tipo as AliTipo].push(String(JSON.parse(r.data).nombre));
-  return out;
+  const c = await catalogosAliFilas();
+  return { comidas: c.comidas.map(x => x.nombre), dietas: c.dietas.map(x => x.nombre), alergias: c.alergias.map(x => x.nombre) };
 }
-/**
- * Las banderas de AliPlan.meals / AliPlan.diets son POSICIONALES respecto de los catálogos comidas y dietas (orden por id). Esta función las
- * deja con EXACTAMENTE la longitud del catálogo vigente (completa con false o recorta): sin esto un plan desalineado marca dietas equivocadas.
- * Idempotente; la usan los seeds y scripts/fk-reparar.ts.
- */
-export async function alinearPlanesAli(): Promise<number> {
-  const [cat, planes] = await Promise.all([catalogosAli(), prisma.aliPlan.findMany()]);
-  const ajusta = (json: string, n: number) => { const a = JSON.parse(json) as boolean[]; return Array.from({ length: n }, (_, i) => !!a[i]); };
-  let cambios = 0;
-  for (const p of planes) {
-    const meals = JSON.stringify(ajusta(p.meals, cat.comidas.length)), diets = JSON.stringify(ajusta(p.diets, cat.dietas.length));
-    if (meals !== p.meals || diets !== p.diets) { await prisma.aliPlan.update({ where: { id: p.id }, data: { meals, diets } }); cambios++; }
-  }
-  return cambios;
+/** Banderas posicionales (meals / diets) de cada plan a partir de sus filas puente y los catálogos activos. */
+export function banderas(ids: string[], catalogo: { id: string }[]): boolean[] {
+  const set = new Set(ids);
+  return catalogo.map(c => set.has(c.id));
+}
+/** Escribe las comidas / dietas de un plan a partir de las banderas posicionales (solo toca las posiciones del catálogo ACTIVO; las inactivas se conservan). */
+export async function guardarBanderasPlan(planId: string, meals: boolean[], diets: boolean[]): Promise<void> {
+  const cat = await catalogosAliFilas();
+  const [mActual, dActual] = await Promise.all([prisma.aliPlanComida.findMany({ where: { planId } }), prisma.aliPlanDieta.findMany({ where: { planId } })]);
+  const wantM = new Set(cat.comidas.filter((_, i) => !!meals?.[i]).map(c => c.id)), wantD = new Set(cat.dietas.filter((_, i) => !!diets?.[i]).map(c => c.id));
+  const activasM = new Set(cat.comidas.map(c => c.id)), activasD = new Set(cat.dietas.map(c => c.id));
+  const quitarM = mActual.filter(x => activasM.has(x.comidaId) && !wantM.has(x.comidaId)).map(x => x.comidaId), quitarD = dActual.filter(x => activasD.has(x.dietaId) && !wantD.has(x.dietaId)).map(x => x.dietaId);
+  const ponerM = [...wantM].filter(id => !mActual.some(x => x.comidaId === id)), ponerD = [...wantD].filter(id => !dActual.some(x => x.dietaId === id));
+  if (quitarM.length) await prisma.aliPlanComida.deleteMany({ where: { planId, comidaId: { in: quitarM } } });
+  if (quitarD.length) await prisma.aliPlanDieta.deleteMany({ where: { planId, dietaId: { in: quitarD } } });
+  if (ponerM.length) await prisma.aliPlanComida.createMany({ data: ponerM.map(comidaId => ({ planId, comidaId })) });
+  if (ponerD.length) await prisma.aliPlanDieta.createMany({ data: ponerD.map(dietaId => ({ planId, dietaId })) });
 }
 /** Garantiza las 5 filas del menú semanal (Lunes a Viernes); el plato queda vacío hasta que el encargado lo defina. */
 export async function ensureMenuSemanal() {
   if ((await prisma.aliMenu.count()) >= DIAS_SEMANA.length) return;
-  for (const [orden, dia] of DIAS_SEMANA.entries()) await prisma.aliMenu.upsert({ where: { orden }, update: {}, create: { orden, dia, plato: '', algs: '[]' } });
+  for (const [orden, dia] of DIAS_SEMANA.entries()) await prisma.aliMenu.upsert({ where: { orden }, update: {}, create: { orden, dia, plato: '' } });
 }
 
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];

@@ -1,3 +1,4 @@
+import { SL_MSG, useCiclo } from '../../lib/ciclo';
 import { useCallback, useEffect, useState } from 'react';
 import type { AcadExtra, AliData, PlanForm, PlanPagoFin } from '@stodia/shared';
 import { api } from '../../lib/api';
@@ -21,6 +22,7 @@ export default function Screen() {
   const { user } = useSession();
   const { toast, toasts } = useToastStack();
   const isSuper = user?.rol === 'Super Admin';
+  const { soloLectura: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: ciclo que no es el activo = crear / editar / duplicar / eliminar deshabilitados
   const [plans, setPlans] = useState<PlanPagoFin[]>([]);
   const [q, setQ] = useState('');
   const [tab, setTab] = useState('all');
@@ -120,7 +122,7 @@ export default function Screen() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={openTar} className="flex h-[34px] items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-[13px] font-medium hover:bg-slate-100"><i className="ph ph-printer" />Exportar Tarifario Anual</button>
-          <button onClick={() => setDrawer({ plan: null, mode: 'create' })} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark"><i className="ph ph-plus" />Nuevo Plan</button>
+          <button onClick={() => setDrawer({ plan: null, mode: 'create' })} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark disabled:opacity-50"><i className="ph ph-plus" />Nuevo Plan</button>
         </div>
       </div>
 
@@ -132,7 +134,7 @@ export default function Screen() {
         <div className="flex gap-0.5 rounded-lg bg-slate-100 p-[3px]">
           {TABS.map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={`h-7 rounded-md px-2.5 text-xs font-medium ${tab === k ? 'bg-white text-ink shadow-sm' : 'text-slate-600'}`}>{l}</button>)}
         </div>
-        <span className="ml-auto text-xs text-slate-500">{plans.reduce((a, p) => a + p.alumnos, 0)} alumnos con plan asignado · {plans.filter(p => p.estado === 'Activo').length} planes activos</span>
+        <span className="ml-auto text-xs text-slate-500">{plans.reduce((a, p) => a + p.alumnos, 0)} alumnos con plan asignado en el ciclo {cicloSeleccionado || cfg.ciclo} · {plans.filter(p => p.estado === 'Activo').length} planes activos</span>
       </div>
 
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
@@ -167,9 +169,9 @@ export default function Screen() {
                     <td className={`${TD} whitespace-nowrap text-right`}>
                       <div className="inline-flex gap-0.5">
                         <button title="Ver detalle" onClick={() => setDrawer({ plan: p, mode: 'view' })} className={`${ibtn} text-slate-600 hover:bg-slate-100`}><i className="ph ph-eye" /></button>
-                        <button title="Editar" onClick={() => authorize('Modificar plan ' + p.id, pin => setDrawer({ plan: p, mode: 'edit', pin }))} className={`${ibtn} text-accent hover:bg-blue-50`}><i className="ph ph-pencil-simple" /></button>
-                        <button title="Duplicar" onClick={() => void dup(p)} className={`${ibtn} text-slate-600 hover:bg-slate-100`}><i className="ph ph-copy" /></button>
-                        <button title="Eliminar" onClick={() => del(p)} className={`${ibtn} text-red-600 hover:bg-bad-bg`}><i className="ph ph-trash" /></button>
+                        <button title={sl ? SL_MSG : 'Editar'} disabled={sl} onClick={() => authorize('Modificar plan ' + p.id, pin => setDrawer({ plan: p, mode: 'edit', pin }))} className={`${ibtn} text-accent hover:bg-blue-50 disabled:opacity-40`}><i className="ph ph-pencil-simple" /></button>
+                        <button title={sl ? SL_MSG : 'Duplicar'} disabled={sl} onClick={() => void dup(p)} className={`${ibtn} text-slate-600 hover:bg-slate-100 disabled:opacity-40`}><i className="ph ph-copy" /></button>
+                        <button title={sl ? SL_MSG : 'Eliminar'} disabled={sl} onClick={() => del(p)} className={`${ibtn} text-red-600 hover:bg-bad-bg disabled:opacity-40`}><i className="ph ph-trash" /></button>
                       </div>
                     </td>
                   </tr>
@@ -182,7 +184,7 @@ export default function Screen() {
               <span className="grid h-[52px] w-[52px] place-items-center rounded-full bg-blue-50 text-[26px] text-accent"><i className="ph ph-calendar-blank" /></span>
               <div className="text-[15px] font-semibold">No hay planes de pago en esta vista.</div>
               <div className="text-[13px] text-slate-600">Crea un plan para que la generación masiva de cartera pueda asignarlo a los alumnos inscritos.</div>
-              <button onClick={() => setDrawer({ plan: null, mode: 'create' })} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white"><i className="ph ph-plus" />Nuevo Plan</button>
+              <button onClick={() => setDrawer({ plan: null, mode: 'create' })} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white disabled:opacity-50"><i className="ph ph-plus" />Nuevo Plan</button>
             </div>
           )}
         </div>

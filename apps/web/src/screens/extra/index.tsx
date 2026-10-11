@@ -1,3 +1,4 @@
+import { SL_MSG, useCiclo } from '../../lib/ciclo';
 import { useEffect, useRef, useState } from 'react';
 import type { AcadExtra, AcadExtraInput } from '@stodia/shared';
 import { api } from '../../lib/api';
@@ -15,6 +16,8 @@ const KINDS = [{ k: 'all', label: 'Todos' }, { k: 'act', label: 'Actividades' },
 export default function Screen() {
   const toast = useToast();
   const { user } = useSession();
+  const { soloLectura: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: ciclo que no es el activo = alta / edición / baja deshabilitadas
+  const slp = { disabled: sl, title: sl ? SL_MSG : undefined };
   const [list, setList] = useState<AcadExtra[]>([]);
   const [q, setQ] = useState('');
   const [cat, setCat] = useState('all');
@@ -63,9 +66,9 @@ export default function Screen() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="m-0 text-xl font-semibold tracking-[-0.01em]">Actividades y Cursos Extracurriculares</h1>
-          <p className="mt-1 text-[13px] text-slate-600">{list.length} actividades · {list.reduce((n, a) => n + a.inscritos, 0)} inscripciones · Ciclo 2026–2027</p>
+          <p className="mt-1 text-[13px] text-slate-600">{list.length} actividades · {list.reduce((n, a) => n + a.inscritos, 0)} inscripciones · Ciclo {cicloSeleccionado}</p>
         </div>
-        <button onClick={() => gate('Crear actividad extracurricular', () => open(null, 'create'))} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark"><i className="ph ph-plus" />Nueva Actividad</button>
+        <button onClick={() => gate('Crear actividad extracurricular', () => open(null, 'create'))} {...slp} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark disabled:opacity-50"><i className="ph ph-plus" />Nueva Actividad</button>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[200px] max-w-xs flex-1">
@@ -104,8 +107,8 @@ export default function Screen() {
                 <span className="font-mono text-sm font-semibold">{a.costo ? fmt(a.costo) : 'Gratuita'}<span className="font-sans text-[11px] font-medium text-slate-500">{a.costo ? (curso ? ' total' : '/mes') : ''}</span></span>
                 <div className="flex gap-0.5">
                   <button onClick={() => open(a, 'view')} title="Ver" className="grid h-[30px] w-[30px] place-items-center rounded-md text-base text-slate-600 hover:bg-slate-100"><i className="ph ph-eye" /></button>
-                  <button onClick={() => gate('Modificar ' + a.name, () => open(a, 'edit'))} title="Editar" className="grid h-[30px] w-[30px] place-items-center rounded-md text-base text-accent hover:bg-blue-50"><i className="ph ph-pencil-simple" /></button>
-                  <button onClick={() => del(a)} title="Eliminar" className="grid h-[30px] w-[30px] place-items-center rounded-md text-base text-red-600 hover:bg-red-100"><i className="ph ph-trash" /></button>
+                  <button onClick={() => gate('Modificar ' + a.name, () => open(a, 'edit'))} disabled={sl} title={sl ? SL_MSG : 'Editar'} className="grid h-[30px] w-[30px] place-items-center rounded-md text-base text-accent hover:bg-blue-50 disabled:opacity-40"><i className="ph ph-pencil-simple" /></button>
+                  <button onClick={() => del(a)} disabled={sl} title={sl ? SL_MSG : 'Eliminar'} className="grid h-[30px] w-[30px] place-items-center rounded-md text-base text-red-600 hover:bg-red-100 disabled:opacity-40"><i className="ph ph-trash" /></button>
                 </div>
               </div>
             </div>
@@ -117,7 +120,7 @@ export default function Screen() {
           <span className="grid h-[52px] w-[52px] place-items-center rounded-full bg-blue-50 text-[26px] text-accent"><i className="ph ph-medal" /></span>
           <div className="text-[15px] font-semibold">No hay actividades en esta vista.</div>
           <div className="text-[13px] text-slate-600">Cambia el filtro o registra una nueva actividad o curso.</div>
-          <button onClick={() => gate('Crear actividad extracurricular', () => open(null, 'create'))} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white"><i className="ph ph-plus" />Nueva Actividad</button>
+          <button onClick={() => gate('Crear actividad extracurricular', () => open(null, 'create'))} {...slp} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white disabled:opacity-50"><i className="ph ph-plus" />Nueva Actividad</button>
         </section>
       )}
       {xd && <ExtraDrawer key={xd.item?.id + xd.mode} item={xd.item} mode={xd.mode} onClose={() => setXd(null)} onEdit={() => gate('Modificar ' + xd.item!.name, () => open(xd.item, 'edit'))} onDelete={del} onSave={save} />}

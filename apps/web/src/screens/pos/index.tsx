@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CobroCuenta, CobroItem, CobroMetodo, CobroPagoReq, MobPagoIntencionDto, ReciboFin } from '@stodia/shared';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { CobroTurno, CobroCuenta, CobroComprobantes, CobroItem, CobroMetodo, CobroPagoReq, MobPagoIntencionDto, ReciboFin, TipoLogico } from '@stodia/shared';
 import { api } from '../../lib/api';
 import { useSession } from '../../lib/session';
 import { useToastStack } from '../../components/useToastStack';
@@ -9,8 +9,12 @@ import { TONE, errMsg, fmt } from '../../components/finanzas/fin';
 import { useWide } from '../../components/finanzas/useWide';
 import { useFinCfg } from '../../components/finanzas/finConfig';
 import PagosPorVerificar from './PagosPorVerificar';
-import { useCaja } from '../../components/finanzas/caja';
-import { B, docTirilla, hoyDMY, runPrint, usePrintBusy, type PDoc } from '../../components/finanzas/print';
+import { turnoAhora, useCaja } from '../../components/finanzas/caja';
+import { SL_MSG, useCiclo } from '../../lib/ciclo';
+import { B, hoyDMY, runPrint, usePrintBusy, type PDoc } from '../../components/finanzas/print';
+import ReciboModal from './ReciboModal';
+import HistorialRecibos from './HistorialRecibos';
+import ComprobanteSelector, { faltaFiscal, type DatosFiscales } from './ComprobanteSelector';
 
 const METODOS0: CobroMetodo[] = [{ nombre: 'Efectivo', ref: null }];
 /** Solo desarrollo: VITE_DEV_AUTOLOAD=<cédula|carnet|nombre> carga esa cuenta al abrir la terminal (en producción la terminal abre vacía). */
@@ -27,6 +31,7 @@ export default function Screen() {
   const { user } = useSession();
   const { toast, toasts } = useToastStack();
   const wide = useWide();
+  const { soloLectura: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: un ciclo cerrado es solo lectura (cobrar / anular / descuentos deshabilitados)
   const isSuper = user?.rol === 'Super Admin';
   const searchRef = useRef<HTMLInputElement>(null);
   const cajaInfo = useCaja();
@@ -50,7 +55,22 @@ export default function Screen() {
   const [discount, setDiscount] = useState<'none' | 'pronto' | 'exo'>('none');
   const [exoPin, setExoPin] = useState('');
   const [pays, setPays] = useState<CobroPagoReq[]>(EMPTY_PAY);
+  // Comprobante fiscal del cobro (tipo LOGICO: el servidor decide B01/E31... segun la modalidad configurada) y datos fiscales del comprador.
+  const [comprobantes, setComprobantes] = useState<CobroComprobantes | null>(null);
+  const [comp, setComp] = useState<TipoLogico>('CONSUMO');
+  const [fiscal, setFiscal] = useState<DatosFiscales>({ rnc: '', nombre: '', regimen: '' });
+  const [recordar, setRecordar] = useState(false);
+  const cargarComprobantes = useCallback(() => { api.get<CobroComprobantes>('/cobros/comprobantes').then(setComprobantes).catch(() => undefined); }, []);
+  useEffect(() => { cargarComprobantes(); }, [cargarComprobantes]);
+  /** Al cambiar de cuenta: el comprobante vuelve al habitual del tutor (si hay secuencia) o a Consumo, y los datos fiscales se precargan del tutor. */
+  const reiniciarComprobante = useCallback((cu: CobroCuenta | null) => {
+    setRecordar(false);
+    setFiscal({ rnc: cu?.datosFiscales?.rnc ?? '', nombre: cu?.datosFiscales?.nombre ?? '', regimen: '' });
+    setComp(cu?.comprobanteHabitual ?? 'CONSUMO');
+  }, []);
   const [histOpen, setHistOpen] = useState(false);
+  const [turnoRecibo, setTurnoRecibo] = useState<ReciboFin | null>(null); // recibo abierto desde el Historial de Turno (mismo modal que tras emitir)
+  const [recHistOpen, setRecHistOpen] = useState(false); // Historial de Recibos (listado de todos los recibos del ciclo)
   const [receipt, setReceipt] = useState<ReciboFin | null>(null);
   const [guard, setGuard] = useState<GuardCfg | null>(null);
   const [expired, setExpired] = useState(false);
@@ -61,7 +81,7 @@ export default function Screen() {
     try {
       const t0 = performance.now();
       const c = await api.get<CobroCuenta>('/cobros/cuenta?q=' + encodeURIComponent(term.trim()));
-      setCuenta(c); setNotFound(false); setFocus(0); setKid('all'); setPays(EMPTY_PAY); setDiscount('none'); setExoPin('');
+      setCuenta(c); setNotFound(false); setFocus(0); setKid('all'); setPays(EMPTY_PAY); setDiscount('none'); setExoPin(''); reiniciarComprobante(c);
       setVinc(link ?? null);
       const pre = link?.tipo === 'cargos' ? link.detalle.map(d => d.id).filter(id => c.items.some(i => i.id === id)) : [];
       setSel(Object.fromEntries(pre.length ? pre.map(id => [id, true]) : c.items.filter(i => i.est === 'Vencida').map(i => [i.id, true]))); // arranca con lo vencido marcado (o con los cargos de la intención)
@@ -69,16 +89,36 @@ export default function Screen() {
     } catch {
       setCuenta(null); setNotFound(true);
     }
-  }, [toast]);
+  }, [toast, reiniciarComprobante]);
 
   useEffect(() => { if (DEV_AUTOLOAD) { setQ(DEV_AUTOLOAD); void search(DEV_AUTOLOAD, true); } }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Turno del cajero (GET /cobros/turno): independiente de la cuenta consultada. Se carga al abrir, tras cobrar/anular y al cambiar la franja horaria;
+  // conserva el dato anterior mientras recarga (sin parpadeo). Turno = recibos del usuario autenticado, de hoy, dentro de la franja actual.
+  const [turnoData, setTurnoData] = useState<CobroTurno | null>(null);
+  const [turnoErr, setTurnoErr] = useState(false);
+  const turnoSeq = useRef(0);
+  const cargarTurno = useCallback(async () => {
+    const n = ++turnoSeq.current;
+    try { const t = await api.get<CobroTurno>('/cobros/turno'); if (n === turnoSeq.current) { setTurnoData(t); setTurnoErr(false); } }
+    catch { if (n === turnoSeq.current) setTurnoErr(true); }
+  }, []);
+  useEffect(() => { void cargarTurno(); }, [cargarTurno, user?.usuario]);
+  useEffect(() => { // cambio de franja (Matutino/Vespertino/Nocturno): el listado del turno se reinicia
+    let ult = turnoAhora();
+    const t = setInterval(() => { const x = turnoAhora(); if (x !== ult) { ult = x; void cargarTurno(); } }, 60000);
+    return () => clearInterval(t);
+  }, [cargarTurno]);
+
   const items = cuenta?.items ?? [];
-  const recibos = cuenta?.recibos ?? [];
-  const vis = useMemo(() => items.filter(i => kid === 'all' || i.kid === kid), [items, kid]);
+  const deuda = useMemo(() => cuenta?.deudaAnterior ?? [], [cuenta]); // Fase 2D: cargos pendientes de ciclos cerrados (solo desde el ciclo activo), cobrables en una linea aparte
+  const todos = useMemo(() => [...items, ...deuda], [items, deuda]);
+  const recibos = useMemo(() => turnoData?.recibos ?? [], [turnoData]); // SOLO el turno (nunca cuenta.recibos)
+  const nAct = useMemo(() => items.filter(i => kid === 'all' || i.kid === kid).length, [items, kid]);
+  const vis = useMemo(() => todos.filter(i => kid === 'all' || i.kid === kid), [todos, kid]);
 
   const c = useMemo(() => {
-    const s = items.filter(i => sel[i.id]);
+    const s = todos.filter(i => sel[i.id]);
     const sub = s.reduce((a, i) => a + i.monto, 0);
     let desc = 0;
     if (discount === 'pronto') desc = s.filter(i => i.tipo === 'col' && i.est === 'Pendiente').reduce((a, i) => a + i.monto * (prontoPct / 100), 0);
@@ -91,16 +131,20 @@ export default function Screen() {
     const remaining = Math.round((total - paid) * 100) / 100;
     const change = paid > total ? paid - total : 0;
     const abono = s.length > 0 && total > 0 && remaining > 0.001 && paid > 0.001;
+    const tc = comprobantes?.tipos.find(t => t.logico === comp), umbral = comprobantes?.umbralConsumoIdentificado ?? 250000;
+    const falta = comprobantes ? faltaFiscal(comp, total, umbral, fiscal, !!tc?.disponible, tc?.motivo) : '';
     let msg = 'Listo para procesar', tone: 'ok' | 'warn' | 'bad' | 'mute' = 'ok';
     if (!s.length) { msg = 'Selecciona al menos un ítem'; tone = 'mute'; }
     else if (nonCash > total + 0.001) { msg = 'El monto no-efectivo excede el total'; tone = 'bad'; }
     else if (paid <= 0.001) { msg = 'Ingresa el monto recibido'; tone = 'warn'; }
     else if (missingRef) { msg = 'Ingresa ' + REFS[missingRef.m]!.toLowerCase() + ' (' + missingRef.m + ')'; tone = 'warn'; }
+    else if (falta) { msg = falta; tone = 'warn'; }
     else if (abono) { msg = 'Monto menor al total: se registrará como abono y se resta del saldo pendiente'; tone = 'warn'; }
     else if (change > 0) { msg = 'Cambio a devolver ' + fmt(change); }
-    const canPay = s.length > 0 && total > 0 && paid > 0.001 && !missingRef && nonCash <= total + 0.001;
+    const canPay = !sl && s.length > 0 && total > 0 && paid > 0.001 && !missingRef && nonCash <= total + 0.001 && !falta;
+    if (sl) { msg = SL_MSG; tone = 'mute'; }
     return { sel: s, sub, desc, total, pays: ps, change, remaining, abono, msg, tone, canPay };
-  }, [items, sel, discount, pays, prontoPct, REFS]);
+  }, [todos, sel, discount, pays, prontoPct, REFS, sl, comprobantes, comp, fiscal]);
 
   const venc = items.filter(i => i.est === 'Vencida').reduce((a, i) => a + i.monto, 0);
   const mora = items.some(i => i.est === 'Vencida');
@@ -115,16 +159,18 @@ export default function Screen() {
 
   const process = useCallback(async () => {
     if (expired || busy) return;
+    if (sl) { toast(SL_MSG, 'warn'); return; }
     if (!c.canPay) { toast(c.msg, 'bad'); return; }
     setBusy(true);
     try {
-      const rec = await api.post<ReciboFin>('/cobros/procesar', { ids: c.sel.map(i => i.id), discount, pays, pin: exoPin, cedula: cuenta?.cedula, ...(vinc?.tipo === 'cargos' ? { intencionId: vinc.id } : {}) });
+      const rec = await api.post<ReciboFin>('/cobros/procesar', { ids: c.sel.map(i => i.id), discount, pays, pin: exoPin, cedula: cuenta?.cedula, tipoComprobante: comp, ...(comp !== 'CONSUMO' || fiscal.rnc.trim() ? { clienteRnc: fiscal.rnc, clienteNombre: fiscal.nombre } : {}), ...(comp === 'REGIMEN_ESPECIAL' && fiscal.regimen.trim() ? { regimenEspecial: fiscal.regimen } : {}), ...(recordar ? { habitual: true } : {}), ...(vinc?.tipo === 'cargos' ? { intencionId: vinc.id } : {}) });
       const fresh = await api.get<CobroCuenta>('/cobros/cuenta?q=' + encodeURIComponent(cuenta!.cedula));
-      setCuenta(fresh); setSel({}); setPays(EMPTY_PAY); setDiscount('none'); setExoPin(''); setFocus(0); setReceipt(rec);
+      void cargarTurno();
+      setCuenta(fresh); setSel({}); setPays(EMPTY_PAY); setDiscount('none'); setExoPin(''); setFocus(0); setReceipt(rec); reiniciarComprobante(fresh); cargarComprobantes();
       if (vinc?.tipo === 'cargos' && !rec.abono) { setVinc(null); loadIntens(); }
       toast(rec.abono ? `${rec.id} · Abono ${fmt(rec.monto)} aplicado · saldo pendiente ${fmt(rec.saldo)}` : `${rec.id} procesado · ${fmt(rec.monto)}`, rec.abono ? 'warn' : 'ok');
     } catch (e) { toast(errMsg(e), 'bad'); } finally { setBusy(false); }
-  }, [c, discount, pays, exoPin, expired, busy, toast, cuenta, vinc, loadIntens]);
+  }, [c, discount, pays, exoPin, expired, busy, toast, cuenta, vinc, loadIntens, sl, cargarTurno, comp, fiscal, recordar, reiniciarComprobante, cargarComprobantes]);
 
   // Atajos de teclado del prototipo + bloqueo por inactividad (15 min).
   const toggle = (id: string, idx: number) => { setSel(s => ({ ...s, [id]: !s[id] })); setFocus(idx); };
@@ -150,11 +196,12 @@ export default function Screen() {
   }, []);
 
   const newCobro = () => {
-    setQ(''); setCuenta(null); setVinc(null); setNotFound(false); setPays(EMPTY_PAY); setDiscount('none'); setKid('all');
+    setQ(''); setCuenta(null); setVinc(null); setNotFound(false); setPays(EMPTY_PAY); setDiscount('none'); setKid('all'); reiniciarComprobante(null);
     setTimeout(() => searchRef.current?.focus(), 0);
   };
 
   const onDiscount = (v: string) => {
+    if (sl) return;
     if (v === 'exo') {
       openGuard({
         title: 'Exonerar recargo por mora', desc: 'La exoneración de moras es una acción auditada. Requiere autorización jerárquica.',
@@ -166,14 +213,13 @@ export default function Screen() {
 
   const pb = usePrintBusy();
   const pbc = pb('cuadre', 'Imprimir Cuadre', 'ph ph-printer');
-  const pbr = pb('rcpt', 'Imprimir Tirilla', 'ph ph-receipt');
   const docCuadre = (): PDoc => {
     const act = recibos.filter(r => r.est !== 'Anulado'), by: Record<string, number> = {};
     act.forEach(r => { by[r.metodo] = (by[r.metodo] || 0) + r.monto; });
     const tot: [string, string, boolean?][] = [...Object.entries(by).map(([k, v]) => ['Total ' + k, fmt(v)] as [string, string]), ['TOTAL NETO COBRADO', fmt(act.reduce((a, r) => a + r.monto, 0)), true]];
-    return { kind: 'carta', name: 'Cuadre de caja', format: 'Carta 8.5 × 11 in', sign: ['Firma del cajero', 'Firma de dirección'], pages: [{ title: 'Cuadre de caja', sub: cajaInfo.cajaLabel + ' · ' + hoyDMY(), blocks: [
-      B.kv([['Cajero', user?.nombre ?? ''], ['Sucursal', cajaInfo.sucursal], ['Recibos emitidos', String(recibos.length)], ['Anulados', String(recibos.length - act.length)]]),
-      B.table(['Recibo', 'NCF', 'Tutor', 'Método', 'Hora', 'Monto', 'Estado'], recibos.map(r => [r.id, r.ncf, r.tutor, r.metodo, r.hora, fmt(r.monto), r.est === 'Anulado' ? 'Anulado' : (r.abono ? 'Abono' : 'Activo')]), ['62px', '92px', '1fr', '70px', '40px', '90px', '52px'], ['left', 'left', 'left', 'left', 'left', 'right', 'left']),
+    return { kind: 'carta', name: 'Cuadre de caja', format: 'Carta 8.5 × 11 in', sign: ['Firma del cajero', 'Firma de dirección'], pages: [{ title: 'Cuadre de caja', sub: (turnoData?.caja || cajaInfo.caja ? (turnoData?.caja || cajaInfo.caja) + ' · ' : '') + 'Turno ' + (turnoData?.turno ?? cajaInfo.turno) + (turnoData ? ' (' + turnoData.desde + '–' + turnoData.hasta + ')' : '') + ' · ' + hoyDMY(), blocks: [
+      B.kv([['Cajero', user?.nombre ?? ''], ['Sucursal', turnoData?.sucursal ?? cajaInfo.sucursal], ['Turno', (turnoData?.turno ?? cajaInfo.turno) + (turnoData ? ' · ' + turnoData.desde + ' a ' + turnoData.hasta : '')], ['Recibos emitidos', String(recibos.length)], ['Anulados', String(recibos.length - act.length)]]),
+      B.table(['Recibo', 'Comprobante', 'NCF / e-NCF', 'Tutor', 'Método', 'Hora', 'Monto', 'Estado'], recibos.map(r => [r.id, r.tipoComprobante?.nombre ?? '', r.ncf, r.tutor, r.metodo, r.hora, fmt(r.monto), r.est === 'Anulado' ? 'Anulado' : (r.abono ? 'Abono' : 'Activo')]), ['62px', '92px', '104px', '1fr', '66px', '40px', '88px', '52px'], ['left', 'left', 'left', 'left', 'left', 'left', 'right', 'left']),
       B.total(tot)] }] };
   };
 
@@ -184,7 +230,9 @@ export default function Screen() {
       code: 'ANULAR-' + rc.id, pin: true, label: 'Anular y emitir nota de crédito',
       onOk: async pin => {
         const r = await api.post<ReciboFin>(`/cobros/recibos/${rc.id}/anular`, { pin });
+        setTurnoData(t => t && { ...t, recibos: t.recibos.map(x => (x.id === r.id ? r : x)) });
         setCuenta(cu => cu && { ...cu, recibos: cu.recibos.map(x => (x.id === r.id ? r : x)) });
+        void cargarTurno();
         toast(`${rc.id} anulado · Nota de crédito ${r.nc}`, 'warn');
       },
     });
@@ -226,7 +274,10 @@ export default function Screen() {
                 />
               </div>
               <button onClick={() => setHistOpen(true)} className="flex h-[34px] items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-300 bg-slate-100 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-200">
-                <i className="ph ph-clock-counter-clockwise" />Historial de Turno ({recibos.length})
+                <i className="ph ph-clock-counter-clockwise" />Historial de Turno ({turnoData?.resumen.emitidos ?? recibos.length})
+              </button>
+              <button onClick={() => setRecHistOpen(true)} className="flex h-[34px] items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-300 bg-slate-100 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-200">
+                <i className="ph ph-receipt" />Historial de Recibos
               </button>
             </div>
             {cuenta && (
@@ -244,6 +295,7 @@ export default function Screen() {
                   <span>Total vencido: <b className="font-mono" style={{ color: venc > 0 ? '#DC2626' : '#16A34A' }}>{fmt(venc)}</b></span>
                   <span className="text-slate-300">|</span>
                   <span>Deuda total: <b className="font-mono text-ink">{fmt(items.reduce((a, i) => a + i.monto, 0))}</b></span>
+                  {deuda.length > 0 && <><span className="text-slate-300">|</span><span title="Cargos pendientes de ciclos cerrados: se cobran aquí mismo, en el recibo del ciclo activo">Deuda anterior: <b className="font-mono" style={{ color: '#B45309' }}>{fmt(deuda.reduce((a, i) => a + i.monto, 0))}</b></span></>}
                 </div>
               </div>
             )}
@@ -286,15 +338,20 @@ export default function Screen() {
                         const on = !!sel[i.id];
                         const tn = i.est === 'Vencida' ? TONE.bad : i.est === 'Por vencer' ? TONE.warn : TONE.mute;
                         return (
-                          <tr key={i.id} onClick={() => toggle(i.id, idx)} className="h-9 cursor-pointer hover:bg-slate-50"
+                          <Fragment key={i.id}>
+                          {idx === nAct && deuda.length > 0 && (
+                            <tr className="bg-amber-50"><td colSpan={6} className="border-y border-amber-200 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800"><i className="ph-fill ph-clock-counter-clockwise mr-1.5" />Deuda de ciclos anteriores · {[...new Set(deuda.map(d => d.ciclo))].join(', ')} <span className="font-normal normal-case tracking-normal">(se cobra aquí; el recibo se emite en el ciclo activo)</span></td></tr>
+                          )}
+                          <tr onClick={() => toggle(i.id, idx)} className="h-9 cursor-pointer hover:bg-slate-50"
                             style={{ background: on ? '#EFF6FF' : '#FFFFFF', boxShadow: focus === idx ? 'inset 3px 0 0 #2563EB, inset 0 0 0 1px #BFDBFE' : 'none' }}>
                             <td className="border-b border-slate-100 px-2.5 text-center"><input type="checkbox" readOnly checked={on} className="pointer-events-none h-3.5 w-3.5 accent-accent" /></td>
-                            <td className="whitespace-nowrap border-b border-slate-100 px-2.5 font-medium" style={{ color: on ? '#0F172A' : '#334155' }}>{i.con + (i.abono ? ' · saldo tras abono' : '')}</td>
+                            <td className="whitespace-nowrap border-b border-slate-100 px-2.5 font-medium" style={{ color: on ? '#0F172A' : '#334155' }}>{i.con + (i.abono ? ' · saldo tras abono' : '') + (i.ciclo ? ' · ' + i.ciclo : '')}</td>
                             <td className="whitespace-nowrap border-b border-slate-100 px-2.5 text-slate-600">{i.al.replace(' · ', ' • ')} Primaria</td>
                             <td className="border-b border-slate-100 px-2.5 text-center font-mono text-[11px] text-slate-500">{i.vence}</td>
                             <td className="border-b border-slate-100 px-2.5 text-center"><Pill tone={tn} w={81}>{i.est}</Pill></td>
                             <td className="border-b border-slate-100 px-2.5 text-right font-mono text-xs text-ink" style={{ fontWeight: on ? 600 : 400 }}>{fmt(i.monto)}</td>
                           </tr>
+                          </Fragment>
                         );
                       })}
                     </tbody>
@@ -302,13 +359,13 @@ export default function Screen() {
                   {vis.length === 0 && (
                     <div className="flex items-center gap-3.5 px-4 py-7">
                       <span className="grid h-11 w-11 place-items-center rounded-full bg-ok-bg text-[22px] text-green-600"><i className="ph ph-check-circle" /></span>
-                      <div><div className="text-sm font-semibold">Sin conceptos pendientes</div><div className="text-[13px] text-slate-600">No hay cuotas abiertas para este filtro en el ciclo {fcfg.ciclo}.</div></div>
+                      <div><div className="text-sm font-semibold">Sin conceptos pendientes</div><div className="text-[13px] text-slate-600">No hay cuotas abiertas para este filtro en el ciclo {cicloSeleccionado || fcfg.ciclo}.</div></div>
                     </div>
                   )}
                 </div>
                 <div className="flex flex-none flex-wrap items-center gap-2.5 border-t border-slate-200 bg-slate-50 px-2.5 py-2">
                   <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600">Descuento
-                    <select value={discount} onChange={e => onDiscount(e.target.value)} className="h-7 rounded-[5px] border border-slate-300 bg-white px-1.5 text-xs text-ink">
+                    <select value={discount} onChange={e => onDiscount(e.target.value)} disabled={sl} title={sl ? SL_MSG : undefined} className="h-7 rounded-[5px] border border-slate-300 bg-white px-1.5 text-xs text-ink disabled:opacity-50">
                       <option value="none">Ninguno</option>
                       {prontoPct > 0 && <option value="pronto">Pronto pago −{prontoPct}% (cuotas futuras)</option>}
                       <option value="exo">Exonerar mora (supervisor)</option>
@@ -333,7 +390,7 @@ export default function Screen() {
         </div>
 
         <aside className="relative flex min-h-0 flex-col justify-between gap-3.5 overflow-auto rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex min-h-0 flex-col">
+          <div className="flex flex-none flex-col">
             <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
               <h2 className="m-0 text-sm font-bold">Resumen de Cobro</h2>
               <span className="rounded bg-info-bg px-2 py-0.5 text-[11px] font-semibold text-info-fg">{c.sel.length + (c.sel.length === 1 ? ' Ítem' : ' Ítems')}</span>
@@ -357,6 +414,9 @@ export default function Screen() {
             </div>
           </div>
 
+          <div className="flex flex-none flex-col gap-2.5">
+          {comprobantes && <ComprobanteSelector tipos={comprobantes.tipos} value={comp} onChange={setComp} datos={fiscal} onDatos={setFiscal} total={c.total} umbral={comprobantes.umbralConsumoIdentificado}
+            habitual={cuenta?.comprobanteHabitual ?? null} recordar={recordar} onRecordar={setRecordar} disabled={sl} ecf={comprobantes.ecf} />}
           <div className="flex flex-col gap-2.5 border-t border-slate-200 pt-3.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-700">Forma de pago</span>
@@ -417,11 +477,14 @@ export default function Screen() {
               </div>
             )}
             {!(c.canPay && c.change > 0) && <div className="flex items-center gap-1.5 text-[11px]" style={{ color: tone }}><i className={tIcon} />{c.msg}</div>}
-            <button onClick={() => void process()} className="flex h-[46px] items-center justify-center gap-2 rounded-md text-sm font-semibold shadow hover:brightness-95"
+            <div className="sticky bottom-0 z-10 -mx-4 -mb-4 flex flex-col bg-white px-4 pb-4 pt-2 shadow-[0_-8px_8px_-8px_rgba(15,23,42,0.18)]">
+              <button onClick={() => void process()} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-[46px] items-center justify-center gap-2 rounded-md text-sm font-semibold shadow hover:brightness-95"
               style={{ background: c.canPay ? '#2563EB' : '#CBD5E1', color: c.canPay ? '#FFFFFF' : '#64748B', cursor: c.canPay ? 'pointer' : 'not-allowed' }}>
               <span className="rounded bg-slate-900/20 px-1.5 py-0.5 font-mono text-[10px] font-semibold">F12</span>
               {c.abono ? 'Procesar Abono e Imprimir Recibo' : 'Procesar e Imprimir Recibo'}
             </button>
+            </div>
+          </div>
           </div>
 
           {expired && (
@@ -458,12 +521,14 @@ export default function Screen() {
               const an = rc.est === 'Anulado';
               const t = an ? TONE.bad : TONE.ok;
               return (
-                <div key={rc.id} className="grid grid-cols-[84px_minmax(0,1fr)_120px_140px_74px] items-center gap-2.5 border-b border-slate-100 px-[18px] py-2.5 text-xs">
+                <div key={rc.id} role="button" tabIndex={0} title={'Ver recibo ' + rc.id} onClick={() => setTurnoRecibo(rc)}
+                  onKeyDown={e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); setTurnoRecibo(rc); } }}
+                  className="grid cursor-pointer grid-cols-[84px_minmax(0,1fr)_120px_140px_74px] items-center gap-2.5 border-b border-slate-100 px-[18px] py-2.5 text-xs hover:bg-slate-50 focus:bg-slate-50 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent">
                   <div className="flex flex-col gap-0.5"><span className="font-mono text-xs font-semibold">{rc.id}</span><span className="font-mono text-[11px] text-slate-500">{rc.hora}</span></div>
-                  <div className="flex min-w-0 flex-col gap-0.5"><span className="overflow-hidden text-ellipsis whitespace-nowrap font-medium">{rc.tutor}</span><span className="font-mono text-[11px] text-slate-500">{rc.ncf} · {rc.metodo}</span></div>
+                  <div className="flex min-w-0 flex-col gap-0.5"><span className="overflow-hidden text-ellipsis whitespace-nowrap font-medium">{rc.tutor}</span><span className="font-mono text-[11px] text-slate-500">{rc.tipoComprobante ? rc.tipoComprobante.nombre + ' · ' : ''}{rc.ncf} · {rc.metodo}</span></div>
                   <span className="text-right font-mono text-xs font-semibold" style={{ textDecoration: an ? 'line-through' : 'none' }}>{fmt(rc.monto)}</span>
                   <span><Pill tone={t} w={148}>{an ? 'Anulado · ' + rc.nc : rc.abono ? 'Abono · saldo ' + fmt(rc.saldo) : 'Activo'}</Pill></span>
-                  <button disabled={an} onClick={() => anular(rc)} className="h-7 rounded-[5px] border border-red-300 bg-white text-xs font-medium text-red-600 hover:bg-bad-bg" style={{ opacity: an ? 0.4 : 1 }}>Anular</button>
+                  <button disabled={an || sl} title={sl ? SL_MSG : undefined} onClick={e => { e.stopPropagation(); anular(rc); }} className="h-7 rounded-[5px] border border-red-300 bg-white text-xs font-medium text-red-600 hover:bg-bad-bg" style={{ opacity: an ? 0.4 : 1 }}>Anular</button>
                 </div>
               );
             })}
@@ -471,33 +536,9 @@ export default function Screen() {
         </SideDrawer>
       )}
 
-      {receipt && (
-        <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-900/50 p-5">
-          <div className="w-[420px] max-w-full overflow-hidden rounded-[10px] bg-white shadow-2xl">
-            <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-[18px]">
-              <i className="ph-fill ph-check-circle text-[28px] text-green-600" />
-              <div><div className="text-base font-semibold">{receipt.abono ? 'Abono registrado' : 'Pago procesado'}</div><div className="text-xs text-slate-600">Factura electrónica firmada · XML/PDF generados</div></div>
-            </div>
-            <div className="flex flex-col gap-1.5 px-5 py-4 text-[13px]">
-              <div className="flex justify-between"><span className="text-slate-500">Recibo</span><span className="font-mono">{receipt.id}</span></div>
-              <div className="flex justify-between"><span className="text-slate-500">NCF</span><span className="font-mono">{receipt.ncf}</span></div>
-              <div className="flex justify-between"><span className="text-slate-500">Tutor</span><span>{receipt.tutor}</span></div>
-              <div className="my-1.5 border-t border-dashed border-slate-200" />
-              {receipt.items.map((ri, k) => <div key={k} className="flex justify-between gap-2.5"><span className="text-slate-700">{ri.con}</span><span className="font-mono">{fmt(ri.monto)}</span></div>)}
-              <div className="my-1.5 border-t border-dashed border-slate-200" />
-              {receipt.pays.map((rp, k) => <div key={k} className="flex justify-between"><span className="text-slate-500">{rp.m} <span className="font-mono">{rp.r}</span></span><span className="font-mono">{fmt(rp.amt)}</span></div>)}
-              <div className="mt-1 flex justify-between text-[15px] font-semibold"><span>{receipt.abono ? 'Abono' : 'Total'}</span><span className="font-mono">{fmt(receipt.monto)}</span></div>
-              {receipt.abono && <div className="flex justify-between font-semibold text-warn-fg"><span>Saldo pendiente</span><span className="font-mono">{fmt(receipt.saldo)}</span></div>}
-              {receipt.change > 0 && <div className="flex justify-between text-ok-fg"><span>Cambio a devolver</span><span className="font-mono font-semibold">{fmt(receipt.change)}</span></div>}
-            </div>
-            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
-              <button onClick={() => setReceipt(null)} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">Cerrar</button>
-              <button onClick={() => (cuenta?.email ? toast('Recibo enviado por correo a ' + cuenta.email, 'ok') : toast('El tutor no tiene correo registrado', 'warn'))} className="flex h-[34px] items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-[13px] font-medium hover:bg-slate-100"><i className="ph ph-envelope-simple" />Enviar por Correo</button>
-              <button onClick={() => runPrint('rcpt', docTirilla(receipt, user?.nombre))} className="flex h-9 items-center gap-1.5 rounded-md border border-accent bg-white px-3.5 text-[13px] font-semibold text-accent hover:bg-blue-50"><i className={pbr.icon} style={{ animation: pbr.spin }} />{pbr.label}</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {turnoRecibo && <ReciboModal recibo={turnoRecibo} toast={toast} origen="historial" z={80} onClose={() => setTurnoRecibo(null)} />}
+      {receipt && <ReciboModal recibo={receipt} toast={toast} onClose={() => setReceipt(null)} />}
+      {recHistOpen && <HistorialRecibos toast={toast} initialQ={q} onClose={() => setRecHistOpen(false)} />}
 
       {guard && <SupervisorGuardModal cfg={guard} onClose={() => setGuard(null)} />}
       {toasts}

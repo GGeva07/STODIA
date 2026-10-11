@@ -6,6 +6,7 @@
   "scripts": {
     "dev:web": "pnpm --filter @stodia/web dev",
     "dev:api": "pnpm --filter @stodia/api dev",
+    "dev:api:watch": "pnpm --filter @stodia/api dev:watch",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "desktop": "pnpm --filter @stodia/desktop start",

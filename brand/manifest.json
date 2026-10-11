@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "origin": "https://api.moda.app",
+  "team": "team_402RQT29B4968AF04B9X6NBE2K",
+  "organization": "org_08T9YRMS3X9J7T75KMECKEG9BF",
+  "kitId": "9241c668-aa7d-4d6f-92c4-98ff2b87d279",
+  "fetchedAt": "2026-10-09T23:54:53.785Z",
+  "remoteUpdatedAt": "2026-10-09T23:51:15.452886",
+  "sourceUrl": "https://stodia.vercel.app",
+  "kitUrl": "https://moda.app/brand-kit/9241c668-aa7d-4d6f-92c4-98ff2b87d279",
+  "assets": "logos",
+  "contentHash": "501e3553ab08d294237443bfec4fbe58b5c1a666d121e7b58be063c8f3a694f1",
+  "files": {
+    "assets/file_3AW44YBXCP9XMVJ2XAP0DNSDYA.png": "f67dc0c2c4636b2b48e087408bd304978ce5a58f3efab4145640067527184da6",
+    "kit.json": "eded0bf98ddc7b34b079268c6b67e9b1e79176d6ce8b279fdcf551cda7011be5",
+    "BRAND.md": "65c1e1ae9a39590871e5696a2620f0bbb9d3f321c9e11ecfb48c44a2e79c7c20"
+  },
+  "warnings": [
+    "Voyager snapshot of the brand's public API; internal aesthetic/rules and canonical Brand.md may not be exposed. Authored guides are preserved separately."
+  ]
+}

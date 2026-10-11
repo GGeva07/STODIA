@@ -1,3 +1,4 @@
+import { SL_MSG, useSoloLectura } from '../../lib/ciclo';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { TutorAccesoResp, TutorAlumnoOpt, TutorFicha, TutoresResp, TutorRow } from '@stodia/shared';
@@ -22,6 +23,8 @@ export default function Screen() {
   const toast = useToast();
   const nav = useNavigate();
   const { user } = useSession();
+  const sl = useSoloLectura(); // Fase 2D: ciclo que no es el activo = alta / edición / eliminación deshabilitadas
+  const slp = { disabled: sl, title: sl ? SL_MSG : undefined };
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
   const [data, setData] = useState<TutoresResp | null>(null);
@@ -58,7 +61,7 @@ export default function Screen() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative"><i className="ph ph-magnifying-glass absolute left-2.5 top-2.5 text-slate-400" /><input value={q} onChange={e => { setQ(e.target.value); setPage(1); }} placeholder="Buscar…" aria-label="Buscar tutores por nombre, cédula o estudiante" className="h-[34px] w-[200px] rounded-md border border-slate-300 bg-white pl-[30px] pr-2.5 text-[13px] outline-none focus:border-accent" /></div>
-            <button onClick={() => setForm({ row: null })} className="flex h-[34px] items-center gap-1.5 whitespace-nowrap rounded-md bg-accent px-3 text-[13px] font-medium text-white hover:bg-accent-dark"><i className="ph ph-plus" />Nuevo tutor</button>
+            <button onClick={() => setForm({ row: null })} {...slp} className="flex h-[34px] items-center gap-1.5 whitespace-nowrap rounded-md bg-accent px-3 text-[13px] font-medium text-white hover:bg-accent-dark disabled:opacity-50"><i className="ph ph-plus" />Nuevo tutor</button>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -82,8 +85,8 @@ export default function Screen() {
                   <td className="border-b border-slate-100 px-3"><span className={`${pillBase} !w-[84px] ${r.estado === 'Activo' ? pill.ok : pill.mute}`}>{r.estado}</span></td>
                   <td className="whitespace-nowrap border-b border-slate-100 px-3 text-right">
                     <div className="inline-flex gap-3">
-                      <button onClick={() => setForm({ row: r })} className="p-0 text-[13px] font-medium text-accent hover:text-accent-dark">Editar</button>
-                      <button onClick={() => setDelRow(r)} className="p-0 text-[13px] font-medium text-red-600 hover:text-red-700">Eliminar</button>
+                      <button onClick={() => setForm({ row: r })} {...slp} className="p-0 text-[13px] font-medium text-accent hover:text-accent-dark disabled:opacity-40">Editar</button>
+                      <button onClick={() => setDelRow(r)} {...slp} className="p-0 text-[13px] font-medium text-red-600 hover:text-red-700 disabled:opacity-40">Eliminar</button>
                     </div>
                   </td>
                 </tr>
@@ -246,6 +249,7 @@ function FichaDrawer({ id, canExp, onClose, onEdit, onChanged, onCred, goExp }: 
   id: string; canExp: boolean; onClose: () => void; onEdit: (r: TutorRow) => void; onChanged: () => void; onCred: (r: TutorAccesoResp, t: TutorFicha) => void; goExp: (id: string) => void;
 }) {
   const toast = useToast();
+  const sl = useSoloLectura();
   const [t, setT] = useState<TutorFicha | null>(null);
   const [busy, setBusy] = useState(false);
   const [ask, setAsk] = useState<'crear' | 'reset' | 'revocar' | null>(null);
@@ -315,8 +319,8 @@ function FichaDrawer({ id, canExp, onClose, onEdit, onChanged, onCred, goExp }: 
               {t.acceso.cambioPendiente && <div className="text-xs text-amber-700">Contraseña temporal pendiente de cambio: el tutor debe cambiarla en su primer ingreso.</div>}
               {t.hijos.every(h => h.vinculo === 'Legal') && <div className="text-xs text-slate-500">El portal muestra los estudiantes de los que es tutor financiero.</div>}
               <div className="flex flex-wrap gap-2 pt-1">
-                <button disabled={t.estado !== 'Activo' || busy} onClick={() => (t.acceso.estado === 'Sin acceso' ? acceso() : setAsk('reset'))} className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-semibold text-white hover:bg-accent-dark disabled:opacity-50"><i className="ph ph-key" />{t.acceso.estado === 'Sin acceso' ? 'Crear acceso al portal' : 'Restablecer contraseña'}</button>
-                {t.acceso.estado === 'Activo' && <button onClick={() => setAsk('revocar')} className="h-8 rounded-md border border-red-200 bg-white px-3 text-xs font-semibold text-red-600 hover:bg-red-50">Revocar acceso</button>}
+                <button disabled={t.estado !== 'Activo' || busy || sl} title={sl ? SL_MSG : undefined} onClick={() => (t.acceso.estado === 'Sin acceso' ? acceso() : setAsk('reset'))} className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-semibold text-white hover:bg-accent-dark disabled:opacity-50"><i className="ph ph-key" />{t.acceso.estado === 'Sin acceso' ? 'Crear acceso al portal' : 'Restablecer contraseña'}</button>
+                {t.acceso.estado === 'Activo' && <button onClick={() => setAsk('revocar')} disabled={sl} title={sl ? SL_MSG : undefined} className="h-8 rounded-md border border-red-200 bg-white px-3 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">Revocar acceso</button>}
               </div>
               {t.estado !== 'Activo' && <div className="text-xs text-slate-500">Activa al tutor para darle acceso.</div>}
               <div className="text-[11px] text-slate-500">{t.correoListo && t.email ? 'Las credenciales se enviarán también a su correo.' : 'Canal de correo no configurado o sin correo del tutor: las credenciales se entregan en pantalla o impresas.'}</div>
@@ -324,7 +328,7 @@ function FichaDrawer({ id, canExp, onClose, onEdit, onChanged, onCred, goExp }: 
           </div>
           <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
             <button onClick={onClose} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">Cerrar</button>
-            <button onClick={() => onEdit(t)} className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white hover:bg-accent-dark"><i className="ph ph-pencil-simple" />Editar</button>
+            <button onClick={() => onEdit(t)} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white hover:bg-accent-dark disabled:opacity-50"><i className="ph ph-pencil-simple" />Editar</button>
           </div>
           {ask && (
             <Modal width={440} z={90} onClose={() => setAsk(null)}>

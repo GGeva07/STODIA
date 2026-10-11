@@ -14,6 +14,7 @@ const env = (k: string) => (process.env[k] ?? '').trim();
 
 function fmtRnc(v: string) {
   const d = v.replace(/\D/g, '');
+  if (d.length === 11) return `${d.slice(0, 3)}-${d.slice(3, 10)}-${d[10]}`; // persona física (cédula)
   return d.length === 9 ? `${d[0]}-${d.slice(1, 3)}-${d.slice(3, 8)}-${d[8]}` : v;
 }
 
@@ -43,6 +44,15 @@ export async function seedInstalacion() {
       moneda: env('CURRENCY') || 'DOP',
       zonaHoraria: env('TIMEZONE') || 'America/Santo_Domingo',
     };
+    // Verificación del RNC en la DGII hecha por el instalador (RNC_*). Instalaciones antiguas: sin variables, no se añade nada.
+    const rv = env('RNC_VERIFICADO').toLowerCase();
+    if (rv === 'true' || rv === 'false') {
+      perfil.rncVerificado = rv === 'true';
+      if (env('RNC_RAZON_SOCIAL')) perfil.razonSocial = env('RNC_RAZON_SOCIAL');
+      if (env('RNC_NOMBRE_COMERCIAL')) perfil.nombreComercial = env('RNC_NOMBRE_COMERCIAL');
+      if (env('RNC_ESTADO')) perfil.rncEstado = env('RNC_ESTADO');
+      if (perfil.rncVerificado && env('RNC_VERIFICADO_AT') && !Number.isNaN(Date.parse(env('RNC_VERIFICADO_AT')))) perfil.rncVerificadoAt = env('RNC_VERIFICADO_AT');
+    }
     await prisma.sisConfig.create({ data: { clave: 'perfil', valor: JSON.stringify(perfil) } });
   }
 
@@ -54,5 +64,7 @@ export async function seedInstalacion() {
   if (!hayClave) await prisma.sisConfig.create({ data: { clave: 'licenciaClave', valor: JSON.stringify(clave) } });
   if (!hayPerfil && !env('INSTITUTION_NAME')) await prisma.sisConfig.create({ data: { clave: 'perfil', valor: JSON.stringify({ nombre: ev.payload.cliente, rnc: fmtRnc(ev.payload.rnc ?? ''), tel: '', dir: '' } satisfies CfgPerfil) } });
 
+  // 4) Comprobantes fiscales: el catalogo de tipos (B01..B17, E31..E47) lo siembra asegurarIndices(); las SECUENCIAS quedan vacias a proposito: son autorizaciones de la DGII de ESTE cliente.
+  console.log('Comprobantes fiscales: sin secuencias NCF/e-NCF. Registra tus autorizaciones DGII en Configuración › Fiscal antes de cobrar (sin secuencia disponible no se emite ningún comprobante).');
   console.log(`seed producción ok: admin '${usuario}' ${adminCreado ? 'creado' : 'ya existía'}, perfil configurado, licencia ${ev.payload.id} plan ${ev.payload.plan} (nivel ${LTIER[ev.payload.plan]}) vence ${ev.payload.vence} [${ev.estado}]`);
 }

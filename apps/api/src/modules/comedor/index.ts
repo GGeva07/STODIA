@@ -2,6 +2,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ComCarnetDto, ComEscaneoRes, ComLecturaDto, ComedorEstado } from '@stodia/shared';
 import { prisma } from '../../db';
 import { comedorGet, comedorSet } from '../../lib/canales';
+import { SEC_INC, algDe, gst } from '../../lib/personas';
+import { SaldoInsuficiente, consumoHoy, movimientoMonedero } from '../../lib/monedero';
 
 type Carnet = Awaited<ReturnType<typeof prisma.comCarnet.findMany>>[number];
 const nowT = () => new Date().toLocaleTimeString('es-DO', { hour12: false });
@@ -11,11 +13,11 @@ const fmt = (n: number) => 'RD$ ' + n.toLocaleString('en-US', { minimumFractionD
 /**
  * Convención ÚNICA: ComCarnet.code = Alumno.code (p. ej. EST-2026-0412) y ComCarnet.alumnoId es una FK real a Alumno.id.
  * El lector también acepta la forma corta heredada EST-<Alumno.id> (se resuelve a su alumno por id). Si el alumno tiene monedero del portal
- * (MobWallet), saldo y límite salen de ahí (fuente única con la recarga del tutor).
+ * (Monedero, una sola cuenta de saldo por alumno), saldo y límite salen de ahí; el consumo de hoy se calcula con sus movimientos (MonederoMovimiento).
  */
 async function alumnoDeCodigo(code: string) {
   const c = code.trim().toUpperCase();
-  return prisma.alumno.findFirst({ where: { OR: [{ code: c }, { id: c.replace(/^EST-/, '') }] } });
+  return prisma.alumno.findFirst({ where: { OR: [{ code: c }, { id: c.replace(/^EST-/, '') }] }, include: SEC_INC });
 }
 /** Carnet de un código leído: por código exacto o, si no, por el alumno que ese código identifica. */
 const carnetDe = async (code: string): Promise<{ carnet: Carnet | null; alumno: Awaited<ReturnType<typeof alumnoDeCodigo>> }> => {
@@ -27,24 +29,28 @@ const carnetDe = async (code: string): Promise<{ carnet: Carnet | null; alumno: 
 };
 
 async function dtos(cs: Carnet[]): Promise<ComCarnetDto[]> {
-  const ws = new Map((await prisma.mobWallet.findMany({ where: { alumnoId: { in: cs.map(c => c.alumnoId) } } })).map(w => [w.alumnoId, w]));
+  const ids = cs.map(c => c.alumnoId);
+  const ws = new Map((await prisma.monedero.findMany({ where: { alumnoId: { in: ids } } })).map(w => [w.alumnoId, w]));
+  const gastado = await consumoHoy(ids);
+  // Las alergias del carnet son las del alumno (AlumnoAlergia); la pantalla del lector las muestra en mayúsculas.
+  const al = new Map<string, string[]>();
+  for (const x of await prisma.alumnoAlergia.findMany({ where: { alumnoId: { in: ids } }, include: { alergia: true }, orderBy: { alergiaId: 'asc' } })) al.set(x.alumnoId, [...(al.get(x.alumnoId) ?? []), x.alergia.nombre.toUpperCase()]);
   return cs.map(c => {
     const w = ws.get(c.alumnoId);
-    // Se guardan los nombres canónicos del catálogo de alergias; la pantalla del lector las muestra en mayúsculas.
-    return { code: c.code, name: c.name, grado: c.grado, plan: c.plan, ok: c.ok, allergies: (JSON.parse(c.allergies) as string[]).map(a => a.toUpperCase()), restr: c.restr, limit: w ? w.limite : c.limit, motivo: c.motivo, wallet: w ? w.saldo : c.wallet, spent: c.spent } satisfies ComCarnetDto;
+    return { code: c.code, name: c.name, grado: c.grado, plan: c.plan, ok: c.ok, allergies: al.get(c.alumnoId) ?? [], restr: c.restr, limit: w?.limite ?? 0, motivo: c.motivo, wallet: w?.saldo ?? 0, spent: gastado.get(c.alumnoId) ?? 0 } satisfies ComCarnetDto;
   });
 }
 const uno = async (c: Carnet) => (await dtos([c]))[0];
 
 /** Primer escaneo de un alumno sin carnet: se crea desde la ficha del alumno SIN plan activo (estado vacío honesto; el encargado lo habilita). */
 async function provisionar(a: NonNullable<Awaited<ReturnType<typeof alumnoDeCodigo>>>): Promise<Carnet> {
-  const w = await prisma.mobWallet.findUnique({ where: { alumnoId: a.id } });
-  const alg = a.alg.trim();
+  const alg = algDe(a);
+  await prisma.monedero.upsert({ where: { alumnoId: a.id }, update: {}, create: { alumnoId: a.id, saldo: 0, limite: 0 } }); // todo carnet tiene su monedero
   return prisma.comCarnet.create({
     data: {
-      code: a.code, alumnoId: a.id, name: `${a.nombres} ${a.apellidos}`, grado: `${a.grado} ${a.sec} · ${a.tanda}`, plan: 'Sin plan activo', ok: false,
-      allergies: JSON.stringify(alg ? alg.split(/[,;/]/).map(s => s.trim()).filter(Boolean) : []), restr: alg ? `Alergias registradas: ${alg}` : 'Ninguna registrada.',
-      limit: w?.limite ?? 0, motivo: 'Sin plan de comedor asignado · Referir a caja', wallet: w?.saldo ?? 0, spent: 0,
+      code: a.code, alumnoId: a.id, name: `${a.nombres} ${a.apellidos}`, grado: `${gst(a).grado} ${gst(a).sec} · ${gst(a).tanda}`, plan: 'Sin plan activo', ok: false,
+      restr: alg ? `Alergias registradas: ${alg}` : 'Ninguna registrada.',
+      motivo: 'Sin plan de comedor asignado · Referir a caja',
     },
   });
 }
@@ -75,16 +81,11 @@ const plugin: FastifyPluginAsync = async app => {
     const c = (await carnetDe(String(code ?? ''))).carnet;
     if (!c || !(precio > 0)) return reply.code(400).send({ error: 'Solicitud inválida' });
     const d = await uno(c);
-    if (c.spent + precio > d.limit) return reply.code(409).send({ error: `Límite diario excedido: ${fmt(c.spent)} de ${fmt(d.limit)}` });
+    if (d.spent + precio > d.limit) return reply.code(409).send({ error: `Límite diario excedido: ${fmt(d.spent)} de ${fmt(d.limit)}` });
     if (d.wallet < precio) return reply.code(409).send({ error: 'Saldo insuficiente en monedero' });
-    const aid = c.alumnoId;
-    if (await prisma.mobWallet.findUnique({ where: { alumnoId: aid } })) {
-      // Débito atómico sobre el monedero del tutor (misma fuente que ve el portal).
-      const r = await prisma.mobWallet.updateMany({ where: { alumnoId: aid, saldo: { gte: precio } }, data: { saldo: { decrement: precio } } });
-      if (!r.count) return reply.code(409).send({ error: 'Saldo insuficiente en monedero' });
-    }
-    const u = await prisma.comCarnet.update({ where: { code: c.code }, data: { spent: c.spent + precio, wallet: c.wallet - precio } });
-    return { carnet: await uno(u) };
+    // Débito atómico sobre el monedero único del alumno (misma cuenta que ve el portal del tutor) + movimiento de consumo.
+    try { await movimientoMonedero(prisma, c.alumnoId, 'Consumo', precio, 'Consumo en comedor'); } catch (e) { if (e instanceof SaldoInsuficiente) return reply.code(409).send({ error: e.message }); throw e; }
+    return { carnet: await uno(c) };
   });
 
   /** Habilita / ajusta el plan de un carnet: { plan?, ok?, motivo?, restr?, limit? }. */
@@ -98,9 +99,9 @@ const plugin: FastifyPluginAsync = async app => {
       data: {
         ...(b.plan !== undefined ? { plan: String(b.plan).slice(0, 80) } : {}), ...(b.aliPlanId !== undefined ? { aliPlanId: b.aliPlanId || null } : {}), ...(b.ok !== undefined ? { ok: !!b.ok } : {}),
         ...(b.motivo !== undefined ? { motivo: String(b.motivo).slice(0, 160) } : {}), ...(b.restr !== undefined ? { restr: String(b.restr).slice(0, 300) } : {}),
-        ...(b.limit !== undefined && Number(b.limit) >= 0 ? { limit: Number(b.limit) } : {}),
       },
     });
+    if (b.limit !== undefined && Number(b.limit) >= 0) await prisma.monedero.upsert({ where: { alumnoId: c.alumnoId }, update: { limite: Number(b.limit) }, create: { alumnoId: c.alumnoId, saldo: 0, limite: Number(b.limit) } });
     return { carnet: await uno(u) };
   });
 

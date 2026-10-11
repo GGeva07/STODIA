@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { Alumno, CobroCuenta, ScreenId } from '@stodia/shared';
-import { NAV, canAccess, useAccessVersion } from '../../lib/access';
+import { MENU_OCULTO, NAV, canAccess, useAccessVersion } from '../../lib/access';
 import { api } from '../../lib/api';
 import { autorizarSupervisor } from '../../lib/supervisor';
 import { useSession } from '../../lib/session';
@@ -202,7 +202,7 @@ export function UiProvider({ children }: { children: ReactNode }) {
 
   const items = useMemo<CmdItem[]>(() => {
     if (!user) return [];
-    const routes = NAV.flatMap(g => g.items.filter(([id]) => canAccess(user.rol, id) && lic.screenOn(id)).map(([id, label, icon]): CmdItem => ({ type: 'Ruta', label, sub: g.g, icon: 'ph ' + icon, go: () => nav('/' + id) })));
+    const routes = NAV.flatMap(g => g.items.filter(([id]) => !MENU_OCULTO.has(id) && canAccess(user.rol, id) && lic.screenOn(id)).map(([id, label, icon]): CmdItem => ({ type: 'Ruta', label, sub: g.g, icon: 'ph ' + icon, go: () => nav('/' + id) })));
     return routes.concat(Object.values(extra).flat());
   }, [user, lic, nav, extra, accessV]);
 

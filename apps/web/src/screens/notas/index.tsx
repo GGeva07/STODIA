@@ -8,6 +8,7 @@ import { errMsg } from '../../components/finanzas/fin';
 import { descargarPdf, runPrint, usePrintBusy } from '../../components/finanzas/print';
 import { docBoletines, docSabana } from '../../components/academico/printDocs';
 import { pill, type PillTone } from '../../components/system/styles';
+import { SL_MSG, useSoloLectura } from '../../lib/ciclo';
 
 const DENS = [{ k: '36', label: 'Compacta' }, { k: '48', label: 'Regular' }, { k: '60', label: 'Cómoda' }];
 const valid = (v: string) => v !== '' && !isNaN(Number(v)) && Number(v) >= 0 && Number(v) <= 100;
@@ -30,6 +31,7 @@ function calc(g: string[], comps: Comps) {
 
 export default function Screen() {
   const toast = useToast();
+  const sl = useSoloLectura(); // Fase 2D: ciclo que no es el activo = celdas solo lectura
   const pb = usePrintBusy();
   const [m, setM] = useState<AcadNotasMatriz | null>(null);
   const [pick, setPick] = useState<{ asig?: string; periodo?: string }>({});
@@ -67,6 +69,7 @@ export default function Screen() {
   }, [m, toast]);
 
   const setGrade = (r: number, c: number, raw: string) => {
+    if (sl) return;
     const v = raw.replace(/[^\d.]/g, '').slice(0, 5);
     setGrades(g => g.map((row, i) => (i === r ? row.map((x, j) => (j === c ? v : x)) : row)));
     if (v === '' || valid(v)) {
@@ -130,7 +133,7 @@ export default function Screen() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="m-0 text-xl font-semibold tracking-[-0.01em]">Matriz de Notas</h1>
-          <p className="mt-1 text-[13px] text-slate-600">{m.materia} · {m.seccion} · {m.nivel} · {m.periodoLabel} · Prof. {m.docente}</p>
+          <p className="mt-1 text-[13px] text-slate-600">{m.materia} · {m.seccion} · {m.nivel} · {m.periodoLabel} · Prof. {m.docente}{m.ciclo ? ` · Ciclo ${m.ciclo}` : ''}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <AsigSelect options={m.asignaciones} value={m.asigId} onChange={asig => setPick(p => ({ ...p, asig }))} periodos={m.periodos} periodo={m.periodo} onPeriodo={periodo => setPick(p => ({ ...p, periodo }))} />
@@ -188,12 +191,12 @@ export default function Screen() {
                     return (
                       <td key={ci} className="border-b border-l border-slate-100 p-0">
                         <input
-                          data-cell={key} value={v} inputMode="decimal" aria-label={`${row.nombre} ${m.comps[ci].k}`}
+                          data-cell={key} value={v} inputMode="decimal" readOnly={sl} title={sl ? SL_MSG : undefined} aria-label={`${row.nombre} ${m.comps[ci].k}`}
                           onChange={e => setGrade(r, ci, e.target.value)} onKeyDown={e => onKey(r, ci, e)}
                           onFocus={e => { orig.current = v; setFcell(key); const t = e.target; setTimeout(() => t.select(), 0); }}
                           onBlur={() => onBlur(r, ci)}
                           style={{ height: `${density}px` }}
-                          className={`block w-full border-0 px-2.5 text-right font-mono text-[13px] font-medium outline-none ${bad ? 'bg-red-50 text-[#B91C1C] shadow-[inset_0_0_0_2px_#DC2626] [animation:mxBlink_0.8s_ease-in-out_infinite]' : f ? 'bg-white text-ink shadow-[inset_0_0_0_2px_#2563EB]' : m.comps[ci].k === 'EX' ? 'bg-[#FAFBFD] text-ink' : 'bg-white text-ink'}`}
+                          className={`block w-full border-0 px-2.5 text-right font-mono text-[13px] font-medium outline-none ${sl ? 'cursor-not-allowed bg-slate-50 text-slate-700' : bad ? 'bg-red-50 text-[#B91C1C] shadow-[inset_0_0_0_2px_#DC2626] [animation:mxBlink_0.8s_ease-in-out_infinite]' : f ? 'bg-white text-ink shadow-[inset_0_0_0_2px_#2563EB]' : m.comps[ci].k === 'EX' ? 'bg-[#FAFBFD] text-ink' : 'bg-white text-ink'}`}
                         />
                       </td>
                     );

@@ -1,14 +1,18 @@
 /**
- * Núcleo del grupo académico dirigido por datos: asignaciones docente x sección x materia (sobre los catálogos del cliente),
- * nómina por sección (Alumno), rúbricas -> competencias, bloques por tanda y fecha/hora en la zona horaria del colegio.
+ * Núcleo del grupo académico dirigido por datos: asignaciones docente x sección x materia (sobre las tablas tipadas del cliente),
+ * nómina por sección (Alumno.seccionId), rúbricas -> competencias, bloques por tanda y fecha/hora en la zona horaria del colegio.
  */
 import type { FastifyRequest } from 'fastify';
 import type { AcadAsigOpt, AcadPeriodo } from '@stodia/shared';
 import { prisma } from '../db';
 import { cfgGet } from './sisconfig';
+import { leerTipo } from './catalogos-tipados';
+import { cicloIdActivo, esCicloActivo, periodoId, type CicloRow } from './ciclo';
 
 type Row = { id: string; estado: string } & Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-export interface Cat { grados: Map<string, Row>; secciones: Map<string, Row>; tandas: Map<string, Row>; aulas: Map<string, Row>; materias: Map<string, Row>; rubricas: Row[]; docentes: Map<string, Row> }
+/** Rúbrica ACTIVA de una materia (Materia.rubricaId) con sus criterios clasificados en competencias C1-C4 / examen EX. */
+export interface RubInfo { nombre: string; minimo: number; criterios: { nombre: string; peso: number; clave: string | null }[] }
+export interface Cat { grados: Map<string, Row>; secciones: Map<string, Row>; tandas: Map<string, Row>; aulas: Map<string, Row>; materias: Map<string, Row>; docentes: Map<string, Row>; rubricaDeMateria: Map<string, RubInfo> }
 
 export const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes'];
 const OFF = [0, 50, 100, 170, 220, 270]; // minutos desde la entrada de la tanda (6 bloques de 50 min con receso)
@@ -18,6 +22,8 @@ export const PERIODOS: AcadPeriodo[] = [
 ];
 export const periodoDe = (fecha: string) => { const m = Number(fecha.slice(5, 7)); return m >= 8 && m <= 10 ? '1' : m === 11 || m <= 1 ? '2' : m <= 4 ? '3' : '4'; };
 export const periodoLabel = (k: string) => PERIODOS.find(p => p.k === k)?.label ?? `Período ${k}`;
+/** PeriodoAcademico ('1'..'4' de la API) del ciclo ACTIVO (o del indicado). */
+export async function periodoIdActivo(k: string, cicloId?: string): Promise<string | null> { return periodoId(cicloId ?? await cicloIdActivo(), k); }
 export const norm = (s: unknown) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 
 // ---------- Fecha y hora del colegio ----------
@@ -34,73 +40,79 @@ export async function ahora() {
 }
 
 // ---------- Catálogos ----------
+/** Catálogos académicos desde las tablas TIPADAS (Fase 2A), con la forma histórica de fila que consumen los módulos. */
 export async function loadCat(): Promise<Cat> {
-  const rows = await prisma.catalogo.findMany({ where: { tipo: { in: ['grados', 'secciones', 'tandas', 'aulas', 'materias', 'rubricas', 'docentes'] } }, orderBy: { id: 'asc' } });
-  const map = (t: string) => new Map(rows.filter(r => r.tipo === t).map(r => { const d: Row = { ...JSON.parse(r.data), estado: r.estado }; return [d.id, d] as const; }));
-  return { grados: map('grados'), secciones: map('secciones'), tandas: map('tandas'), aulas: map('aulas'), materias: map('materias'), rubricas: [...map('rubricas').values()], docentes: map('docentes') };
+  const [grados, secciones, tandas, aulas, materias, docentes, rubs] = await Promise.all([
+    leerTipo('grados'), leerTipo('secciones'), leerTipo('tandas'), leerTipo('aulas'), leerTipo('materias'), leerTipo('docentes', { interno: true }),
+    prisma.rubrica.findMany({ where: { estado: 'Activo' }, include: { criterios: { orderBy: { orden: 'asc' } }, materias: { select: { id: true } } } }),
+  ]);
+  const map = (l: Row[]) => new Map(l.map(r => [r.id, r] as const));
+  const rubricaDeMateria = new Map<string, RubInfo>();
+  for (const r of rubs) for (const m of r.materias) rubricaDeMateria.set(m.id, { nombre: r.nombre, minimo: r.minimo, criterios: r.criterios.map(c => ({ nombre: c.nombre, peso: c.peso, clave: c.clave })) });
+  return { grados: map(grados), secciones: map(secciones), tandas: map(tandas), aulas: map(aulas), materias: map(materias), docentes: map(docentes), rubricaDeMateria };
 }
 export const seccionLabel = (c: Cat, s: Row) => `${c.grados.get(s.grado)?.grado ?? ''} ${s.seccion}`.trim();
 const activo = (r?: Row) => !!r && r.estado === 'Activo';
 
 // ---------- Asignaciones ----------
 export interface Asig {
-  id: string; explicita: boolean; docenteId: string; seccionId: string; materiaId: string; aulas: string[];
+  /** explicita = false cuando la materializó el perfil del docente (AcadAsignacion.heredada). aulaElegida = aula elegida entre `aulas`. */
+  id: string; explicita: boolean; docenteId: string; seccionId: string; materiaId: string; aulas: string[]; aulaElegida: string | null;
   docente: string; seccion: string; materia: string; tanda: string; nivel: string;
 }
 const shortName = (n: string) => { const p = n.trim().split(/\s+/); return p.length > 1 ? `${p[0][0]}. ${p[1]}` : n; };
 export const nombreCorto = shortName;
 
-/** Explícitas (AcadAsignacion) + las implícitas del catálogo Docentes (materias x secciones del docente) que no estén cubiertas. */
-export async function todasAsig(c: Cat): Promise<Asig[]> {
-  const exp = await prisma.acadAsignacion.findMany();
+/** Asignaciones (AcadAsignacion; las del perfil del docente ya están materializadas con heredada = true) de docentes, secciones y materias ACTIVOS. */
+export async function todasAsig(c: Cat, cicloId?: string): Promise<Asig[]> {
+  const rows = await prisma.acadAsignacion.findMany({ where: { cicloId: cicloId ?? await cicloIdActivo() }, include: { aulas: { orderBy: { orden: 'asc' } } } });
   const out: Asig[] = [];
-  const mk = (id: string, explicita: boolean, docenteId: string, seccionId: string, materiaId: string, aulas: string[]): Asig | null => {
-    const d = c.docentes.get(docenteId), s = c.secciones.get(seccionId), m = c.materias.get(materiaId);
-    if (!activo(d) || !activo(s) || !activo(m)) return null;
+  for (const r of rows) {
+    const d = c.docentes.get(r.docenteId), s = c.secciones.get(r.seccionId), m = c.materias.get(r.materiaId);
+    if (!activo(d) || !activo(s) || !activo(m)) continue;
     const g = c.grados.get(s!.grado);
-    return { id, explicita, docenteId, seccionId, materiaId, aulas, docente: d!.nombre, seccion: seccionLabel(c, s!), materia: m!.nombre, tanda: c.tandas.get(s!.tanda)?.nombre ?? '', nivel: g?.nivel ?? '' };
-  };
-  const cubiertas = new Set<string>();
-  for (const r of exp) { cubiertas.add(`${r.seccionId}|${r.materiaId}`); const a = mk(r.id, true, r.docenteId, r.seccionId, r.materiaId, JSON.parse(r.aulas)); if (a) out.push(a); }
-  for (const d of c.docentes.values()) {
-    for (const sid of (d.secciones as string[]) ?? []) for (const mid of (d.materias as string[]) ?? []) {
-      if (cubiertas.has(`${sid}|${mid}`)) continue;
-      const s = c.secciones.get(sid), m = c.materias.get(mid);
-      const gs = (m?.grados as string[] | undefined) ?? [];
-      if (!s || (gs.length && !gs.includes(s.grado))) continue;
-      cubiertas.add(`${sid}|${mid}`);
-      const a = mk(`i:${d.id}:${sid}:${mid}`, false, d.id, sid, mid, []); if (a) out.push(a);
-    }
+    out.push({ id: r.id, explicita: !r.heredada, docenteId: r.docenteId, seccionId: r.seccionId, materiaId: r.materiaId, aulas: r.aulas.map(a => a.aulaId), aulaElegida: r.aulaElegidaId, docente: d!.nombre, seccion: seccionLabel(c, s!), materia: m!.nombre, tanda: c.tandas.get(s!.tanda)?.nombre ?? '', nivel: g?.nivel ?? '' });
   }
   const ord = (a: Asig) => { const s = c.secciones.get(a.seccionId)!; return [Number(c.grados.get(s.grado)?.orden ?? 0), String(s.seccion), String(s.tanda), a.materia] as const; };
   return out.sort((x, y) => { const p = ord(x), q = ord(y); return p[0] - q[0] || p[1].localeCompare(q[1]) || p[2].localeCompare(q[2]) || p[3].localeCompare(q[3], 'es'); });
 }
 
 const esDireccion = (rol: string) => rol === 'Super Admin' || rol === 'Director Académico';
-export function docenteDe(c: Cat, u: { usuario: string; nombre: string }): Row | undefined {
-  return [...c.docentes.values()].find(d => norm(d.usuario) === norm(u.usuario)) ?? [...c.docentes.values()].find(d => norm(d.nombre) === norm(u.nombre));
+/** Docente del usuario: por la cuenta enlazada (Docente.userId), si no por el usuario propuesto y, como último recurso, por el nombre. */
+export function docenteDe(c: Cat, u: { sub?: string; usuario: string; nombre: string }): Row | undefined {
+  const ds = [...c.docentes.values()];
+  return (u.sub ? ds.find(d => d.userId === u.sub) : undefined) ?? ds.find(d => norm(d.usuario) === norm(u.usuario)) ?? ds.find(d => norm(d.nombre) === norm(u.nombre));
 }
 export const optDe = (a: Asig): AcadAsigOpt => ({ id: a.id, label: `${a.materia} · ${a.seccion}`, seccion: a.seccion, materia: a.materia, tanda: a.tanda, docente: a.docente });
 
 /** Asignaciones visibles para el usuario (Super Admin / Director: todas; Docente: las suyas) y la elegida (`asig`, por defecto la primera). */
-export async function elegirAsig(c: Cat, user: { usuario: string; nombre: string; rol: string }, asig?: string) {
-  const all = await todasAsig(c);
+export async function elegirAsig(c: Cat, user: { sub?: string; usuario: string; nombre: string; rol: string }, asig?: string, ciclo?: CicloRow) {
+  const all = await todasAsig(c, ciclo?.id);
   const doc = esDireccion(user.rol) ? null : docenteDe(c, user);
   const lista = esDireccion(user.rol) ? all : all.filter(a => doc && a.docenteId === doc.id);
-  const sel = asig ? lista.find(a => a.id === asig) : lista[0];
+  // Ciclo no activo sin asignacion pedida: la primera cuyo seccion tuvo alumnos matriculados en ese ciclo (no abrir en una seccion vacia).
+  const conAlumnos = !asig && ciclo && !esCicloActivo(ciclo) ? await seccionesConMatricula(ciclo) : null;
+  const sel = asig ? lista.find(a => a.id === asig) : (conAlumnos && lista.find(a => conAlumnos.has(a.seccionId))) || lista[0];
   return { lista, sel: sel ?? null, prohibida: !!asig && !sel, all };
 }
 
 // ---------- Nómina ----------
+/** Ids de seccion con al menos una Matricula en el ciclo (Fase 2D: para elegir la seccion por defecto de un ciclo no activo). */
+export async function seccionesConMatricula(ciclo: CicloRow): Promise<Set<string>> {
+  return new Set((await prisma.matricula.groupBy({ by: ['seccionId'], where: { cicloId: ciclo.id } })).map(m => m.seccionId));
+}
 export interface NomItem { key: string; nombre: string; alumnoId: string | null; rosterId: string | null }
-/** Alumnos activos de la sección (grado + sección + tanda) más la nómina heredada sin Alumno enlazado. `key` = rosterId si existe, si no `a:<alumnoId>`. */
-export async function nomina(c: Cat, seccionId: string): Promise<NomItem[]> {
-  const s = c.secciones.get(seccionId);
-  if (!s) return [];
-  const g = c.grados.get(s.grado)?.grado, t = c.tandas.get(s.tanda)?.nombre;
+/** Alumnos activos de la sección (Alumno.seccionId) más la nómina heredada sin Alumno enlazado. `key` = rosterId si existe, si no `a:<alumnoId>`. */
+export async function nomina(c: Cat, seccionId: string, ciclo?: CicloRow): Promise<NomItem[]> {
+  if (!c.secciones.has(seccionId)) return [];
+  if (ciclo && !esCicloActivo(ciclo)) {
+    // Ciclo cerrado / planificado (Fase 2D): la nomina es la de las MATRICULAS de ese ciclo en la seccion (la seccion de entonces, no la actual).
+    const mats = await prisma.matricula.findMany({ where: { cicloId: ciclo.id, seccionId }, include: { alumno: { select: { id: true, nombres: true, apellidos: true, rosters: { select: { id: true }, take: 1 } } } } });
+    return mats.map(m => ({ key: m.alumno.rosters[0]?.id ?? `a:${m.alumno.id}`, nombre: `${m.alumno.apellidos}, ${m.alumno.nombres}`, alumnoId: m.alumno.id, rosterId: m.alumno.rosters[0]?.id ?? null })).sort((x, y) => x.nombre.localeCompare(y.nombre, 'es'));
+  }
   const [alumnos, legado] = await Promise.all([
-    prisma.alumno.findMany({ where: { grado: g ?? '', sec: s.seccion, ...(t ? { tanda: t } : {}), estado: 'Activo' }, include: { rosters: { select: { id: true }, take: 1 } } }),
-    prisma.acadRoster.findMany({ where: { seccion: seccionId, alumnoId: null } }),
+    prisma.alumno.findMany({ where: { seccionId, estado: 'Activo' }, include: { rosters: { select: { id: true }, take: 1 } } }),
+    prisma.acadRoster.findMany({ where: { seccionId, alumnoId: null } }),
   ]);
   const items: NomItem[] = [
     ...alumnos.map(a => ({ key: a.rosters[0]?.id ?? `a:${a.id}`, nombre: `${a.apellidos}, ${a.nombres}`, alumnoId: a.id, rosterId: a.rosters[0]?.id ?? null })),
@@ -108,18 +120,17 @@ export async function nomina(c: Cat, seccionId: string): Promise<NomItem[]> {
   ];
   return items.sort((x, y) => x.nombre.localeCompare(y.nombre, 'es'));
 }
-/** Alumnos inscritos en la sección (no Retirados): se CALCULA desde Alumno (ya no hay contador guardado en el catálogo). */
-export async function inscritosSeccion(c: Cat, seccionId: string): Promise<number> {
-  const s = c.secciones.get(seccionId);
-  if (!s) return 0;
-  const g = c.grados.get(s.grado)?.grado, t = c.tandas.get(s.tanda)?.nombre;
-  return prisma.alumno.count({ where: { grado: g ?? '', sec: s.seccion, ...(t ? { tanda: t } : {}), estado: { not: 'Retirado' } } });
+/** Alumnos inscritos en la sección (no Retirados): se CALCULA desde Alumno (no hay contador guardado). */
+export async function inscritosSeccion(c: Cat, seccionId: string, ciclo?: CicloRow): Promise<number> {
+  if (!c.secciones.has(seccionId)) return 0;
+  if (ciclo && !esCicloActivo(ciclo)) return prisma.matricula.count({ where: { cicloId: ciclo.id, seccionId, estado: { not: 'Retirado' } } });
+  return prisma.alumno.count({ where: { seccionId, estado: { not: 'Retirado' } } });
 }
 /** Devuelve el id de AcadRoster del item, creándolo (enlazado al Alumno) si aún no existe. */
 export async function materializar(item: NomItem, seccionId: string): Promise<string> {
   if (item.rosterId) return item.rosterId;
   const id = `ra-${item.alumnoId}`;
-  const r = await prisma.acadRoster.upsert({ where: { id }, update: {}, create: { id, seccion: seccionId, orden: (await prisma.acadRoster.count()) + 1, nombre: item.nombre, alumnoId: item.alumnoId } });
+  const r = await prisma.acadRoster.upsert({ where: { id }, update: {}, create: { id, seccionId, orden: (await prisma.acadRoster.count()) + 1, nombre: item.nombre, alumnoId: item.alumnoId } });
   return r.id;
 }
 
@@ -149,18 +160,17 @@ const DEF_COMPS: Comp[] = [
   { k: 'C1', n: 'Razonamiento', w: 17.5, field: 'c1' }, { k: 'C2', n: 'Comunicación', w: 17.5, field: 'c2' }, { k: 'C3', n: 'Modelación', w: 17.5, field: 'c3' },
   { k: 'C4', n: 'Resolución', w: 17.5, field: 'c4' }, { k: 'EX', n: 'Examen', w: 30, field: 'ex' },
 ];
-/** Rúbrica activa del catálogo que cubre la materia; criterios "Nombre 17.5%, ..." -> hasta 4 competencias C1–C4 y el examen (EX). */
+/** Rúbrica activa de la materia (Materia.rubricaId); criterios -> hasta 4 competencias C1–C4 y el examen (EX), según las claves de RubricaCriterio. */
 export function rubricaDe(c: Cat, materiaId: string): { nombre: string; comps: Comp[]; minimo: number } {
-  const r = c.rubricas.find(x => x.estado === 'Activo' && ((x.materias as string[]) ?? []).includes(materiaId));
+  const r = c.rubricaDeMateria.get(materiaId);
   if (!r) return { nombre: 'Predeterminada', comps: DEF_COMPS, minimo: 70 };
-  const crit = String(r.crit ?? '').split(',').map(p => /^\s*(.+?)\s+([\d.]+)\s*%?\s*$/.exec(p)).filter((m): m is RegExpExecArray => !!m).map(m => ({ n: m[1], w: Number(m[2]) }));
-  const ex = crit.find(x => /^ex[aá]men/i.test(norm(x.n)) || /^ex[aá]men/i.test(x.n));
-  const resto = crit.filter(x => x !== ex).slice(0, 4);
-  if (!resto.length && !ex) return { nombre: String(r.nombre), comps: DEF_COMPS, minimo: Number(r.minimo) || 70 };
   const fields = ['c1', 'c2', 'c3', 'c4'] as const;
-  const comps: Comp[] = resto.map((x, i) => ({ k: `C${i + 1}`, n: x.n, w: x.w, field: fields[i] }));
-  if (ex) comps.push({ k: 'EX', n: 'Examen', w: ex.w, field: 'ex' });
-  return { nombre: String(r.nombre), comps, minimo: Number(r.minimo) || 70 };
+  const comps: Comp[] = [];
+  for (const x of r.criterios) if (x.clave && x.clave !== 'EX') comps.push({ k: x.clave, n: x.nombre, w: x.peso, field: fields[Number(x.clave.slice(1)) - 1] });
+  const ex = r.criterios.find(x => x.clave === 'EX');
+  if (ex) comps.push({ k: 'EX', n: 'Examen', w: ex.peso, field: 'ex' });
+  if (!comps.length) return { nombre: r.nombre, comps: DEF_COMPS, minimo: r.minimo || 70 };
+  return { nombre: r.nombre, comps, minimo: r.minimo || 70 };
 }
 
 // ---------- Horario / bloques ----------

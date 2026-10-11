@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ProductoFin, VentaReq, VentaRes } from '@stodia/shared';
 import { api } from '../../lib/api';
+import { rncValido } from '../../lib/rnc';
 import { useToastStack } from '../../components/useToastStack';
 import { errMsg, fmt } from '../../components/finanzas/fin';
 import { useWide } from '../../components/finanzas/useWide';
@@ -43,12 +44,12 @@ export default function Screen() {
   const sub = lines.reduce((a, x) => a + x.p.price * x.q, 0);
   const itbis = Math.round(lines.filter(x => x.p.tax).reduce((a, x) => a + x.p.price * x.q, 0) * itbisRate * 100) / 100;
   const total = sub + itbis;
-  const rncD = rnc.replace(/\D/g, ''), cf2 = doc === 'cf2';
+  const cf2 = doc === 'cf2';
   const recvN = parseFloat(recv) || 0, cash = pay === 'Efectivo';
 
   let msg = '', msgC = '#64748B', ok = true;
   if (!lines.length) { msg = 'El carrito está vacío'; ok = false; }
-  else if (cf2 && rncD.length !== 9) { msg = 'Crédito fiscal: RNC de 9 dígitos obligatorio'; msgC = '#B45309'; ok = false; }
+  else if (cf2 && !rncValido(rnc)) { msg = 'Crédito fiscal: RNC de 9 u 11 dígitos obligatorio'; msgC = '#B45309'; ok = false; }
   else if (cf2 && !razon.trim()) { msg = 'Indica la razón social'; msgC = '#B45309'; ok = false; }
   else if (cash && recv && recvN < total) { msg = 'El efectivo recibido no cubre el total (falta ' + fmt(total - recvN) + ')'; msgC = '#B91C1C'; ok = false; }
   else if (cash && recvN > total) { msg = 'Cambio a devolver ' + fmt(recvN - total); msgC = '#15803D'; }
@@ -148,7 +149,7 @@ export default function Screen() {
           </div>
           {cf2 && (
             <div className="flex flex-col gap-1.5">
-              <input value={rnc} onChange={e => setRnc(e.target.value)} placeholder="RNC (9 dígitos) *" className="h-[34px] rounded-md border px-2.5 font-mono text-[13px]" style={{ borderColor: rnc && rncD.length !== 9 ? '#F59E0B' : '#CBD5E1' }} />
+              <input value={rnc} onChange={e => setRnc(e.target.value)} placeholder="RNC (9 u 11 dígitos) *" className="h-[34px] rounded-md border px-2.5 font-mono text-[13px]" style={{ borderColor: rnc && !rncValido(rnc) ? '#F59E0B' : '#CBD5E1' }} />
               <input value={razon} onChange={e => setRazon(e.target.value)} placeholder="Razón social *" className="h-[34px] rounded-md border border-slate-300 px-2.5 text-[13px]" />
             </div>
           )}

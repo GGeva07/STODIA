@@ -1,25 +1,23 @@
 import { prisma } from './db';
-import { cfgGet } from './lib/sisconfig';
 
 // La autorización de supervisor vive en lib/supervisor.ts (PIN hasheado en SisConfig, tokens de un solo uso).
 export { supervisorOk } from './lib/supervisor';
 
-/** Primer valor de un contador que aún no existe: el `act`/`desde` de la secuencia fiscal configurada (SisConfig ncf); 1 en el resto. */
-async function seqStart(key: string): Promise<number> {
-  const pref = ({ ncf: 'B02', b01: 'B01', nc: 'B04' } as Record<string, string>)[key];
-  if (!pref) return 1;
-  const s = (await cfgGet('ncf')).find(x => x.pref === pref);
-  return s ? (s.act ?? s.desde) : 1;
-}
-
+const esSqlServer = () => (process.env.DATABASE_URL ?? '').startsWith('sqlserver:');
 /**
- * Devuelve el valor actual del contador y lo incrementa. Si el contador no existe arranca según la configuración de la instancia
- * (el seed de demo siembra rec=418, ncf=1881, etc.); el 2º parámetro se ignora y queda solo por compatibilidad.
+ * Devuelve el valor actual del contador y lo incrementa, de forma ATOMICA (un solo UPDATE ... OUTPUT / RETURNING: dos peticiones concurrentes nunca reciben el mismo valor).
+ * Si el contador no existe arranca en 1 (el seed de demo siembra rec=418, etc.). Los NCF/e-NCF ya NO usan contadores: ver lib/fiscal.asignarNcf (SecuenciaFiscal). El 2º parametro
+ * se ignora y queda solo por compatibilidad.
  */
-export async function nextSeq(key: string, _legacyStart?: number) {
-  const c = await prisma.finCounter.upsert({ where: { key }, update: {}, create: { key, value: await seqStart(key) } });
-  await prisma.finCounter.update({ where: { key }, data: { value: c.value + 1 } });
-  return c.value;
+export async function nextSeq(key: string, _legacyStart?: number): Promise<number> {
+  for (let intento = 0; intento < 4; intento++) {
+    const rows = esSqlServer()
+      ? await prisma.$queryRawUnsafe<{ value: number | bigint }[]>('UPDATE [dbo].[FinCounter] SET [value] = [value] + 1 OUTPUT deleted.[value] AS [value] WHERE [key] = @P1', key)
+      : await prisma.$queryRawUnsafe<{ value: number | bigint }[]>('UPDATE "FinCounter" SET "value" = "value" + 1 WHERE "key" = ? RETURNING "value" - 1 AS "value"', key);
+    if (rows.length) return Number(rows[0].value);
+    try { await prisma.finCounter.create({ data: { key, value: 1 } }); } catch { /* otra peticion lo creo primero: se reintenta el UPDATE */ }
+  }
+  throw new Error('No se pudo obtener el siguiente número del contador ' + key);
 }
 
 export const nowHM = () => new Date().toTimeString().slice(0, 5);

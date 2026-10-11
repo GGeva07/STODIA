@@ -9,39 +9,39 @@
  */
 import { config } from './config';
 import { prisma } from './db';
+import { categoriaProductoId, guardarTipo, leerTipo, sincronizarPlan, type Row, type TipoTipado } from './lib/catalogos-tipados';
+import { gradosDeRango, resolverRefs } from './lib/extras';
 
 type Rec = { id: string; estado?: string } & Record<string, unknown>;
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 const pad = (n: number, w = 2) => String(n).padStart(w, '0');
 
-/** Inserta solo los ids que faltan en Catalogo. Devuelve cuántos creó. */
-async function addCat(tipo: string, rows: Rec[]): Promise<number> {
-  const ids = rows.map(r => `${tipo}:${r.id}`);
-  const have = new Set((await prisma.catalogo.findMany({ where: { tipo }, select: { id: true } })).map(r => r.id));
-  const nuevos = rows.filter((_, i) => !have.has(ids[i])).map(r => ({ id: `${tipo}:${r.id}`, tipo, estado: r.estado ?? 'Activo', data: JSON.stringify({ ...r, estado: r.estado ?? 'Activo' }) }));
-  for (let i = 0; i < nuevos.length; i += 100) await prisma.catalogo.createMany({ data: nuevos.slice(i, i + 100) });
-  return nuevos.length;
+/** Inserta solo los ids que faltan en la tabla TIPADA del tipo. Devuelve cuántos creó. */
+async function addCat(tipo: TipoTipado, rows: Rec[]): Promise<number> {
+  const hay = new Set((await leerTipo(tipo)).map(r => r.id));
+  let n = 0;
+  for (const r of rows) if (!hay.has(r.id)) { await guardarTipo(tipo, { ...r, estado: r.estado ?? 'Activo' } as Row, null); n++; }
+  return n;
 }
-const leer = async (tipo: string) => (await prisma.catalogo.findMany({ where: { tipo } })).map(r => ({ ...JSON.parse(r.data), estado: r.estado }) as Rec);
+const leer = async (tipo: TipoTipado) => (await leerTipo(tipo)) as Rec[];
 
 /**
- * Los usuarios de login deben ser unicos entre docentes y empleados (y frente a User): ambos catalogos comparten la tabla de usuarios.
- * Renombra SOLO los registros creados por este seed cuyo usuario choca con uno anterior (los originales de la demo d1-d10 / e1-e4 conservan el suyo):
- * usr_<inicial><apellido>, con sufijo numerico si aun choca. Idempotente.
+ * Los usuarios de login deben ser unicos entre docentes y empleados (y frente a User): ambos comparten la tabla de usuarios (indices unicos filtrados).
+ * Renombra SOLO los registros que este seed va a crear cuyo usuario choca con uno ya usado (los originales de la demo d1-d10 / e1-e4 conservan el suyo):
+ * usr_<inicial><apellido>, con sufijo numerico si aun choca. Devuelve cuantos renombro.
  */
-async function unificarUsuarios(): Promise<number> {
-  const orig = /^(d\d+|e[1-4])$/, propio = /^(dc\d+|e(?:[5-9]|1[0-3]))$/;
-  const filas = [...(await leer('docentes')).map(r => ({ tipo: 'docentes', r })), ...(await leer('staff')).map(r => ({ tipo: 'staff', r }))];
-  const orden = [...filas.filter(x => orig.test(x.r.id)), ...filas.filter(x => !orig.test(x.r.id))];
-  const usados = new Set((await prisma.user.findMany({ select: { usuario: true } })).map(u => u.usuario));
+async function usuariosLibres(...listas: Rec[][]): Promise<number> {
+  const usados = new Set([
+    ...(await prisma.user.findMany({ select: { usuario: true } })).map(u => u.usuario),
+    ...[...(await leerTipo('docentes')), ...(await leerTipo('staff'))].map(r => String(r.usuario ?? '')).filter(Boolean),
+  ]);
   let n = 0;
-  for (const { tipo, r } of orden) {
+  for (const r of listas.flat()) {
     let u = String(r.usuario ?? '');
-    if (propio.test(r.id) && !r.password && usados.has(u)) {
+    if (usados.has(u)) {
       const p = String(r.nombre).split(' '), base = 'usr_' + norm(p[0])[0] + norm(p[1]);
       u = base; for (let i = 2; usados.has(u); i++) u = base + i;
-      await prisma.catalogo.update({ where: { id: `${tipo}:${r.id}` }, data: { data: JSON.stringify({ ...r, usuario: u }) } });
-      n++;
+      r.usuario = u; n++;
     }
     usados.add(u);
   }
@@ -141,30 +141,30 @@ const STAFF: Rec[] = [
   ['e13', 'Cristina Almánzar Peña', 'Secretaria de admisiones', 'Cajero', ''],
 ].map(([id, nombre, cargo, rol, caja]) => ({ id: id as string, nombre, cargo, usuario: 'usr_' + norm((nombre as string).split(' ')[1]), rol, caja }));
 
-const CAJAS: Rec[] = [
+export const CAJAS: Rec[] = [
   { id: 'c4', codigo: 'Caja 04', ubic: 'Secretaría de admisiones', ncf: 'B02 · Consumo', estado: 'Activa' },
   { id: 'c5', codigo: 'Caja 05', ubic: 'Cafetería y comedor', ncf: 'B02 · Consumo', estado: 'Activa' },
   { id: 'c6', codigo: 'Caja 06', ubic: 'Tesorería · facturación a empresas', ncf: 'B01 · Crédito fiscal', estado: 'Activa' },
   { id: 'c7', codigo: 'Caja 07', ubic: 'Librería y uniformes', ncf: 'B02 · Consumo', estado: 'Activa' },
   { id: 'c8', codigo: 'Caja 08', ubic: 'Eventos y actividades (temporal)', ncf: 'B02 · Consumo', estado: 'Inactiva' },
 ];
-const RUTAS: Rec[] = [
+export const RUTAS: Rec[] = [
   ['r4', 'Zona D', 'Los Prados · Cacicazgos · Paraíso', 'Domingo Ventura', 'AB-0272', 28, 3200], ['r5', 'Zona E', 'Herrera · Las Palmas · Manoguayabo', 'Eddy Montero', 'AB-0285', 30, 3400],
   ['r6', 'Zona F', 'Los Alcarrizos · Pantoja', 'Nelson Báez', 'AB-0291', 30, 3800], ['r7', 'Zona G', 'Villa Mella · Sabana Perdida', 'Santo Guzmán', 'AB-0307', 24, 4000],
   ['r8', 'Zona H', 'Autopista San Isidro · Ciudad Juan Bosch', 'Pedro Luciano', 'AB-0318', 24, 4200],
 ].map(([id, nombre, sectores, chofer, ficha, asientos, tarifa]) => ({ id: id as string, nombre, sectores, chofer, ficha, asientos, tarifa }));
 
-const BECAS: Rec[] = [
+export const BECAS: Rec[] = [
   ['excelencia', 'Beca Excelencia Académica (Cuadro de Honor)', 30, true], ['deportista', 'Beca Mérito Deportivo', 20, true], ['socioeconomica', 'Beca Socioeconómica', 35, true],
   ['orfandad', 'Beca Orfandad', 50, true], ['hermanos3', 'Plan Tres Hermanos', 15, false], ['convenio', 'Convenio Institucional', 10, false], ['pastoral', 'Beca Pastoral', 25, true],
 ].map(([id, nombre, pct, aprobacion]) => ({ id: id as string, nombre, pct, aprobacion }));
-const CONCEPTOS_BECA: Rec[] = ['Materiales', 'Uniformes', 'Actividades extracurriculares', 'Certificaciones'].map((nombre, i) => ({ id: `cb${i + 5}`, nombre }));
-const METODOS: Rec[] = [
+export const CONCEPTOS_BECA: Rec[] = ['Materiales', 'Uniformes', 'Actividades extracurriculares', 'Certificaciones'].map((nombre, i) => ({ id: `cb${i + 5}`, nombre }));
+export const METODOS: Rec[] = [
   { id: 'm6', nombre: 'Depósito bancario', ref: 'Ref. depósito' }, { id: 'm7', nombre: 'Pago móvil / billetera', ref: 'Ref. transacción' }, { id: 'm8', nombre: 'Convenio empresarial', ref: 'No. convenio' },
 ];
-const DIETAS: Rec[] = ['Sin huevo', 'Sin mariscos', 'Baja en azúcar (diabético)', 'Hipocalórica'].map((nombre, i) => ({ id: pad(i + 5), nombre }));
+export const DIETAS: Rec[] = ['Sin huevo', 'Sin mariscos', 'Baja en azúcar (diabético)', 'Hipocalórica'].map((nombre, i) => ({ id: pad(i + 5), nombre }));
 // Penicilina y Polen las usan los alumnos de la demo (Alumno.alg): el catalogo debe tenerlas para que la referencia por nombre sea valida.
-const ALERGIAS: Rec[] = ['Penicilina', 'Polen', 'Soya', 'Pescado', 'Trigo', 'Fresas', 'Chocolate', 'Sulfitos'].map((nombre, i) => ({ id: pad(i + 7), nombre }));
+export const ALERGIAS: Rec[] = ['Penicilina', 'Polen', 'Soya', 'Pescado', 'Trigo', 'Fresas', 'Chocolate', 'Sulfitos'].map((nombre, i) => ({ id: pad(i + 7), nombre }));
 
 // Conceptos cobrables (FinProducto: [id, código, nombre, categoría, precio, ITBIS, stock, icono]).
 const PRODUCTOS: [string, string, string, string, number, boolean, number | null, string][] = [
@@ -201,15 +201,11 @@ export async function seedCatalogos(): Promise<void> {
   rep.materias = await addCat('materias', MATERIAS);
   rep.rubricas = await addCat('rubricas', RUBRICAS.map(r => ({ ...r, estado: 'Activo' })));
 
-  // Secciones: A/B/C por grado y tanda. Se omite cualquier combinación (grado, letra, tanda) que ya exista como sección o que ya tenga alumnos
-  // (la nómina se cruza por nombre de grado + letra + tanda; '1ro' existe en Primaria y Secundaria).
+  // Secciones: A/B/C por grado y tanda. Se omite cualquier combinación (grado, letra, tanda) que ya exista como sección (los alumnos apuntan a su sección por FK).
   const grados = new Map((await leer('grados')).map(g => [g.id, g]));
   const tandas = new Map((await leer('tandas')).map(t => [t.id, t]));
   const secExist = await leer('secciones');
   const ocupadas = new Set(secExist.map(s => `${s.grado}|${String(s.seccion).toUpperCase()}|${s.tanda}`));
-  for (const a of await prisma.alumno.findMany({ select: { grado: true, sec: true, tanda: true } })) {
-    for (const g of grados.values()) if (g.grado === a.grado) for (const t of tandas.values()) if (t.nombre === a.tanda) ocupadas.add(`${g.id}|${a.sec.toUpperCase()}|${t.id}`);
-  }
   const nuevasSec: Rec[] = [];
   const aulasInicial = AULAS.slice(0, 6).map(a => a.id), aulasGrandes = AULAS.slice(6, 28).map(a => a.id);
   let ai = 0, ag = 0;
@@ -243,19 +239,15 @@ export async function seedCatalogos(): Promise<void> {
       usuario: `usr_${norm(partes[1])}`, rol: 'Docente', materias, secciones: mine.map(s => s.id as string),
     };
   });
+  const staffRows: Rec[] = STAFF.map((s, i) => ({ ...s, tel: `809-555-01${pad(60 + i * 3)}`, email: `${norm(String(s.nombre).split(' ')[0])}.${norm(String(s.nombre).split(' ')[1])}@example.do` }));
+  rep.usuariosRenombrados = await usuariosLibres(docs, staffRows);
   rep.docentes = await addCat('docentes', docs);
-  rep.staff = await addCat('staff', STAFF.map((s, i) => ({ ...s, tel: `809-555-01${pad(60 + i * 3)}`, email: `${norm(String(s.nombre).split(' ')[0])}.${norm(String(s.nombre).split(' ')[1])}@example.do` })));
-  rep.usuariosRenombrados = await unificarUsuarios();
-  rep.cajas = await addCat('cajas', CAJAS);
-  rep.rutas = await addCat('rutas', RUTAS);
-  rep.becas = await addCat('becas', BECAS);
-  rep.conceptosBeca = await addCat('conceptosBeca', CONCEPTOS_BECA);
-  rep.metodosPago = await addCat('metodosPago', METODOS);
-  rep.dietas = await addCat('dietas', DIETAS);
-  rep.alergias = await addCat('alergias', ALERGIAS);
+  rep.staff = await addCat('staff', staffRows);
+  // cajas, rutas, becas, conceptos, medios de pago, dietas y alergias de la demo los siembra seed-estructura (antes que los alumnos: son FK).
 
   const hayProd = new Set((await prisma.finProducto.findMany({ select: { id: true, code: true } })).flatMap(p => [p.id, p.code]));
-  const prods = PRODUCTOS.filter(p => !hayProd.has(p[0]) && !hayProd.has(p[1])).map(([id, code, name, cat, price, tax, stock, icon]) => ({ id, code, name, cat, price, tax, stock, icon }));
+  const prods = [];
+  for (const [id, code, name, cat, price, tax, stock, icon] of PRODUCTOS.filter(p => !hayProd.has(p[0]) && !hayProd.has(p[1]))) prods.push({ id, code, name, categoriaId: await categoriaProductoId(cat), price, tax, stock, icon });
   if (prods.length) await prisma.finProducto.createMany({ data: prods });
   rep.conceptosCobrables = prods.length;
   const hayExt = new Set((await prisma.acadExtra.findMany({ select: { id: true, name: true } })).flatMap(e => [e.id, norm(e.name)]));
@@ -264,8 +256,13 @@ export async function seedCatalogos(): Promise<void> {
     id: `EXT-${pad(ult + i + 1, 3)}`, name: String(e[0]), cat: String(e[1]), kind: String(e[2]), instructor: String(e[3]), lugar: String(e[4]), dias: String(e[5]), hora: String(e[6]), grados: String(e[7]),
     cupo: Number(e[8]), inscritos: Number(e[9]), costo: Number(e[10]), ini: String(e[11] ?? ''), sem: Number(e[12] ?? 0), estado: 'Abierta',
   }));
-  if (ext.length) await prisma.acadExtra.createMany({ data: ext });
+  for (const { grados: rango, instructor, lugar, ...x } of ext) {
+    const gs = await gradosDeRango(prisma, rango), refs = await resolverRefs(prisma, instructor, lugar);
+    if (!gs) throw new Error('Grados de la actividad no reconocidos: ' + rango);
+    await prisma.acadExtra.create({ data: { ...x, instructor, lugar, docenteId: refs.docenteId, aulaId: refs.aulaId, grados: { create: gs.map(gradoId => ({ gradoId })) } } });
+  }
   rep.actividades = ext.length;
+  await sincronizarPlan(prisma);
   console.log(`seed catálogos ok en ${((Date.now() - t0) / 1000).toFixed(1)}s · nuevos registros:`, rep, `· asignaciones nuevas: ${par.size}`);
 }
 

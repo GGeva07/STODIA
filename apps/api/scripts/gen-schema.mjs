@@ -17,6 +17,8 @@ if (!['sqlserver', 'sqlite'].includes(motor)) {
   process.exit(2);
 }
 const inplace = flags.includes('--inplace');
+// GUARDIA: --inplace sobrescribe la fuente de verdad (flavor SQL Server). Solo en imagenes Docker / CI efimeros (STODIA_DOCKER_BUILD=1) o sobre una COPIA fuera del repo.
+if (inplace && process.env.STODIA_DOCKER_BUILD !== '1') { console.error('--inplace solo se permite con STODIA_DOCKER_BUILD=1 (Dockerfile / CI efimero). Nunca sobre el repo real: usa el modo normal (escribe prisma/schema.sqlite.prisma) o --out <ruta>.'); process.exit(2); }
 const iOut = flags.indexOf('--out');
 const destino = iOut >= 0 ? resolve(process.cwd(), flags[iOut + 1]) : inplace ? fuente : resolve(raiz, motor === 'sqlite' ? 'prisma/schema.sqlite.prisma' : 'prisma/schema.prisma');
 

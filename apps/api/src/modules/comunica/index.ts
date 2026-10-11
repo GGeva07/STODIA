@@ -5,21 +5,26 @@ import { cuentaDerivada, saldoVencidoPorAlumno } from '../../lib/cxc';
 import { audit } from '../../lib/audit';
 import { canalesGet, canalesSet, correoListo, proveedorDe, verificarCorreo } from '../../lib/canales';
 import { config } from '../../config';
+import { cicloReq, esCicloActivo, type CicloRow } from '../../lib/ciclo';
 
 const CANALES = ['Correo', 'Push', 'SMS', 'WhatsApp'];
 const MAX_INTENTOS = 3;
 const fmt = (n: number) => 'RD$ ' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** Tutores destinatarios (uno por tutor aunque tenga varios hijos) con sus alumnos y saldo vencido. */
-async function resolver(f: CmnFiltro) {
-  const todos = await prisma.alumno.findMany({
-    where: { estado: 'Activo', ...(f.grado ? { grado: f.grado } : {}), ...(f.tanda ? { tanda: f.tanda } : {}) },
-    include: { tutor: true }, orderBy: { id: 'asc' },
-  });
+async function resolver(f: CmnFiltro, ciclo?: CicloRow) {
+  const otro = !!ciclo && !esCicloActivo(ciclo); // Fase 2D: destinatarios de un ciclo NO activo = alumnos MATRICULADOS entonces (seccion de ese ciclo)
+  const secFiltro = f.grado || f.tanda ? { ...(f.grado ? { grado: { nombre: f.grado } } : {}), ...(f.tanda ? { tanda: { nombre: f.tanda } } : {}) } : null;
+  const todos = otro
+    ? (await prisma.matricula.findMany({ where: { cicloId: ciclo!.id, ...(secFiltro ? { seccion: secFiltro } : {}) }, include: { alumno: { include: { tutor: true } } }, orderBy: { alumnoId: 'asc' } })).map(m => m.alumno)
+    : await prisma.alumno.findMany({
+      where: { estado: 'Activo', ...(secFiltro ? { seccion: secFiltro } : {}) },
+      include: { tutor: true }, orderBy: { id: 'asc' },
+    });
   // «En mora / Al día» se deriva de la CxC (regla única), no de la columna guardada.
-  const cuentaDe = f.cuenta ? await cuentaDerivada() : null;
+  const cuentaDe = f.cuenta ? await cuentaDerivada(otro ? ciclo!.id : undefined) : null;
   const alumnos = cuentaDe ? todos.filter(a => cuentaDe(a.id) === f.cuenta) : todos;
-  const saldos = await saldoVencidoPorAlumno(alumnos.map(a => a.id));
+  const saldos = await saldoVencidoPorAlumno(alumnos.map(a => a.id), otro ? ciclo!.id : undefined);
   const por = new Map<string, { id: string; nombre: string; email: string; alumnos: string[]; saldo: number }>();
   for (const a of alumnos) {
     if (!a.tutor?.nombre) continue;
@@ -30,8 +35,8 @@ async function resolver(f: CmnFiltro) {
   return { alumnos, saldos, tutores: [...por.values()] };
 }
 
-async function destinatarios(f: CmnFiltro): Promise<CmnDestinatarios> {
-  const { alumnos, saldos, tutores } = await resolver(f);
+async function destinatarios(f: CmnFiltro, ciclo?: CicloRow): Promise<CmnDestinatarios> {
+  const { alumnos, saldos, tutores } = await resolver(f, ciclo);
   const a = alumnos.find(x => x.tutor?.nombre);
   const nombres = [...new Set(tutores.map(t => t.nombre))];
   return { tutores: nombres.slice(0, 20), total: nombres.length, muestra: a ? { tutor: a.tutor!.nombre, alumno: a.nombres, saldo: saldos[a.id] ?? 0 } : null };
@@ -72,7 +77,7 @@ const plugin: FastifyPluginAsync = async app => {
   const sa = { onRequest: [app.authenticate, app.requireRole('Super Admin')] };
 
   app.get<{ Querystring: Partial<CmnFiltro> }>('/destinatarios', guard, async req =>
-    destinatarios({ grado: req.query.grado ?? '', tanda: req.query.tanda ?? '', cuenta: req.query.cuenta ?? '' }));
+    destinatarios({ grado: req.query.grado ?? '', tanda: req.query.tanda ?? '', cuenta: req.query.cuenta ?? '' }, await cicloReq(req)));
 
   app.post<{ Body: CmnEnviarReq }>('/enviar', guard, async (req, reply): Promise<CmnEnviarRes | void> => {
     const { canales, asunto, mensaje } = req.body;

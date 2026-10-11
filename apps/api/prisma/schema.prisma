@@ -17,8 +17,18 @@ datasource db {
 //  - SetNull en logs/historial que sobreviven a su referencia (ComLectura.alumnoId, CmnMensaje.tutorId, Tutor.userId).
 //  - El grafo de Cascade/SetNull es un bosque: ningun modelo se alcanza por dos caminos en cascada (error 1785 de SQL Server).
 //  - UNIQUE sobre columnas opcionales = indices FILTRADOS creados por src/lib/db-indices.ts (SQL Server solo admite un NULL en un UNIQUE normal).
-//  - Las referencias a la tabla generica Catalogo (grado/seccion/tanda, materia, docente, aula, caja, beca, metodo de pago...) siguen
-//    siendo logicas hasta la Fase 2 (catalogos tipados); aqui se verifican con scripts/fk-auditar.ts.
+//  - FASE 2A (nucleo academico): grados, tandas, aulas, secciones, materias, rubricas, docentes y empleados ya son TABLAS TIPADAS con los
+//    mismos ids de texto que tenian en Catalogo; Alumno, nomina, notas, asignaciones, horarios y extracurriculares apuntan a ellas con FK real.
+//  - FASE 2B (resto de catalogos): cajas, rutas, tipos y conceptos de beca, metodos de pago, comidas, dietas y alergias tambien son TABLAS TIPADAS
+//    (mismos ids de texto); Catalogo queda VACIA (se retira en la Fase 2C). Las banderas posicionales y las listas en texto pasan a tablas puente:
+//    AliPlanComida / AliPlanDieta / AlumnoAlergia / AliMenuAlergia / FinBecaConcepto.
+//  - FASE 2C (cierre de la base): Ciclo lectivo como ENTIDAD (Ciclo + PeriodoAcademico + Matricula), historial real del alumno por ciclo,
+//    TutorAlumno (N:M con rol y vigencia), FinReciboItem / FinReciboPago (reemplazan los JSON del recibo), ServicioAlumno (4 FK de catalogo con CHECK),
+//    Monedero unico (+ movimientos), FinPlanTanda, TipoDocumento; Catalogo se ELIMINA. Todo lo que es "por ciclo" lleva cicloId (FK a Ciclo).
+//    NO son por ciclo: catalogos (grados, materias, aulas...), usuarios, licencia/configuracion, auditoria, planes de pago (plantillas), comedor
+//    (AliPlan/AliMenu/ComCarnet), lecturas del lector (ComLectura), monedero, accesos del portal y la ficha del expediente (PersExpediente).
+//  - Puentes puros (DocenteMateria, MateriaGrado, SeccionMateria, DocenteSeccion, AsignacionAula, AcadExtraGrado, RubricaCriterio): Cascade solo
+//    hacia el padre "dueño" (docente, materia, seccion, asignacion, extra, rubrica); hacia el catalogo referenciado NoAction.
 // =====================================================================================================================
 
 model User {
@@ -34,6 +44,13 @@ model User {
   tutores      Tutor[]
   mensajes     CmnMensaje[]
   recibos      FinRecibo[]
+  /// Notas de credito / debito emitidas por este usuario.
+  notas        NotaFiscal[]
+  // Docente / Empleado con esta cuenta (a lo sumo uno de cada tipo: indices unicos filtrados UX_Docente_userId / UX_Empleado_userId).
+  docentes     Docente[]
+  empleados    Empleado[]
+  /// Pagos del portal que esta cuenta resolvio (confirmar / rechazar).
+  intencionesResueltas MobPagoIntencion[]
 }
 
 model Tutor {
@@ -46,6 +63,8 @@ model Tutor {
   tel        String
   email      String?
   rnc        String?
+  /// Comprobante fiscal habitual de la cuenta (tipo LOGICO: CREDITO_FISCAL | CONSUMO | GUBERNAMENTAL | REGIMEN_ESPECIAL); NULL = Consumo. Preselecciona el tipo en Cobros.
+  comprobanteHabitual String?
   /// Cuenta de login del portal (User.id). NULL = sin acceso al portal.
   userId     String?  @db.NVarChar(100)
   user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
@@ -56,8 +75,11 @@ model Tutor {
   alumnosLegal Alumno[] @relation("TutorLegal")
   cobros       FinCobroItem[]
   recibos      FinRecibo[]
+  notas        NotaFiscal[]
   intenciones  MobPagoIntencion[]
   mensajes     CmnMensaje[]
+  /// Vinculos N:M con alumnos (rol + vigencia): la FUENTE de verdad. Alumno.tutorId / tutorLegalId son su copia vigente (se mantienen con lib/tutor-alumno).
+  vinculos     TutorAlumno[]
 
   @@index([userId])
 }
@@ -68,28 +90,30 @@ model Alumno {
   nombres   String
   apellidos String
   fnac      String
-  grado     String
-  sec       String
-  tanda     String
+  /// Seccion (grado + letra + tanda) del alumno: reemplaza el trio de texto grado/sec/tanda (ambiguo entre niveles). Se muestran calculados.
+  /// Seccion del ciclo ACTIVO (copia de Matricula del ciclo activo, que es la fuente de verdad del historial). Se mantiene con lib/matricula.
+  seccionId String  @db.NVarChar(100)
+  seccion   Seccion @relation(fields: [seccionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   cuenta    String
   estado    String
-  alg       String  @default("")
   dir       String  @default("")
   tel       String  @default("")
-  /// Tutor FINANCIERO (obligatorio: un alumno no puede quedar sin responsable de pago).
+  /// Tutor FINANCIERO VIGENTE (obligatorio: un alumno no puede quedar sin responsable de pago). Copia de TutorAlumno (rol Financiero, vigente).
   tutorId   String  @db.NVarChar(100)
   tutor     Tutor   @relation("TutorFinanciero", fields: [tutorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  /// Tutor LEGAL (opcional; igual al financiero cuando son la misma persona).
+  /// Tutor LEGAL VIGENTE (opcional; igual al financiero cuando son la misma persona). Copia de TutorAlumno (rol Legal, vigente).
   tutorLegalId String? @db.NVarChar(100)
   tutorLegal   Tutor?  @relation("TutorLegal", fields: [tutorLegalId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   // 1 Alumno : 0..1 AcadRoster. Unicidad de AcadRoster.alumnoId = indice unico FILTRADO (WHERE alumnoId IS NOT NULL) creado por src/lib/db-indices.ts.
   rosters       AcadRoster[]
   expediente    PersExpediente?
   documentos    PersDocumento[]
-  servicios     PersServicio[]
+  servicios     ServicioAlumno[]
   inscripciones PersInscripcion[]
   contratos     Contrato[]
-  wallet        MobWallet?
+  monedero      Monedero?
+  matriculas    Matricula[]
+  vinculos      TutorAlumno[]
   notasMov      MobNota[]
   accesos       MobAcceso[]
   intenciones   MobPagoIntencion[]
@@ -97,38 +121,56 @@ model Alumno {
   lecturas      ComLectura[]
   cobros        FinCobroItem[]
   becas         FinBeca[]
+  /// Alergias del alumno (N:M con el catalogo Alergia): reemplaza el texto CSV Alumno.alg, que el DTO sigue mostrando como «Maní, Lactosa».
+  alergias      AlumnoAlergia[]
 
   @@index([tutorId])
   @@index([tutorLegalId])
-}
-
-// Catálogos maestros genéricos (CAT_DEF): `data` = JSON serializado del registro. Se normalizan en la Fase 2.
-model Catalogo {
-  id     String @id @db.NVarChar(100)
-  tipo   String @db.NVarChar(100)
-  data   String @db.NVarChar(Max)
-  estado String @default("Activo")
-
-  @@index([tipo])
+  @@index([seccionId])
 }
 
 // ---- Móvil (portal tutor + pase de lista) ----
-// Notas de demostración del portal cuando no hay AcadNota. `materia` = nombre de la materia del catálogo (FK en Fase 2).
+// Notas de demostración del portal cuando no hay AcadNota.
 model MobNota {
-  id       String @id @db.NVarChar(100)
-  alumnoId String @db.NVarChar(100)
-  alumno   Alumno @relation(fields: [alumnoId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  materia  String @db.NVarChar(100)
-  valor    Float
+  id        String  @id @db.NVarChar(100)
+  alumnoId  String  @db.NVarChar(100)
+  alumno    Alumno  @relation(fields: [alumnoId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  materiaId String  @db.NVarChar(100)
+  materia   Materia @relation(fields: [materiaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  valor     Float
 
   @@index([alumnoId])
+  @@index([materiaId])
 }
 
-model MobWallet {
-  alumnoId String @id @db.NVarChar(100)
-  alumno   Alumno @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  saldo    Float
-  limite   Float
+/// Monedero virtual del comedor: UNA sola cuenta de saldo por alumno (antes MobWallet + ComCarnet.wallet/limit/spent, dos fuentes). Cada recarga y cada
+/// consumo es una fila de MonederoMovimiento; el consumo del dia se calcula con ellas.
+model Monedero {
+  alumnoId    String @id @db.NVarChar(100)
+  alumno      Alumno @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  saldo       Float
+  /// Limite diario de consumo fijado por el tutor.
+  limite      Float
+  movimientos MonederoMovimiento[]
+}
+
+model MonederoMovimiento {
+  id           Int      @id @default(autoincrement())
+  alumnoId     String   @db.NVarChar(100)
+  monedero     Monedero @relation(fields: [alumnoId], references: [alumnoId], onDelete: NoAction, onUpdate: NoAction)
+  /// Recarga | Consumo | Ajuste.
+  tipo         String   @db.NVarChar(20)
+  /// Con signo: positivo = entra saldo (Recarga), negativo = sale (Consumo).
+  monto        Float
+  saldoDespues Float
+  concepto     String   @default("")
+  /// Pago del portal que origino la recarga (NULL = recarga en caja / consumo).
+  intencionId  String?  @db.NVarChar(100)
+  intencion    MobPagoIntencion? @relation(fields: [intencionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creado       DateTime @default(now())
+
+  @@index([alumnoId, creado])
+  @@index([intencionId])
 }
 
 model MobAcceso {
@@ -147,7 +189,6 @@ model AliPlan {
   id       String @id @db.NVarChar(100)
   name     String
   modelo   String // sub | wal
-  meals    String // JSON boolean[] (posicional respecto del catalogo comidas, orden por id)
   precio   Float?
   freq     String
   dias     String
@@ -156,21 +197,25 @@ model AliPlan {
   limite   Float?
   canal    String
   saldo    String
-  diets    String // JSON boolean[] (posicional respecto del catalogo dietas, orden por id; lib/ali-catalogos.alinearPlanes lo mantiene alineado)
   estado   String @default("Activo")
   // «Inscritos» = COUNT(ComCarnet.aliPlanId): se calcula, ya no se guarda.
   carnets  ComCarnet[]
+  servicios ServicioAlumno[]
+  /// Comidas y dietas incluidas (reemplazan las banderas posicionales meals/diets).
+  comidas  AliPlanComida[]
+  dietas   AliPlanDieta[]
 }
 
 model AliMenu {
   orden Int    @id
   dia   String
   plato String
-  algs  String // JSON string[] (nombres del catalogo alergias)
+  /// Alergenos del plato (reemplaza el JSON de nombres).
+  alergias AliMenuAlergia[]
 }
 
 // Carnet de comedor. Convencion UNICA: code = Alumno.code (p. ej. EST-2026-0412). El escaner tambien acepta la forma corta heredada EST-<Alumno.id>.
-// wallet/spent = monedero virtual y consumo del día.
+// Saldo, limite y consumo del dia salen del Monedero del alumno (una sola fuente). Las alergias del carnet salen de Alumno.alergias (AlumnoAlergia).
 model ComCarnet {
   code      String @id @db.NVarChar(100)
   alumnoId  String @unique @db.NVarChar(100)
@@ -182,12 +227,8 @@ model ComCarnet {
   grado     String
   plan      String
   ok        Boolean
-  allergies String // JSON string[] con los nombres CANONICOS del catalogo alergias (el DTO los muestra en mayusculas)
   restr     String
-  limit     Float
   motivo    String @default("")
-  wallet    Float
-  spent     Float
 
   @@index([aliPlanId])
 }
@@ -239,12 +280,16 @@ model MobPagoIntencion {
   tutor       Tutor     @relation(fields: [tutorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   tipo        String // cargos | recarga
   monto       Float
-  detalle     String    @default("[]") @db.NVarChar(Max) // JSON: ids de FinCobroItem incluidos
+  /// Cargos que cubre (tipo 'cargos'): reemplaza el JSON `detalle`.
+  cargos      MobPagoIntencionCargo[]
   estado      String    @default("pendiente") @db.NVarChar(100) // pendiente | confirmada | rechazada
   creado      DateTime  @default(now())
   resuelto    DateTime?
-  /// usuario (User.usuario) que la resolvio; NULL mientras esta pendiente.
-  resueltoPor String?
+  /// Cuenta que la resolvio (User); NULL mientras esta pendiente.
+  resueltoPorId String?  @db.NVarChar(100)
+  resueltoPor   User?    @relation(fields: [resueltoPorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Recargas del monedero originadas por esta intencion.
+  recargas    MonederoMovimiento[]
   nota        String    @default("") @db.NVarChar(Max)
   /// Recibo que la salda (NULL = sin recibo).
   reciboId    String?   @db.NVarChar(100)
@@ -254,6 +299,18 @@ model MobPagoIntencion {
   @@index([alumnoId])
   @@index([tutorId])
   @@index([reciboId])
+  @@index([resueltoPorId])
+}
+
+/// Cargos (FinCobroItem) que incluye una intencion de pago del portal (reemplaza el JSON de ids).
+model MobPagoIntencionCargo {
+  intencionId String           @db.NVarChar(100)
+  intencion   MobPagoIntencion @relation(fields: [intencionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  cobroItemId String           @db.NVarChar(100)
+  cobroItem   FinCobroItem     @relation(fields: [cobroItemId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([intencionId, cobroItemId])
+  @@index([cobroItemId])
 }
 
 // ---------- Finanzas (POS/Cobros, Kiosko, Inventario, Planes de Pago, Becas) ----------
@@ -267,7 +324,10 @@ model FinCobroItem {
   tutor    Tutor?  @relation(fields: [tutorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   /// Servicio recurrente/unico que origino el cargo (NULL = colegiatura, recargo u otro cargo sin servicio).
   servicioId String? @db.NVarChar(100)
-  servicio   PersServicio? @relation(fields: [servicioId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  servicio   ServicioAlumno? @relation(fields: [servicioId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Ciclo lectivo al que pertenece el cargo (por su concepto / fecha de vencimiento). La cartera pendiente del ciclo ACTIVO es la unica exigible en la app.
+  cicloId  String  @db.NVarChar(100)
+  ciclo    Ciclo   @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   con      String
   al       String
   vence    String
@@ -277,21 +337,54 @@ model FinCobroItem {
   paid     Boolean @default(false)
   abono    Boolean @default(false)
   orden    Int     @default(0)
+  /// Nota de debito que origino este cargo (intereses por mora, recargo, ajuste...). NULL = cargo normal. Se cobra como cualquier otro y su recibo la referencia.
+  notaDebitoId String? @db.NVarChar(100)
+  notaDebito   NotaFiscal? @relation("NotaDebitoCargos", fields: [notaDebitoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Lineas de recibo que cobraron este cargo y pagos del portal que lo incluyen.
+  lineasRecibo FinReciboItem[]
+  intenciones  MobPagoIntencionCargo[]
+  /// Lineas de notas de credito que reabrieron / ajustaron este cargo.
+  notaLineas   NotaFiscalLinea[]
 
   @@index([alumnoId, paid])
   @@index([tutorId])
   @@index([servicioId])
+  @@index([cicloId, paid])
+  @@index([notaDebitoId])
 }
 
 model FinRecibo {
   id        String  @id @db.NVarChar(100)
   ncf       String  @unique @db.NVarChar(100)
+  /// Comprobante fiscal (Fase fiscal): tipo (B01, B02... E31...) y secuencia autorizada de la que salio el NCF. Los DEFAULT apuntan al tipo B02 y a la secuencia
+  /// "historica" B02 solo para filas creadas por seeds/importadores sin pasar por lib/fiscal.asignarNcf; la API de cobros SIEMPRE los fija explicitamente.
+  tipoComprobanteId   String @default("B02") @db.NVarChar(100)
+  tipoComprobante     TipoComprobante @relation(fields: [tipoComprobanteId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  secuenciaFiscalId   String @default("SF-HIST-B02-FISICA") @db.NVarChar(100)
+  secuenciaFiscal     SecuenciaFiscal @relation(fields: [secuenciaFiscalId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// FISICA (NCF serie B) | ELECTRONICA (e-NCF serie E).
+  modalidad           String @default("FISICA")
+  /// Datos fiscales del comprador (obligatorios en credito fiscal / gubernamental / regimen especial). Instantanea: no cambia si el tutor se edita.
+  clienteRnc          String?
+  clienteNombre       String?
+  /// Numero / certificacion del regimen especial (opcional, A VALIDAR).
+  regimenEspecial     String?
+  /// Envio a la DGII del e-NCF: NoAplica | PendienteEnvio | Aceptado | Rechazado | Contingencia. Este sistema NO transmite a la DGII: un e-NCF queda PendienteEnvio.
+  estadoDgii          String @default("NoAplica")
   /// Instantanea del nombre del tutor en el comprobante emitido ("Consumidor final" si no hay tutor).
   tutor     String
   tutorId   String? @db.NVarChar(100)
   titular   Tutor?  @relation(fields: [tutorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  /// Caja (id del catalogo cajas; FK real en Fase 2) y usuario que cobro.
+  /// Caja donde se cobro (NULL = el cajero no tenia caja asignada) y usuario que cobro.
   cajaId    String? @db.NVarChar(100)
+  caja      Caja?   @relation(fields: [cajaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Ciclo lectivo del recibo (el activo al emitirlo; los historicos, el que contiene su fecha de emision).
+  cicloId   String  @db.NVarChar(100)
+  ciclo     Ciclo   @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Metodo de pago cuando el recibo se cobro con UN solo medio (NULL = pago mixto o recibo historico sin medio). El detalle por medio es FinReciboPago
+  /// (una fila por medio con FK a MetodoPago); esta columna es su copia de acceso rapido para el pago unico.
+  metodoPagoId String? @db.NVarChar(100)
+  metodoPago   MetodoPago? @relation(fields: [metodoPagoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   cajeroId  String? @db.NVarChar(100)
   cajero    User?   @relation(fields: [cajeroId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   hora      String
@@ -301,17 +394,232 @@ model FinRecibo {
   saldo     Float   @default(0)
   nc        String?
   change    Float   @default(0)
-  /// JSON [{ con, monto, cobroItemId? }]: cobroItemId = FinCobroItem cobrado (ausente en lineas historicas sin cargo).
-  items     String  @default("[]") @db.NVarChar(Max)
-  /// JSON [{ m, r, amt }]: m = nombre EXACTO del catalogo metodosPago. El metodo del recibo se deriva (lib/recibos.metodoDe).
-  pays      String  @default("[]") @db.NVarChar(Max)
   createdAt DateTime @default(now())
-  servicios   PersServicio[]
+  /// Lineas del recibo (concepto + monto; cobroItemId = cargo cobrado, NULL en lineas historicas sin cargo en cartera) y pagos por medio.
+  lineas      FinReciboItem[]
+  pagos       FinReciboPago[]
+  servicios   ServicioAlumno[]
   intenciones MobPagoIntencion[]
+  /// Notas de credito / debito que modifican este comprobante.
+  notas       NotaFiscal[]
 
   @@index([tutorId])
+  @@index([cicloId])
   @@index([cajeroId])
+  @@index([cajaId])
+  @@index([metodoPagoId])
   @@index([createdAt])
+  @@index([tipoComprobanteId])
+  @@index([secuenciaFiscalId])
+}
+
+/// Linea de un recibo. `cobroItemId` = cargo de cartera que salda (NULL permitido: lineas historicas anteriores al registro del vinculo o cobros sin cargo).
+model FinReciboItem {
+  id          Int           @id @default(autoincrement())
+  reciboId    String        @db.NVarChar(100)
+  recibo      FinRecibo     @relation(fields: [reciboId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orden       Int
+  concepto    String
+  monto       Float
+  cobroItemId String?       @db.NVarChar(100)
+  cobroItem   FinCobroItem? @relation(fields: [cobroItemId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  notaLineas  NotaFiscalLinea[]
+
+  @@unique([reciboId, orden])
+  @@index([cobroItemId])
+}
+
+/// Pago de un recibo por un medio (un recibo mixto tiene varias filas). `referencia` = autorizacion / numero de transferencia o cheque ('' si el medio no la pide).
+model FinReciboPago {
+  id           Int        @id @default(autoincrement())
+  reciboId     String     @db.NVarChar(100)
+  recibo       FinRecibo  @relation(fields: [reciboId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orden        Int
+  metodoPagoId String     @db.NVarChar(100)
+  metodoPago   MetodoPago @relation(fields: [metodoPagoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  monto        Float
+  referencia   String     @default("")
+
+  @@unique([reciboId, orden])
+  @@index([metodoPagoId])
+}
+
+/// Catalogo FIJO de tipos de comprobante fiscal de la DGII (seed idempotente en lib/fiscal.asegurarCatalogoFiscal). id = codigo (B01, E31...).
+/// Nombres y alcance segun el mejor conocimiento del equipo; lo dudoso lleva «A VALIDAR» en `nota` (validar con contador / DGII).
+model TipoComprobante {
+  id        String  @id @db.NVarChar(100)
+  codigo    String  @unique @db.NVarChar(100)
+  nombre    String
+  /// Uso: Ventas | Notas | Compras | Gastos | Ingresos | Exportaciones | Exterior
+  uso       String
+  /// FISICA | ELECTRONICA
+  modalidad String
+  /// Digitos del tipo dentro del numero: B01 -> 01, E31 -> 31.
+  tipoNum   String
+  /// Tipo LOGICO que usa Cobros (CREDITO_FISCAL | CONSUMO | GUBERNAMENTAL | REGIMEN_ESPECIAL | NOTA_DEBITO | NOTA_CREDITO); NULL = no se emite desde Cobros.
+  logico    String?
+  /// Exige RNC/cedula y razon social del comprador.
+  requiereRnc Boolean @default(false)
+  nota      String  @default("")
+  orden     Int
+  secuencias SecuenciaFiscal[]
+  recibos    FinRecibo[]
+  notas      NotaFiscal[]
+
+  @@index([logico, modalidad])
+}
+
+/// Autorizacion de secuencia (rango) de la DGII para un tipo de comprobante. `actual` = ULTIMO numero usado (desde-1 si no se uso ninguno). El incremento es atomico
+/// (lib/fiscal.asignarNcf). Los rangos de un mismo tipo+modalidad no se solapan (lo valida la API; las filas `historica` quedan fuera de esa regla: solo documentan lo emitido antes).
+/// Numeros como Float: enteros exactos hasta 2^53 (un e-NCF llega a 10 digitos, mas que un Int de 32 bits).
+model SecuenciaFiscal {
+  id        String  @id @db.NVarChar(100)
+  tipoComprobanteId String @db.NVarChar(100)
+  tipoComprobante   TipoComprobante @relation(fields: [tipoComprobanteId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// FISICA | ELECTRONICA
+  modalidad String
+  /// 'B' | 'E'
+  prefijo   String
+  serie     String  @default("")
+  desde     Float
+  hasta     Float
+  actual    Float
+  /// Vencimiento de la autorizacion DGII, 'YYYY-MM-DD' (NULL = sin vencimiento registrado).
+  vence     String?
+  umbralPct Int     @default(10)
+  /// Activa | Agotada | Vencida | Inactiva
+  estado    String  @default("Activa")
+  autorizacion String @default("")
+  /// Secuencia sintetica creada por la migracion para lo emitido ANTES del modulo fiscal (nunca se consume).
+  historica Boolean @default(false)
+  creadaPor String  @default("")
+  createdAt DateTime @default(now())
+  recibos   FinRecibo[]
+  notas     NotaFiscal[]
+
+  @@unique([tipoComprobanteId, modalidad, historica, desde])
+  @@index([tipoComprobanteId, modalidad, estado])
+}
+
+/// Catalogo tipado de MOTIVOS de nota de credito / debito. `codigo` 01..05 = codigos de modificacion de la DGII (A VALIDAR); OPxx = motivos operativos del colegio
+/// (reportan `codigoDgii`). Se siembra de forma idempotente (lib/notas.asegurarMotivosNota). Se desactivan (estado), no se borran.
+model MotivoNota {
+  id         String @id @db.NVarChar(100)
+  codigo     String @unique @db.NVarChar(100)
+  nombre     String
+  /// DGII | Operativo
+  origen     String
+  /// CREDITO | DEBITO | AMBAS
+  aplica     String
+  /// Codigo de modificacion de la DGII (01..05) que se informa para este motivo (los operativos mapean al mas cercano; A VALIDAR).
+  codigoDgii String
+  orden      Int
+  estado     String @default("Activo")
+  notas      NotaFiscal[]
+}
+
+/// NOTA DE CREDITO (B04 / E34) o NOTA DE DEBITO (B03 / E33) emitida sobre un comprobante: un recibo (FinRecibo) o una venta rapida del kiosko (FinVenta); exactamente UNO de los dos
+/// (CHECK CK_NotaFiscal_documento). La modalidad (fisica/electronica) es la del NCF modificado. El NCF sale de SecuenciaFiscal dentro de la misma transaccion (lib/fiscal.asignarNcf).
+/// id estable NC-0001 / ND-0001. `idempotencyKey` UNIQUE: reenviar la misma peticion no crea otra nota. Una nota es inmutable (solo `estado` Emitida).
+model NotaFiscal {
+  id         String @id @db.NVarChar(100)
+  /// CREDITO | DEBITO
+  clase      String
+  tipoComprobanteId String @db.NVarChar(100)
+  tipoComprobante   TipoComprobante @relation(fields: [tipoComprobanteId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  secuenciaFiscalId String @db.NVarChar(100)
+  secuenciaFiscal   SecuenciaFiscal @relation(fields: [secuenciaFiscalId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  ncf        String @unique @db.NVarChar(100)
+  /// FISICA | ELECTRONICA (la del comprobante modificado).
+  modalidad  String @default("FISICA")
+  /// NoAplica | PendienteEnvio | Aceptado | Rechazado | Contingencia. Este sistema NO transmite a la DGII: un e-NCF queda PendienteEnvio.
+  estadoDgii String @default("NoAplica")
+  /// Documento afectado: un recibo o una venta del kiosko (exactamente uno).
+  reciboId   String? @db.NVarChar(100)
+  recibo     FinRecibo? @relation(fields: [reciboId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  ventaId    String? @db.NVarChar(100)
+  venta      FinVenta? @relation(fields: [ventaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Copia del NCF / e-NCF modificado (instantanea).
+  ncfModificado String @db.NVarChar(100)
+  tutorId    String? @db.NVarChar(100)
+  tutor      Tutor?  @relation(fields: [tutorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Instantanea del nombre y RNC/cedula del cliente en el comprobante.
+  clienteNombre String?
+  clienteRnc    String?
+  cicloId    String @db.NVarChar(100)
+  ciclo      Ciclo  @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  motivoId   String @db.NVarChar(100)
+  motivo     MotivoNota @relation(fields: [motivoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  motivoTexto String @default("")
+  monto      Float
+  /// Emitida fuera del plazo configurado (exigio motivo escrito).
+  fueraDePlazo Boolean @default(false)
+  cajeroId   String? @db.NVarChar(100)
+  cajero     User?   @relation(fields: [cajeroId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cajaId     String? @db.NVarChar(100)
+  caja       Caja?   @relation(fields: [cajaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  hora       String
+  createdAt  DateTime @default(now())
+  estado     String @default("Emitida")
+  idempotencyKey String @unique @db.NVarChar(200)
+  lineas     NotaFiscalLinea[]
+  reembolsos NotaFiscalReembolso[]
+  /// Cargos nuevos que creo una nota de debito.
+  cargos     FinCobroItem[] @relation("NotaDebitoCargos")
+
+  @@index([reciboId])
+  @@index([ventaId])
+  @@index([tutorId])
+  @@index([cicloId, createdAt])
+  @@index([createdAt])
+  @@index([cajeroId, createdAt])
+  @@index([cajaId])
+  @@index([motivoId])
+  @@index([tipoComprobanteId])
+  @@index([secuenciaFiscalId])
+}
+
+/// Linea de una nota. Credito: reciboItemId (+ cobroItemId del cargo) o ventaItemId (+ productoId, cantidad devuelta). Debito: el cargo creado (cobroItemId, efecto NuevoCargo).
+/// efecto: ReabreCargo (el cargo vuelve a la deuda) | Devolucion (producto devuelto: repone inventario) | Ajuste (credito sin reabrir el cargo) | NuevoCargo (debito).
+model NotaFiscalLinea {
+  id         Int    @id @default(autoincrement())
+  notaId     String @db.NVarChar(100)
+  nota       NotaFiscal @relation(fields: [notaId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orden      Int
+  reciboItemId Int?
+  reciboItem   FinReciboItem? @relation(fields: [reciboItemId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cobroItemId  String? @db.NVarChar(100)
+  cobroItem    FinCobroItem? @relation(fields: [cobroItemId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  ventaItemId  Int?
+  ventaItem    FinVentaItem? @relation(fields: [ventaItemId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  productoId   String? @db.NVarChar(100)
+  producto     FinProducto? @relation(fields: [productoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cantidad   Int    @default(0)
+  concepto   String
+  monto      Float
+  /// ReabreCargo | Devolucion | Ajuste | NuevoCargo
+  efecto     String
+
+  @@unique([notaId, orden])
+  @@index([reciboItemId])
+  @@index([cobroItemId])
+  @@index([ventaItemId])
+  @@index([productoId])
+}
+
+/// Devolucion de dinero al cliente por medio de pago (una fila por medio). El total reembolsado de una nota de credito es igual a su monto (ver docs/fiscal-ncf.md).
+model NotaFiscalReembolso {
+  id           Int    @id @default(autoincrement())
+  notaId       String @db.NVarChar(100)
+  nota         NotaFiscal @relation(fields: [notaId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orden        Int
+  metodoPagoId String @db.NVarChar(100)
+  metodoPago   MetodoPago @relation(fields: [metodoPagoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  monto        Float
+  referencia   String @default("")
+
+  @@unique([notaId, orden])
+  @@index([metodoPagoId])
 }
 
 model FinCounter {
@@ -319,46 +627,76 @@ model FinCounter {
   value Int
 }
 
+/// Plan de pago = plantilla reutilizable en todos los ciclos (el ciclo lo fija Contrato). `data` = parametros escalares del formulario (cuotas, frecuencia, mora...);
+/// el importe por tanda (antes `tm` dentro del JSON) es FinPlanTanda.
 model FinPlan {
   id      String @id @db.NVarChar(100)
   name    String
   estado  String @default("Activo")
   data    String @db.NVarChar(Max)
-  // «Alumnos» de un plan = COUNT(Contrato.planId): se calcula, ya no se guarda.
+  // «Alumnos» de un plan = COUNT(Contrato.planId) del ciclo: se calcula, ya no se guarda.
   contratos     Contrato[]
   inscripciones PersInscripcion[]
+  tandas        FinPlanTanda[]
+}
+
+/// Importe anual del plan por tanda (solo si el plan es `porTanda`).
+model FinPlanTanda {
+  planId  String  @db.NVarChar(100)
+  plan    FinPlan @relation(fields: [planId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tandaId String  @db.NVarChar(100)
+  tanda   Tanda   @relation(fields: [tandaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  monto   Float
+
+  @@id([planId, tandaId])
+  @@index([tandaId])
 }
 
 model FinBeca {
   id        String @id @db.NVarChar(100)
-  periodo   String @db.NVarChar(100)
+  /// Ciclo lectivo de la beca (antes el texto `periodo` «2026–2027»).
+  cicloId   String @db.NVarChar(100)
+  ciclo     Ciclo  @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   alumnoId  String @db.NVarChar(100)
   alumno    Alumno @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   /// Instantanea del nombre completo del beneficiario.
   est       String
   grado     String
-  tipo      String // nombre EXACTO del catalogo becas (FK en Fase 2)
-  regla     String @db.NVarChar(Max)
-  conceptos String @db.NVarChar(Max) // nombres EXACTOS del catalogo conceptosBeca separados por ' · '
+  /// Tipo de beca (FK a TipoBeca).
+  tipoBecaId String @db.NVarChar(100)
+  tipoBeca   TipoBeca @relation(fields: [tipoBecaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Regla: modo 'pct' (valor = porcentaje, p. ej. 50) o 'monto' (valor = RD$). El DTO la muestra como «50%» o «RD$ 2,000.00».
+  modo      String @db.NVarChar(10)
+  valor     Float
+  /// Conceptos que cubre (reemplaza el texto «Colegiatura · Inscripción»).
+  conceptos FinBecaConcepto[]
   exp       String
   estado    String
   aprob     String
   createdAt DateTime @default(now())
 
   @@index([alumnoId])
+  @@index([tipoBecaId])
+  @@index([cicloId])
 }
 
 model FinProducto {
   id    String  @id @db.NVarChar(100)
   code  String  @unique @db.NVarChar(100)
   name  String
-  cat   String
+  /// Categoria del producto (FK a CategoriaProducto; el DTO la muestra como texto en `cat`).
+  categoriaId String @db.NVarChar(100)
+  categoria   CategoriaProducto @relation(fields: [categoriaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   price Float
   tax   Boolean @default(false)
   stock Int?
   icon  String
   movimientos FinMovimiento[]
   lineas      FinVentaItem[]
+  servicios   ServicioAlumno[]
+  notaLineas  NotaFiscalLinea[]
+
+  @@index([categoriaId])
 }
 
 model FinMovimiento {
@@ -385,11 +723,18 @@ model FinVenta {
   id        String   @id @db.NVarChar(100)
   ncf       String
   total     Float
+  /// Instantanea del nombre del medio de pago; la referencia real es metodoPagoId.
   metodo    String
+  metodoPagoId String @db.NVarChar(100)
+  metodoPago   MetodoPago @relation(fields: [metodoPagoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   doc       String
   createdAt DateTime @default(now())
   movimientos FinMovimiento[]
   lineas      FinVentaItem[]
+  /// Notas de credito que devuelven productos de esta venta.
+  notas       NotaFiscal[]
+
+  @@index([metodoPagoId])
 }
 
 // Lineas de una venta del kiosko (producto, cantidad y precio al momento de vender).
@@ -403,6 +748,7 @@ model FinVentaItem {
   cantidad   Int
   precio     Float
   tax        Boolean     @default(false)
+  notaLineas NotaFiscalLinea[]
 
   @@index([ventaId])
   @@index([productoId])
@@ -439,12 +785,311 @@ model SisConfig {
   valor String @db.NVarChar(Max)
 }
 
+// ---------- CICLO LECTIVO (Fase 2C) ----------
+/// Ciclo lectivo (`2026–2027`). UN solo Activo (indice unico filtrado UX_Ciclo_activo). Las fechas son 'YYYY-MM-DD' (comparables como texto).
+/// Un ciclo Cerrado es de SOLO LECTURA para la aplicacion. No se borra con datos (todas las FK son NoAction salvo sus periodos).
+model Ciclo {
+  id          String @id @db.NVarChar(100)
+  nombre      String @unique @db.NVarChar(100)
+  fechaInicio String @db.NVarChar(10)
+  fechaFin    String @db.NVarChar(10)
+  /// Planificado | Activo | Cerrado
+  estado      String @default("Planificado") @db.NVarChar(20)
+  periodos      PeriodoAcademico[]
+  matriculas    Matricula[]
+  contratos     Contrato[]
+  becas         FinBeca[]
+  inscripciones PersInscripcion[]
+  cobros        FinCobroItem[]
+  recibos       FinRecibo[]
+  notas         NotaFiscal[]
+  asignaciones  AcadAsignacion[]
+  horarios      AcadHorario[]
+}
+
+/// Periodo de calificacion dentro de un ciclo (por defecto 4: Ago–Oct, Nov–Ene, Feb–Abr, May–Jul). `orden` 1..4 es la clave '1'..'4' que usa la API.
+model PeriodoAcademico {
+  id          String @id @db.NVarChar(100)
+  cicloId     String @db.NVarChar(100)
+  ciclo       Ciclo  @relation(fields: [cicloId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orden       Int
+  nombre      String @db.NVarChar(100)
+  fechaInicio String @db.NVarChar(10)
+  fechaFin    String @db.NVarChar(10)
+  notas       AcadNota[]
+  asistencias AsistenciaResumen[]
+
+  @@unique([cicloId, orden])
+}
+
+/// Matricula = historial real del alumno: en que seccion estuvo en cada ciclo. FUENTE de verdad; Alumno.seccionId es la matricula del ciclo activo.
+/// Estado: Activo | Retirado | Promovido | Repitente | Graduado.
+model Matricula {
+  id           String  @id @db.NVarChar(100)
+  alumnoId     String  @db.NVarChar(100)
+  alumno       Alumno  @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cicloId      String  @db.NVarChar(100)
+  ciclo        Ciclo   @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  seccionId    String  @db.NVarChar(100)
+  seccion      Seccion @relation(fields: [seccionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  estado       String  @default("Activo") @db.NVarChar(20)
+  fechaIngreso String  @db.NVarChar(10)
+  fechaRetiro  String? @db.NVarChar(10)
+  asistencias  AsistenciaResumen[]
+
+  @@unique([alumnoId, cicloId])
+  @@index([cicloId])
+  @@index([seccionId])
+}
+
+/// Resumen de asistencia por matricula y periodo (ciclos cerrados: el detalle diario AcadAsistencia no se conserva por alumno; el del ciclo activo vive en AcadAsistencia por fecha).
+model AsistenciaResumen {
+  id          Int              @id @default(autoincrement())
+  matriculaId String           @db.NVarChar(100)
+  matricula   Matricula        @relation(fields: [matriculaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  periodoId   String           @db.NVarChar(100)
+  periodo     PeriodoAcademico @relation(fields: [periodoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  diasLectivos Int
+  presentes   Int
+  tardanzas   Int
+  ausenciasJustificadas   Int
+  ausenciasInjustificadas Int
+
+  @@unique([matriculaId, periodoId])
+  @@index([periodoId])
+}
+
+/// Vinculo tutor-alumno con rol y vigencia (FUENTE de verdad; Alumno.tutorId / tutorLegalId son su copia vigente). Rol: Financiero | Legal | Academico.
+/// Indices unicos filtrados (lib/db-indices): un solo Financiero y un solo Legal VIGENTES por alumno (hasta IS NULL).
+model TutorAlumno {
+  id       Int    @id @default(autoincrement())
+  alumnoId String @db.NVarChar(100)
+  alumno   Alumno @relation(fields: [alumnoId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tutorId  String @db.NVarChar(100)
+  tutor    Tutor  @relation(fields: [tutorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rol      String @db.NVarChar(20)
+  /// Vigencia 'YYYY-MM-DD': desde (inclusive) y hasta (NULL = vigente).
+  desde    String @db.NVarChar(10)
+  hasta    String? @db.NVarChar(10)
+
+  @@unique([alumnoId, tutorId, rol, desde])
+  @@index([tutorId])
+}
+
+// ---------- Estructura académica (Fase 2A): catálogos TIPADOS. Conservan los ids de texto que tenían en Catalogo (g6, s1, m1, d1, a1, t1...). ----------
+// Los catálogos se DESACTIVAN (estado), no se borran: con dependientes la FK NoAction lo impide y la API responde 409.
+
+/// Nivel educativo (Inicial / Primaria / Secundaria). Tabla de referencia fija: se siembra siempre (seed.ts > asegurarNiveles).
+model Nivel {
+  id     String  @id @db.NVarChar(100)
+  nombre String  @unique @db.NVarChar(100)
+  orden  Int     @unique
+  grados Grado[]
+}
+
+/// Grado dentro de un nivel. El nombre ('1ro') se repite entre niveles: la llave es el id o (nivel, nombre).
+model Grado {
+  id      String @id @db.NVarChar(100)
+  nivelId String @db.NVarChar(100)
+  nivel   Nivel  @relation(fields: [nivelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  nombre  String @db.NVarChar(100)
+  /// Orden de promoción (único): al cerrar el ciclo el alumno pasa al grado con el orden siguiente.
+  orden   Int
+  estado  String @default("Activo")
+  secciones Seccion[]
+  materias  MateriaGrado[]
+  extras    AcadExtraGrado[]
+
+  @@unique([nivelId, nombre])
+  @@unique([orden])
+}
+
+model Tanda {
+  id     String @id @db.NVarChar(100)
+  nombre String @unique @db.NVarChar(100)
+  /// Hora de entrada / salida 'HH:MM'.
+  ini    String @db.NVarChar(10)
+  fin    String @db.NVarChar(10)
+  estado String @default("Activo")
+  secciones Seccion[]
+  planes    FinPlanTanda[]
+}
+
+model Aula {
+  id       String @id @db.NVarChar(100)
+  nombre   String @unique @db.NVarChar(100)
+  tipo     String @db.NVarChar(100) // Aula | Laboratorio | Cancha | Salón especial
+  edificio String @default("") @db.NVarChar(200)
+  pupitres Int
+  estado   String @default("Activo")
+  secciones     Seccion[]
+  asignaciones  AsignacionAula[]
+  elegidaEn     AcadAsignacion[]
+  extras        AcadExtra[]
+}
+
+/// Sección = grado + letra + tanda. Los inscritos se CALCULAN (COUNT de Alumno no Retirado); `cap` es la capacidad máxima.
+model Seccion {
+  id         String  @id @db.NVarChar(100)
+  gradoId    String  @db.NVarChar(100)
+  grado      Grado   @relation(fields: [gradoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  letra      String  @db.NVarChar(20)
+  tandaId    String  @db.NVarChar(100)
+  tanda      Tanda   @relation(fields: [tandaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  aulaBaseId String? @db.NVarChar(100)
+  aulaBase   Aula?   @relation(fields: [aulaBaseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cap        Int
+  estado     String  @default("Activo")
+  alumnos      Alumno[]
+  rosters      AcadRoster[]
+  asignaciones AcadAsignacion[]
+  horarios     AcadHorario[]
+  plan         SeccionMateria[]
+  docentes     DocenteSeccion[]
+  matriculas   Matricula[]
+
+  @@unique([gradoId, letra, tandaId])
+  @@index([tandaId])
+  @@index([aulaBaseId])
+}
+
+/// Rúbrica de evaluación: escala, nota mínima y criterios con peso (RubricaCriterio). Cada materia usa a lo sumo UNA (Materia.rubricaId).
+model Rubrica {
+  id        String @id @db.NVarChar(100)
+  nombre    String @unique @db.NVarChar(200)
+  escala    String @db.NVarChar(200)
+  minimo    Int
+  estado    String @default("Activo")
+  criterios RubricaCriterio[]
+  materias  Materia[]
+}
+
+/// Competencia / criterio de una rúbrica. `clave` = C1..C4 (competencias) o EX (examen) con la que se capturan las notas (AcadNota.c1..c4/ex).
+model RubricaCriterio {
+  rubricaId String  @db.NVarChar(100)
+  rubrica   Rubrica @relation(fields: [rubricaId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orden     Int
+  nombre    String  @db.NVarChar(200)
+  peso      Float
+  clave     String? @db.NVarChar(10)
+
+  @@id([rubricaId, orden])
+}
+
+model Materia {
+  id        String   @id @db.NVarChar(100)
+  codigo    String   @unique @db.NVarChar(100)
+  nombre    String   @db.NVarChar(200)
+  /// Horas semanales por defecto (el plan de cada sección las copia en SeccionMateria.horas).
+  horas     Int
+  rubricaId String?  @db.NVarChar(100)
+  rubrica   Rubrica? @relation(fields: [rubricaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  estado    String   @default("Activo")
+  grados       MateriaGrado[]
+  docentes     DocenteMateria[]
+  plan         SeccionMateria[]
+  asignaciones AcadAsignacion[]
+  horarios     AcadHorario[]
+  notas        AcadNota[]
+  notasMov     MobNota[]
+
+  @@index([rubricaId])
+}
+
+/// Grados donde se imparte una materia (N:M).
+model MateriaGrado {
+  materiaId String  @db.NVarChar(100)
+  materia   Materia @relation(fields: [materiaId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  gradoId   String  @db.NVarChar(100)
+  grado     Grado   @relation(fields: [gradoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([materiaId, gradoId])
+  @@index([gradoId])
+}
+
+/// Plan de estudios de una sección: materias que cursa y sus horas semanales.
+model SeccionMateria {
+  seccionId String  @db.NVarChar(100)
+  seccion   Seccion @relation(fields: [seccionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  materiaId String  @db.NVarChar(100)
+  materia   Materia @relation(fields: [materiaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  horas     Int
+
+  @@id([seccionId, materiaId])
+  @@index([materiaId])
+}
+
+/// Docente. `userId` = cuenta de login (opcional; unica entre docentes por indice filtrado UX_Docente_userId). `usuario` = usuario PROPUESTO
+/// mientras aun no tiene cuenta (al crear el acceso se enlaza userId y deja de usarse).
+model Docente {
+  id      String  @id @db.NVarChar(100)
+  nombre  String
+  cedula  String  @unique @db.NVarChar(100)
+  esp     String  @default("")
+  email   String  @default("")
+  tel     String  @default("")
+  usuario String? @db.NVarChar(100)
+  rol     String  @default("Docente") @db.NVarChar(100)
+  userId  String? @db.NVarChar(100)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  estado  String  @default("Activo")
+  materias     DocenteMateria[]
+  secciones    DocenteSeccion[]
+  asignaciones AcadAsignacion[]
+  extras       AcadExtra[]
+
+  @@index([userId])
+}
+
+/// Empleado / personal administrativo (antes Catalogo 'staff'). Misma relación con User que Docente.
+model Empleado {
+  id      String  @id @db.NVarChar(100)
+  nombre  String
+  cargo   String  @default("")
+  usuario String? @db.NVarChar(100)
+  rol     String  @default("Cajero") @db.NVarChar(100)
+  userId  String? @db.NVarChar(100)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Caja asignada (NULL = sin caja).
+  cajaId  String? @db.NVarChar(100)
+  caja    Caja?   @relation(fields: [cajaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tel     String  @default("")
+  email   String  @default("")
+  estado  String  @default("Activo")
+
+  @@index([userId])
+  @@index([cajaId])
+}
+
+/// Materias que un docente puede impartir (N:M).
+model DocenteMateria {
+  docenteId String  @db.NVarChar(100)
+  docente   Docente @relation(fields: [docenteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  materiaId String  @db.NVarChar(100)
+  materia   Materia @relation(fields: [materiaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([docenteId, materiaId])
+  @@index([materiaId])
+}
+
+/// Secciones asignadas al docente en su perfil. (docente x materias) x (docente x secciones) se materializa en AcadAsignacion (heredada = true).
+model DocenteSeccion {
+  docenteId String  @db.NVarChar(100)
+  docente   Docente @relation(fields: [docenteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  seccionId String  @db.NVarChar(100)
+  seccion   Seccion @relation(fields: [seccionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([docenteId, seccionId])
+  @@index([seccionId])
+}
+
 // ---------- Académico (Acad*) ----------
 // Nómina de una sección (mock del prototipo: STU_ATT).
 model AcadRoster {
   id          String           @id @db.NVarChar(100)
-  // id de la sección del catálogo; solo manda para nómina sin Alumno enlazado (la de un Alumno sale de su grado/sección).
-  seccion     String @db.NVarChar(100)
+  // Sección de la nómina; solo manda para nómina sin Alumno enlazado (la de un Alumno sale de su Alumno.seccionId).
+  seccionId   String           @db.NVarChar(100)
+  seccion     Seccion          @relation(fields: [seccionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   orden       Int
   nombre      String
   // Vínculo con Alumno cuando la demo los trata como el mismo alumno (p. ej. Juan 0412). Nulo = solo figura en la nómina del prototipo.
@@ -453,29 +1098,34 @@ model AcadRoster {
   notas       AcadNota[]
   asistencias AcadAsistencia[]
 
-  @@index([seccion])
+  @@index([seccionId])
   @@index([alumnoId])
 }
 
 // Las notas son historial academico con valor propio: NoAction (no se borran en cascada con la nomina).
 model AcadNota {
-  id       String     @id @default(cuid()) @db.NVarChar(100)
-  rosterId String @db.NVarChar(100)
-  roster   AcadRoster @relation(fields: [rosterId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  materia  String @db.NVarChar(100)
-  periodo  String @db.NVarChar(100)
-  c1       Float?
-  c2       Float?
-  c3       Float?
-  c4       Float?
-  ex       Float?
+  id        String     @id @default(cuid()) @db.NVarChar(100)
+  rosterId  String     @db.NVarChar(100)
+  roster    AcadRoster @relation(fields: [rosterId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  materiaId String     @db.NVarChar(100)
+  materia   Materia    @relation(fields: [materiaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Periodo academico (hijo de un Ciclo): de el sale el ciclo de la nota.
+  periodoId String     @db.NVarChar(100)
+  periodo   PeriodoAcademico @relation(fields: [periodoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  c1        Float?
+  c2        Float?
+  c3        Float?
+  c4        Float?
+  ex        Float?
 
-  @@unique([rosterId, materia, periodo])
+  @@unique([rosterId, materiaId, periodoId])
+  @@index([materiaId])
+  @@index([periodoId])
 }
 
 model AcadAsistencia {
   id        String     @id @default(cuid()) @db.NVarChar(100)
-  rosterId  String @db.NVarChar(100)
+  rosterId  String     @db.NVarChar(100)
   roster    AcadRoster @relation(fields: [rosterId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   fecha     String @db.NVarChar(100)
   estado    String
@@ -484,46 +1134,97 @@ model AcadAsistencia {
   @@unique([rosterId, fecha])
 }
 
-// Asignación docente x sección x materia (ids del catálogo). Una por (sección, materia).
-// aulas = JSON de ids de aula (catálogo) posibles (vacío = aula base de la sección; la primera es la predeterminada).
+// Asignación docente x sección x materia. UNA por (ciclo, sección, materia) (implica UNIQUE docente+seccion+materia). `heredada` = la materializó el
+// perfil del docente (DocenteMateria x DocenteSeccion); `aulaElegidaId` = aula elegida entre las posibles (AsignacionAula) para esta materia.
 model AcadAsignacion {
-  id        String @id @default(cuid()) @db.NVarChar(100)
-  docenteId String @db.NVarChar(100)
-  seccionId String @db.NVarChar(100)
-  materiaId String @db.NVarChar(100)
-  aulas     String @default("[]") @db.NVarChar(Max)
+  id            String  @id @default(cuid()) @db.NVarChar(100)
+  /// Las asignaciones son POR CICLO (una seccion cambia de docentes de un ano a otro).
+  cicloId       String  @db.NVarChar(100)
+  ciclo         Ciclo   @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  docenteId     String  @db.NVarChar(100)
+  docente       Docente @relation(fields: [docenteId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  seccionId     String  @db.NVarChar(100)
+  seccion       Seccion @relation(fields: [seccionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  materiaId     String  @db.NVarChar(100)
+  materia       Materia @relation(fields: [materiaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  heredada      Boolean @default(false)
+  aulaElegidaId String? @db.NVarChar(100)
+  aulaElegida   Aula?   @relation(fields: [aulaElegidaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  aulas         AsignacionAula[]
 
-  @@unique([seccionId, materiaId])
+  @@unique([cicloId, seccionId, materiaId])
+  @@unique([cicloId, docenteId, seccionId, materiaId])
+  @@index([materiaId])
+  @@index([seccionId])
   @@index([docenteId])
+  @@index([aulaElegidaId])
 }
 
-// seccion = id de la sección del catálogo; slot = 'dia-bloque' (ej. '0-1') con materia = id de materia del catálogo.
-// Filas especiales slot='_aula:<materiaId>' guardan el aula elegida (id de aula) para materias con varias aulas posibles.
+/// Aulas posibles de una asignación (vacío = aula base de la sección; la de menor `orden` es la predeterminada).
+model AsignacionAula {
+  asignacionId String         @db.NVarChar(100)
+  asignacion   AcadAsignacion @relation(fields: [asignacionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  aulaId       String         @db.NVarChar(100)
+  aula         Aula           @relation(fields: [aulaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  orden        Int            @default(0)
+
+  @@id([asignacionId, aulaId])
+  @@index([aulaId])
+}
+
+// slot = 'dia-bloque' (ej. '0-1'): bloque de la grilla semanal. El aula de cada materia sale de su asignación (aulaElegidaId / AsignacionAula).
 model AcadHorario {
-  id      String @id @default(cuid()) @db.NVarChar(100)
-  seccion String @db.NVarChar(100)
-  slot    String @db.NVarChar(100)
-  materia String @db.NVarChar(100)
+  id        String  @id @default(cuid()) @db.NVarChar(100)
+  /// El horario es POR CICLO.
+  cicloId   String  @db.NVarChar(100)
+  ciclo     Ciclo   @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  seccionId String  @db.NVarChar(100)
+  seccion   Seccion @relation(fields: [seccionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  slot      String  @db.NVarChar(100)
+  materiaId String  @db.NVarChar(100)
+  materia   Materia @relation(fields: [materiaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([seccion, slot])
+  @@unique([cicloId, seccionId, slot])
+  @@index([materiaId])
+  @@index([seccionId])
 }
 
+// Actividad extracurricular. `instructor` y `lugar` son el texto visible (pueden ser personas/espacios externos al colegio);
+// `docenteId` / `aulaId` los enlazan con el Docente / Aula reales cuando coinciden. Los grados salen de AcadExtraGrado.
 model AcadExtra {
-  id         String @id @db.NVarChar(100)
+  id         String   @id @db.NVarChar(100)
   name       String
   cat        String
   kind       String
   instructor String
+  docenteId  String?  @db.NVarChar(100)
+  docente    Docente? @relation(fields: [docenteId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   lugar      String
+  aulaId     String?  @db.NVarChar(100)
+  aula       Aula?    @relation(fields: [aulaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   dias       String
   hora       String
-  grados     String
   cupo       Int
-  inscritos  Int    @default(0)
-  costo      Float  @default(0)
-  ini        String @default("")
-  sem        Int    @default(0)
-  estado     String @default("Abierta")
+  inscritos  Int      @default(0)
+  costo      Float    @default(0)
+  ini        String   @default("")
+  sem        Int      @default(0)
+  estado     String   @default("Abierta")
+  grados     AcadExtraGrado[]
+  servicios  ServicioAlumno[]
+
+  @@index([docenteId])
+  @@index([aulaId])
+}
+
+model AcadExtraGrado {
+  extraId String    @db.NVarChar(100)
+  extra   AcadExtra @relation(fields: [extraId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  gradoId String    @db.NVarChar(100)
+  grado   Grado     @relation(fields: [gradoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([extraId, gradoId])
+  @@index([gradoId])
 }
 
 // ---------- Personas (Directorio, Expediente 360, Inscripción) ----------
@@ -538,20 +1239,43 @@ model PersDocumento {
   id       String @id @db.NVarChar(100)
   alumnoId String @db.NVarChar(100)
   alumno   Alumno @relation(fields: [alumnoId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  n        String
+  /// Tipo de documento (catalogo TipoDocumento); su nombre es el `n` que muestra la API.
+  tipoId   String @db.NVarChar(100)
+  tipo     TipoDocumento @relation(fields: [tipoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   f        String
   est      String // Validado | Pendiente | En revisión
   orden    Int    @default(0)
 
+  @@unique([alumnoId, tipoId])
   @@index([alumnoId])
+  @@index([tipoId])
 }
 
-model PersServicio {
+/// Documentos que se piden en el expediente (acta de nacimiento, vacunas...). `requerido` = se exige al inscribir.
+model TipoDocumento {
+  id         String  @id @db.NVarChar(100)
+  nombre     String  @unique @db.NVarChar(200)
+  requerido  Boolean @default(true)
+  orden      Int     @default(0)
+  estado     String  @default("Activo")
+  documentos PersDocumento[]
+}
+
+/// Servicio contratado por un alumno (antes PersServicio.catKey 'rt:'/'ali:'/'ext:'/'prd:'). Exactamente UNA de las cuatro FK de catalogo es no nula (CHECK
+/// CK_ServicioAlumno_catalogo): ruta de transporte, plan de alimentacion, actividad extracurricular o producto del inventario.
+model ServicioAlumno {
   id       String @id @db.NVarChar(100)
   alumnoId String @db.NVarChar(100)
   alumno   Alumno @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   kind     String // rec | once
-  catKey   String
+  rutaId     String? @db.NVarChar(100)
+  ruta       RutaTransporte? @relation(fields: [rutaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  aliPlanId  String? @db.NVarChar(100)
+  aliPlan    AliPlan? @relation(fields: [aliPlanId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  extraId    String? @db.NVarChar(100)
+  extra      AcadExtra? @relation(fields: [extraId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  productoId String? @db.NVarChar(100)
+  producto   FinProducto? @relation(fields: [productoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   name     String
   icon     String @default("")
   spec     String @default("")
@@ -569,12 +1293,19 @@ model PersServicio {
 
   @@index([alumnoId])
   @@index([reciboId])
+  @@index([rutaId])
+  @@index([aliPlanId])
+  @@index([extraId])
+  @@index([productoId])
 }
 
 model PersInscripcion {
   id        String   @id @db.NVarChar(100)
   alumnoId  String   @db.NVarChar(100)
   alumno    Alumno   @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Ciclo en el que se inscribe (un alumno tiene a lo sumo UNA inscripcion por ciclo).
+  cicloId   String   @db.NVarChar(100)
+  ciclo     Ciclo    @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   /// Evidencia fiscal de la inscripcion: el NCF es unico.
   ncf       String   @unique @db.NVarChar(100)
   factura   Float
@@ -584,8 +1315,9 @@ model PersInscripcion {
   firma     String
   createdAt DateTime @default(now())
 
-  @@index([alumnoId])
+  @@unique([alumnoId, cicloId])
   @@index([planId])
+  @@index([cicloId])
 }
 
 // Contrato de servicios educativos del alumno por ciclo (antes dentro de PersExpediente.data.contrato).
@@ -593,15 +1325,162 @@ model Contrato {
   id       String  @id @db.NVarChar(100)
   alumnoId String  @db.NVarChar(100)
   alumno   Alumno  @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  /// Ciclo lectivo (texto «2026–2027»; FK a Ciclo en Fase 2).
-  ciclo    String  @db.NVarChar(100)
+  cicloId  String  @db.NVarChar(100)
+  ciclo    Ciclo   @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   planId   String  @db.NVarChar(100)
   plan     FinPlan @relation(fields: [planId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  /// Id del tipo de beca del catalogo becas (FK en Fase 2). NULL = sin beca.
-  beca     String? @db.NVarChar(100)
+  /// Tipo de beca del contrato (FK a TipoBeca). NULL = sin beca.
+  tipoBecaId String? @db.NVarChar(100)
+  tipoBeca   TipoBeca? @relation(fields: [tipoBecaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   ctr      String  @default("")
   firmado  String  @default("")
 
-  @@unique([alumnoId, ciclo])
+  @@unique([alumnoId, cicloId])
   @@index([planId])
+  @@index([tipoBecaId])
+  @@index([cicloId])
+}
+
+// ---------- Catalogos de la Fase 2B (antes en Catalogo): TIPADOS, con los mismos ids de texto. Se DESACTIVAN (estado), no se borran con historial. ----------
+
+/// Caja registradora (terminal logica de cobro). Estado: Activa | Inactiva.
+model Caja {
+  id        String @id @db.NVarChar(100)
+  codigo    String @unique @db.NVarChar(100)
+  ubic      String @default("") @db.NVarChar(300)
+  /// Comprobante por defecto: «B02 · Consumo» | «B01 · Crédito fiscal».
+  ncf       String @db.NVarChar(100)
+  estado    String @default("Activa")
+  empleados Empleado[]
+  recibos   FinRecibo[]
+  notas     NotaFiscal[]
+}
+
+model RutaTransporte {
+  id        String @id @db.NVarChar(100)
+  nombre    String @unique @db.NVarChar(200)
+  sectores  String @default("") @db.NVarChar(500)
+  chofer    String @default("")
+  ficha     String @unique @db.NVarChar(100)
+  asientos  Int
+  /// Tarifa mensual (RD$).
+  tarifa    Float
+  estado    String @default("Activo")
+  servicios ServicioAlumno[]
+}
+
+/// Tipo de beca. `pct` = porcentaje por defecto (0 = beca de monto fijo); `requiereAprobacion` = pasa por Direccion antes de aplicarse.
+model TipoBeca {
+  id                 String  @id @db.NVarChar(100)
+  nombre             String  @unique @db.NVarChar(200)
+  pct                Float   @default(0)
+  requiereAprobacion Boolean @default(false)
+  estado             String  @default("Activo")
+  becas              FinBeca[]
+  contratos          Contrato[]
+}
+
+model ConceptoBeca {
+  id     String @id @db.NVarChar(100)
+  nombre String @unique @db.NVarChar(200)
+  estado String @default("Activo")
+  becas  FinBecaConcepto[]
+}
+
+/// Conceptos que cubre una beca (N:M ordenado; reemplaza FinBeca.conceptos en texto).
+model FinBecaConcepto {
+  becaId     String       @db.NVarChar(100)
+  beca       FinBeca      @relation(fields: [becaId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  conceptoId String       @db.NVarChar(100)
+  concepto   ConceptoBeca @relation(fields: [conceptoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  orden      Int          @default(0)
+
+  @@id([becaId, conceptoId])
+  @@index([conceptoId])
+}
+
+/// Medio de pago. `ref` = etiqueta de la referencia que se pide (NULL = no pide referencia, p. ej. Efectivo).
+model MetodoPago {
+  id      String  @id @db.NVarChar(100)
+  nombre  String  @unique @db.NVarChar(200)
+  ref     String? @db.NVarChar(200)
+  estado  String  @default("Activo")
+  recibos FinRecibo[]
+  ventas  FinVenta[]
+  pagos   FinReciboPago[]
+  reembolsos NotaFiscalReembolso[]
+}
+
+model Comida {
+  id     String @id @db.NVarChar(100)
+  nombre String @unique @db.NVarChar(200)
+  estado String @default("Activo")
+  planes AliPlanComida[]
+}
+
+model Dieta {
+  id     String @id @db.NVarChar(100)
+  nombre String @unique @db.NVarChar(200)
+  estado String @default("Activo")
+  planes AliPlanDieta[]
+}
+
+model Alergia {
+  id      String @id @db.NVarChar(100)
+  nombre  String @unique @db.NVarChar(200)
+  estado  String @default("Activo")
+  alumnos AlumnoAlergia[]
+  menus   AliMenuAlergia[]
+}
+
+/// Categoria de un producto del kiosko / inventario (Uniformes, Libros, Papelería, Servicios...).
+model CategoriaProducto {
+  id        String @id @db.NVarChar(100)
+  nombre    String @unique @db.NVarChar(200)
+  estado    String @default("Activo")
+  productos FinProducto[]
+}
+
+/// Comidas que incluye un plan de alimentacion (reemplaza AliPlan.meals posicional).
+model AliPlanComida {
+  planId   String  @db.NVarChar(100)
+  plan     AliPlan @relation(fields: [planId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  comidaId String  @db.NVarChar(100)
+  comida   Comida  @relation(fields: [comidaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([planId, comidaId])
+  @@index([comidaId])
+}
+
+/// Dietas que cubre un plan de alimentacion (reemplaza AliPlan.diets posicional).
+model AliPlanDieta {
+  planId  String  @db.NVarChar(100)
+  plan    AliPlan @relation(fields: [planId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  dietaId String  @db.NVarChar(100)
+  dieta   Dieta   @relation(fields: [dietaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([planId, dietaId])
+  @@index([dietaId])
+}
+
+/// Alergias del alumno (N:M). Cascade respecto del alumno (dato clinico sin valor propio fuera de el); NoAction hacia el catalogo.
+model AlumnoAlergia {
+  alumnoId  String  @db.NVarChar(100)
+  alumno    Alumno  @relation(fields: [alumnoId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  alergiaId String  @db.NVarChar(100)
+  alergia   Alergia @relation(fields: [alergiaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([alumnoId, alergiaId])
+  @@index([alergiaId])
+}
+
+/// Alergenos de un plato del menu semanal (reemplaza AliMenu.algs).
+model AliMenuAlergia {
+  menuOrden Int
+  menu      AliMenu @relation(fields: [menuOrden], references: [orden], onDelete: Cascade, onUpdate: NoAction)
+  alergiaId String  @db.NVarChar(100)
+  alergia   Alergia @relation(fields: [alergiaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([menuOrden, alergiaId])
+  @@index([alergiaId])
 }

@@ -3,7 +3,19 @@
  *
  *   pnpm --filter @stodia/api db:fk:reparar               -> solo MUESTRA el plan y cuantas filas tocaria cada paso (no escribe)
  *   pnpm --filter @stodia/api db:fk:reparar -- --aplicar  -> ejecuta (haz un respaldo ANTES: .bak / copia del .db)
- *   Opciones: --crear-secciones  crea en el catalogo las secciones (grado|letra|tanda) que tienen alumnos y no existen.
+ *   Opciones: --crear-secciones  (bases anteriores a la Fase 2A) crea en el catalogo las secciones (grado|letra|tanda) con alumnos que no existen.
+ *             --fase2a  FASE 2A (nucleo academico): crea las tablas tipadas, copia Catalogo -> Grado/Tanda/Aula/Seccion/Materia/Rubrica/Docente/Empleado,
+ *                       resuelve Alumno.seccionId y las FK de nomina/notas/horarios/extras (crea las secciones faltantes; lo AMBIGUO se informa y bloquea el db push).
+ *                       Tras el `prisma db push` repite el comando: retira de Catalogo los tipos ya migrados.
+ *             --fase2b  FASE 2B (resto de catalogos): crea las tablas tipadas Caja, RutaTransporte, TipoBeca, ConceptoBeca, MetodoPago, Comida, Dieta, Alergia,
+ *                       CategoriaProducto y los puentes (AliPlanComida/Dieta, AlumnoAlergia, AliMenuAlergia, FinBecaConcepto); copia Catalogo -> tablas (mismos ids)
+ *                       y convierte alergias, banderas de planes, becas, medios de pago y rutas. Lo ambiguo se informa como BLOQUEANTE. Tras el db push, repite
+ *                       el comando: retira de Catalogo los 8 tipos migrados.
+ *             --fase2c  FASE 2C (cierre de la base): Ciclo lectivo como tabla (Ciclo, PeriodoAcademico, Matricula) con cicloId en lo que es por ciclo, TutorAlumno, FinReciboItem /
+                       FinReciboPago (reemplazan los JSON del recibo), FinPlanTanda, TipoDocumento, ServicioAlumno (4 FK con CHECK), Monedero unico (+ movimientos) y retiro de
+                       Catalogo. Debe correr junto con 2A y 2B (--auto lo hace). Lo ambiguo = BLOQUEANTE. Tras el db push, repite el comando.
+             --nivel-por-defecto=Primaria  (con --fase2a) decision EXPLICITA del operador: un nombre de grado que existe en varios niveles ('1ro'..'6to') se resuelve a ese nivel.
+ *             --descartar-mobnota  (con --fase2a) descarta las notas demostrativas del portal cuya materia no se pueda resolver.
  *
  * NUNCA borra filas: no toca cargos, recibos, inscripciones, becas ni monederos salvo para COMPLETAR columnas nuevas (alumnoId, tutorId...)
  * o normalizar el formato de un valor (cedula con guiones -> digitos, '' -> NULL, 'Tarjeta' -> nombre del catalogo de metodos de pago).
@@ -16,14 +28,25 @@
  *   6. pnpm db:fk:auditar debe terminar en 0.
  */
 import { asegurarIndices } from '../src/lib/db-indices';
-import { alinearPlanesAli } from '../src/lib/ali-catalogos';
 import { auditarTodo } from './fk-auditar';
+import { expandir2a, pendiente2a, rellenar2a, retirarCatalogo2a } from './fk-fase2a';
+import { expandir2b, pendiente2b, rellenar2b, retirarCatalogo2b } from './fk-fase2b';
+import { expandir2c, pendiente2c, rellenar2c, verificar2c } from './fk-fase2c';
+import { crearUnicosFiscal, expandirFiscal, pendienteFiscal, rellenarFiscal } from './fk-fiscal';
+import { crearUnicosNotas, expandirNotas, pendienteNotas, rellenarNotas } from './fk-notas';
 import { catalogo, columnas, cuenta, digitos, ejecutar, esSqlServer, filas, modelos, num, prisma, q, relaciones, sinAcento, tablaExiste, tbl, tieneCol } from './fk-comun';
 
 const auto = process.argv.includes('--auto'); // arranque del contenedor: silencioso, idempotente; sale con 10 si EXPANDIO una base anterior
 const detectar = process.argv.includes('--detectar'); // solo lectura: sale con 10 si la base es anterior a la Fase 1
 const aplicar = process.argv.includes('--aplicar') || auto;
 const crearSecciones = process.argv.includes('--crear-secciones');
+const fase2a = process.argv.includes('--fase2a') || auto; // en --auto (arranque del contenedor) se migra todo lo pendiente
+const fase2b = process.argv.includes('--fase2b') || auto;
+const fase2c = process.argv.includes('--fase2c') || auto; // Ciclo / Matricula / TutorAlumno / FinReciboItem y Pago / ServicioAlumno / Monedero; retiro de Catalogo
+const fiscal = process.argv.includes('--fiscal') || auto; // Secuencias fiscales (SecuenciaFiscal), tipo de comprobante en cada recibo
+const notas = process.argv.includes('--notas') || auto; // Notas de credito / debito (NotaFiscal) y migracion de las anulaciones historicas
+const reabrirCargos = process.argv.includes('--reabrir-cargos'); // SOLO explicito (nunca en --auto): reabre los cargos de recibos anulados que siguieron pagados
+const descartarMobNota = process.argv.includes('--descartar-mobnota') || auto;
 const pad = (n: number, w = 2) => String(n).padStart(w, '0');
 const informe: { paso: string; filas: number; estado: string }[] = [];
 
@@ -146,7 +169,8 @@ async function backfill() {
   const nombreUnico = new Map<string, string | null>();
   for (const t of tutores) nombreUnico.set(t.nombre, nombreUnico.has(t.nombre) ? null : t.id);
   if (await tablaExiste('FinRecibo')) {
-    const recs = await filas<{ id: string; tutor: string; tutorId: string | null; pays: string }>(`SELECT id, tutor, ${q('tutorId')}, pays FROM ${tbl('FinRecibo')}`);
+    const tienePays = await tieneCol('FinRecibo', 'pays'); // Fase 2C: pays desaparece (FinReciboPago)
+    const recs = await filas<{ id: string; tutor: string; tutorId: string | null; pays: string }>(`SELECT id, tutor, ${q('tutorId')}, ${tienePays ? 'pays' : "'[]' AS pays"} FROM ${tbl('FinRecibo')}`);
     const sinTutor = recs.filter(r => !r.tutorId && nombreUnico.get(r.tutor));
     await paso('FinRecibo.tutorId <- Tutor por nombre exacto y unico', async () => sinTutor.length, async () => {
       for (const r of sinTutor) await ejecutar(`UPDATE ${tbl('FinRecibo')} SET ${q('tutorId')} = ? WHERE id = ?`, nombreUnico.get(r.tutor), r.id);
@@ -154,7 +178,7 @@ async function backfill() {
     informe.push({ paso: "FinRecibo con tutor que no es un Tutor unico ('Consumidor final' o nombre ambiguo): tutorId queda NULL", filas: recs.filter(r => !r.tutorId && !nombreUnico.get(r.tutor)).length, estado: 'informativo' });
     const metodos = (await catalogo('metodosPago')).map(m => String(m.d.nombre));
     const mapa = (m: string) => (metodos.includes(m) ? m : metodos.find(x => sinAcento(x).startsWith(sinAcento(m))) ?? m);
-    const malos = recs.filter(r => (JSON.parse(r.pays) as { m: string }[]).some(p => mapa(p.m) !== p.m));
+    const malos = tienePays ? recs.filter(r => (JSON.parse(r.pays) as { m: string }[]).some(p => mapa(p.m) !== p.m)) : [];
     await paso("FinRecibo.pays[].m -> nombre exacto del catalogo metodosPago ('Tarjeta' -> 'Tarjeta de Crédito')", async () => malos.length, async () => {
       for (const r of malos) await ejecutar(`UPDATE ${tbl('FinRecibo')} SET pays = ? WHERE id = ?`, JSON.stringify((JSON.parse(r.pays) as { m: string }[]).map(p => ({ ...p, m: mapa(p.m) }))), r.id);
     });
@@ -175,7 +199,7 @@ async function backfill() {
 
   // ---- FinBeca: alumnoId por nombre completo (unico); tipo/conceptos al nombre del catalogo ----
   const alumnos = await filas<{ id: string; code: string; nombres: string; apellidos: string; estado: string }>(`SELECT id, code, nombres, apellidos, estado FROM ${tbl('Alumno')}`);
-  if (await tablaExiste('FinBeca')) {
+  if ((await tablaExiste('FinBeca')) && (await tieneCol('FinBeca', 'tipo'))) {
     const bs = await filas<{ id: string; est: string; alumnoId: string | null; tipo: string; conceptos: string }>(`SELECT id, est, ${q('alumnoId')}, tipo, conceptos FROM ${tbl('FinBeca')}`);
     const unico = (nombre: string) => { const c = alumnos.filter(a => `${a.nombres} ${a.apellidos}` === nombre); return c.length === 1 ? c[0].id : null; };
     const res = bs.filter(b => !b.alumnoId && unico(b.est));
@@ -193,10 +217,11 @@ async function backfill() {
   }
 
   // ---- Alergias: nombres canonicos del catalogo (Alumno.alg, ComCarnet.allergies) y alta de las que faltan ----
+  const tieneAlg = await tieneCol('Alumno', 'alg'); // Fase 2B: Alumno.alg desaparece (AlumnoAlergia)
   const aler = await catalogo('alergias');
   const canon = new Map(aler.map(a => [sinAcento(String(a.d.nombre)), String(a.d.nombre)]));
   const usadas = new Map<string, string>(); // sinAcento -> primera grafia vista
-  for (const a of await filas<{ id: string; alg: string }>(`SELECT id, alg FROM ${tbl('Alumno')}`)) for (const x of a.alg.split(',').map(s => s.trim()).filter(Boolean)) if (!usadas.has(sinAcento(x))) usadas.set(sinAcento(x), x[0].toUpperCase() + x.slice(1).toLowerCase());
+  for (const a of tieneAlg ? await filas<{ id: string; alg: string }>(`SELECT id, alg FROM ${tbl('Alumno')}`) : []) for (const x of a.alg.split(',').map(s => s.trim()).filter(Boolean)) if (!usadas.has(sinAcento(x))) usadas.set(sinAcento(x), x[0].toUpperCase() + x.slice(1).toLowerCase());
   const faltan = [...usadas].filter(([k]) => !canon.has(k));
   await paso(`Catalogo alergias: alta de las ${faltan.length} usadas por los alumnos que no existen (${faltan.map(f => f[1]).slice(0, 5).join(', ')})`, async () => faltan.length, async () => {
     const maxId = Math.max(0, ...aler.map(a => Number(a.cid) || 0));
@@ -208,14 +233,15 @@ async function backfill() {
   });
   if (aplicar) for (const [k, nombre] of faltan) canon.set(k, nombre);
   const canonizar = (x: string) => canon.get(sinAcento(x)) ?? x;
-  const alAlg = (await filas<{ id: string; alg: string }>(`SELECT id, alg FROM ${tbl('Alumno')}`)).filter(a => a.alg && a.alg.split(',').map(s => s.trim()).filter(Boolean).map(canonizar).join(', ') !== a.alg);
+  const alAlg = (tieneAlg ? await filas<{ id: string; alg: string }>(`SELECT id, alg FROM ${tbl('Alumno')}`) : []).filter(a => a.alg && a.alg.split(',').map(s => s.trim()).filter(Boolean).map(canonizar).join(', ') !== a.alg);
   await paso('Alumno.alg: mayusculas/acentos al nombre canonico del catalogo', async () => alAlg.length, async () => {
     for (const a of alAlg) await ejecutar(`UPDATE ${tbl('Alumno')} SET alg = ? WHERE id = ?`, a.alg.split(',').map(s => s.trim()).filter(Boolean).map(canonizar).join(', '), a.id);
   });
 
   // ---- ComCarnet: alumnoId, code = Alumno.code, aliPlanId, alergias canonicas ----
   if (await tablaExiste('ComCarnet')) {
-    const cs = await filas<{ code: string; alumnoId: string | null; plan: string; allergies: string; aliPlanId: string | null }>(`SELECT code, ${q('alumnoId')}, ${q('plan')}, allergies, ${q('aliPlanId')} FROM ${tbl('ComCarnet')}`);
+    const tAll = await tieneCol('ComCarnet', 'allergies');
+    const cs = await filas<{ code: string; alumnoId: string | null; plan: string; allergies: string; aliPlanId: string | null }>(`SELECT code, ${q('alumnoId')}, ${q('plan')}, ${tAll ? 'allergies' : "'[]' AS allergies"}, ${q('aliPlanId')} FROM ${tbl('ComCarnet')}`);
     const alDeCodigo = (code: string) => alumnos.find(a => a.code === code) ?? alumnos.find(a => a.id === code.replace(/^EST-/, ''));
     const sinAl = cs.filter(c => !c.alumnoId && alDeCodigo(c.code));
     await paso('ComCarnet.alumnoId <- Alumno por code (EST-2026-nnnn) o EST-<id>', async () => sinAl.length, async () => {
@@ -283,26 +309,28 @@ async function backfill() {
   }
 
   // ---- Contrato <- PersExpediente.data.contrato (tabla nueva: se rellena DESPUES del db push) ----
-  if (await tablaExiste('Contrato')) {
-    const cfg = await filas<{ valor: string }>(`SELECT valor FROM ${tbl('SisConfig')} WHERE clave = 'ciclos'`);
-    const activo = (cfg[0] ? (JSON.parse(cfg[0].valor) as { n: string; estado: string }[]) : []).find(c => c.estado === 'Activo')?.n ?? '';
+  if ((await tablaExiste('Contrato')) && (await tieneCol('Contrato', 'cicloId')) && (await tablaExiste('Ciclo'))) {
+    // Forma de la Fase 2C (Contrato.cicloId, FK a Ciclo): se rellena DESPUES del db push, cuando la tabla Contrato ya existe vacia.
+    const cicl = await filas<{ id: string; nombre: string; estado: string }>(`SELECT id, nombre, estado FROM ${tbl('Ciclo')}`);
+    const activo = cicl.find(c => c.estado === 'Activo');
     const planes = new Set((await filas<{ id: string }>(`SELECT id FROM ${tbl('FinPlan')}`)).map(p => p.id));
-    const becas = new Set((await catalogo('becas')).map(b => b.cid));
-    const existen = new Set((await filas<{ alumnoId: string; ciclo: string }>(`SELECT ${q('alumnoId')}, ciclo FROM ${tbl('Contrato')}`)).map(c => `${c.alumnoId}|${c.ciclo}`));
+    const colBeca = 'tipoBecaId';
+    const becas = new Set((await tablaExiste('TipoBeca')) ? (await filas<{ id: string }>(`SELECT id FROM ${tbl('TipoBeca')}`)).map(b => b.id) : []);
+    const existen = new Set((await filas<{ alumnoId: string; cicloId: string }>(`SELECT ${q('alumnoId')}, ${q('cicloId')} FROM ${tbl('Contrato')}`)).map(c => `${c.alumnoId}|${c.cicloId}`));
     const nuevos = exps.flatMap(e => {
       try {
         const c = (JSON.parse(e.data) as { contrato?: { ciclo?: string; plan?: string; beca?: string; ctr?: string; firmado?: string } }).contrato;
         if (!c?.plan || !planes.has(c.plan)) return [];
-        const ciclo = c.ciclo || activo;
-        if (!ciclo || existen.has(`${e.alumnoId}|${ciclo}`)) return [];
-        return [{ id: `ctr-${e.alumnoId}-${/(\d{4})/.exec(ciclo)?.[1] ?? 'x'}`, alumnoId: e.alumnoId, ciclo, planId: c.plan, beca: c.beca && c.beca !== 'none' && becas.has(c.beca) ? c.beca : null, ctr: c.ctr ?? '', firmado: c.firmado ?? '' }];
+        const ciclo = cicl.find(x => x.nombre === (c.ciclo || '').replace('-', '\u2013')) ?? activo;
+        if (!ciclo || existen.has(`${e.alumnoId}|${ciclo.id}`)) return [];
+        return [{ id: `ctr-${e.alumnoId}-${/(\d{4})/.exec(ciclo.nombre)?.[1] ?? 'x'}`, alumnoId: e.alumnoId, ciclo: ciclo.id, planId: c.plan, beca: c.beca && c.beca !== 'none' && becas.has(c.beca) ? c.beca : null, ctr: c.ctr ?? '', firmado: c.firmado ?? '' }];
       } catch { return []; }
     });
     await paso('Contrato <- PersExpediente.data.contrato (plan con FK, beca del catalogo, ciclo)', async () => nuevos.length, async () => {
-      for (const c of nuevos) await ejecutar(`INSERT INTO ${tbl('Contrato')} (id, ${q('alumnoId')}, ciclo, ${q('planId')}, beca, ctr, firmado) VALUES (?, ?, ?, ?, ?, ?, ?)`, c.id, c.alumnoId, c.ciclo, c.planId, c.beca, c.ctr, c.firmado);
+      for (const c of nuevos) await ejecutar(`INSERT INTO ${tbl('Contrato')} (id, ${q('alumnoId')}, ${q('cicloId')}, ${q('planId')}, ${q(colBeca)}, ctr, firmado) VALUES (?, ?, ?, ?, ?, ?, ?)`, c.id, c.alumnoId, c.ciclo, c.planId, c.beca, c.ctr, c.firmado);
     });
     informe.push({ paso: 'Expedientes con plan de contrato no resoluble (clave heredada o plan inexistente): sin Contrato', filas: exps.filter(e => { try { const p = (JSON.parse(e.data) as { contrato?: { plan?: string } }).contrato?.plan; return !!p && !planes.has(p); } catch { return false; } }).length, estado: 'informativo' });
-  } else informe.push({ paso: 'Contrato (tabla nueva)', filas: 0, estado: 'aun no existe: ejecuta prisma db push y vuelve a correr este script' });
+  } else informe.push({ paso: 'Contrato (tabla nueva / cicloId)', filas: 0, estado: 'aun no existe: ejecuta prisma db push y vuelve a correr este script' });
 
   // ---- Centinelas '' -> NULL en TODA FK opcional ya NULLable ----
   for (const r of relaciones.filter(x => x.opcional)) {
@@ -314,18 +342,16 @@ async function backfill() {
     });
   }
 
-  // ---- Contadores desnormalizados que ya no se guardan / banderas posicionales ----
-  const secs = await catalogo('secciones');
+  // ---- Contadores desnormalizados que ya no se guardan ----
+  const secs = await catalogo('secciones'); // (vacio si la tabla Catalogo ya no existe)
   const conInsc = secs.filter(s => 'insc' in s.d);
   await paso("Catalogo secciones: quitar el contador 'insc' del JSON (ahora se calcula desde Alumno)", async () => conInsc.length, async () => {
     for (const s of conInsc) { const { insc: _i, ...resto } = s.d; await ejecutar(`UPDATE ${tbl('Catalogo')} SET data = ? WHERE id = ?`, JSON.stringify(resto), s.id); }
   });
-  await paso('AliPlan.meals/diets: alinear la longitud con los catalogos comidas/dietas', async () => {
-    const [com, die] = [(await catalogo('comidas')).filter(c => c.estado === 'Activo').length, (await catalogo('dietas')).filter(c => c.estado === 'Activo').length];
-    return (await filas<{ meals: string; diets: string }>(`SELECT meals, diets FROM ${tbl('AliPlan')}`)).filter(p => (JSON.parse(p.meals) as unknown[]).length !== com || (JSON.parse(p.diets) as unknown[]).length !== die).length;
-  }, async () => { await alinearPlanesAli(); });
+  // (Fase 2B) las banderas posicionales AliPlan.meals/diets se convierten en AliPlanComida/AliPlanDieta: scripts/fk-fase2b.ts
 
-  // ---- Secciones faltantes (informe; --crear-secciones las crea) ----
+  // ---- Secciones faltantes (bases ANTERIORES a la Fase 2A; con --fase2a lo resuelve fk-fase2a) ----
+  if (fase2a || !(await tieneCol('Alumno', 'grado'))) return;
   const grados = await catalogo('grados'), tandas = await catalogo('tandas');
   const existentes = new Set(secs.map(s => `${grados.find(g => g.cid === s.d.grado)?.d.grado}|${s.d.seccion}|${tandas.find(t => t.cid === s.d.tanda)?.d.nombre}`));
   const claves = new Map<string, number>();
@@ -344,25 +370,48 @@ async function main() {
   if (!(await tablaExiste('Alumno'))) { console.log('Base nueva (sin tablas): nada que migrar.'); return; }
   if (detectar) {
     await estructura();
-    const vieja = informe.some(i => i.paso.startsWith('ESTRUCTURA') && i.estado.startsWith('pendiente'));
-    console.log(vieja ? 'Base ANTERIOR a la Fase 1 (integridad referencial): requiere fk-reparar --aplicar + prisma db push --accept-data-loss.' : 'Base ya en el esquema de la Fase 1.');
-    process.exitCode = vieja ? 10 : 0;
+    const vieja = informe.some(i => i.paso.startsWith('ESTRUCTURA') && !i.paso.includes('quitar el DEFAULT') && i.estado.startsWith('pendiente'));
+    const vieja2a = await pendiente2a(), vieja2b = !vieja2a && (await pendiente2b()), vieja2c = !vieja2a && !vieja2b && (await pendiente2c()), viejaF = !vieja2a && !vieja2b && !vieja2c && (await pendienteFiscal());
+    const viejaN = !vieja2a && !vieja2b && !vieja2c && !viejaF && (await pendienteNotas()); // SOLO aditivo: sale con 11 (el contenedor hace db push SIN --accept-data-loss)
+    console.log(vieja ? 'Base ANTERIOR a la Fase 1 (integridad referencial): requiere fk-reparar --aplicar + prisma db push --accept-data-loss.' : vieja2a ? 'Base ANTERIOR a la Fase 2A (nucleo academico tipado): requiere fk-reparar --fase2a --fase2b --aplicar + prisma db push --accept-data-loss.' : vieja2b ? 'Base ANTERIOR a la Fase 2B (resto de catalogos tipados): requiere fk-reparar --fase2b --aplicar + prisma db push --accept-data-loss.' : vieja2c ? 'Base ANTERIOR a la Fase 2C (ciclo lectivo como tabla, matricula, tutores, lineas de recibo, servicios, monedero): requiere fk-reparar --fase2c --aplicar + prisma db push --accept-data-loss.' : viejaF ? 'Base ANTERIOR al modulo fiscal (secuencias NCF/e-NCF, tipo de comprobante por recibo): requiere fk-reparar --fiscal --aplicar + prisma db push (aditivo).' : viejaN ? 'Base ANTERIOR al modulo de notas de credito/debito (NotaFiscal, MotivoNota, FinCobroItem.notaDebitoId): requiere fk-reparar --notas --aplicar + prisma db push (aditivo, sin --accept-data-loss).' : 'Base ya en el esquema vigente (Fase 2C + modulo fiscal + notas).');
+    process.exitCode = vieja || vieja2a || vieja2b || vieja2c || viejaF ? 10 : viejaN ? 11 : 0;
     return;
   }
   if (!auto) console.log(`Motor: ${esSqlServer ? 'SQL Server' : 'SQLite'} · modo: ${aplicar ? 'APLICAR (escribe)' : 'solo informe (agrega --aplicar para escribir)'}`);
   if (aplicar && !auto) console.log('Recuerda: respaldo previo hecho y API detenida.');
   await estructura();
-  if (!aplicar && informe.some(i => i.paso.startsWith('ESTRUCTURA') && i.estado.startsWith('pendiente'))) {
+  if (!aplicar && informe.some(i => i.paso.startsWith('ESTRUCTURA') && !i.paso.includes('quitar el DEFAULT') && i.estado.startsWith('pendiente'))) {
     console.table(informe.filter(i => i.estado.startsWith('pendiente')));
     console.log('La base es anterior a la Fase 1: faltan columnas. Ejecuta con --aplicar para EXPANDIR (agrega las columnas NULLables) y rellenar; el informe de relleno se calcula despues de crearlas.');
     return;
   }
+  const antes2a = fase2a && (await pendiente2a());
+  if (antes2a) await expandir2a(paso);
   await backfill();
+  const antes2b = fase2b && (await pendiente2b());
+  if (antes2b) await expandir2b(paso);
+  // 2C se EXPANDE antes de rellenar 2A/2B: crea los ciclos y las columnas cicloId que las asignaciones materializadas de 2A ya necesitan.
+  const antes2c = fase2c && (await pendiente2c());
+  if (antes2c) await expandir2c(paso, informe);
+  const antesF = fiscal && (await pendienteFiscal());
+  if (antesF) await expandirFiscal(paso, informe);
+  const antesN = notas && (await pendienteNotas()) && !(await pendienteFiscal()); // las notas dependen del modulo fiscal (SecuenciaFiscal / TipoComprobante)
+  if (antesN) await expandirNotas(paso, informe);
+  if (antes2a) await rellenar2a(paso, informe, { aplicar, descartarMobNota, nivelDefecto: process.argv.find(a => a.startsWith('--nivel-por-defecto='))?.slice(20) });
+  if (antes2b) await rellenar2b(paso, informe, { aplicar });
+  if (antes2c) await rellenar2c(paso, informe, { aplicar });
+  if (fiscal) { await rellenarFiscal(paso, informe, { aplicar }); await crearUnicosFiscal(paso); }
+  if (notas && !(await pendienteFiscal())) { await rellenarNotas(paso, informe, { aplicar, reabrirCargos: reabrirCargos && !auto }); await crearUnicosNotas(paso); }
+  if (fase2a && !antes2a) await retirarCatalogo2a(paso, informe);
+  if (fase2b && !antes2b) await retirarCatalogo2b(paso, informe); // tras el db push: Catalogo deja de tener los tipos academicos
+  if (fase2c && !antes2c) await verificar2c(paso, informe); // tras el db push: Catalogo, PersServicio y MobWallet ya no existen
   if (aplicar) await asegurarIndices();
   const hechos = informe.filter(i => i.estado === 'APLICADO');
   if (auto) {
     console.log(hechos.length ? `fk-reparar --auto: ${hechos.length} paso(s) aplicados:\n  - ${hechos.map(h => `${h.paso} (${h.filas})`).join('\n  - ')}` : 'fk-reparar --auto: la base ya cumple la Fase 1 (nada que reparar).');
-    process.exitCode = informe.some(i => i.paso.startsWith('ESTRUCTURA') && i.estado === 'APLICADO') ? 10 : 0;
+    const bloq = informe.filter(i => i.estado === 'BLOQUEANTE');
+    if (bloq.length) { console.error([`fk-reparar --auto: ${bloq.length} hallazgo(s) BLOQUEANTE(S) para la Fase 2A; NO se ejecuta db push:`, ...bloq.map(b => `  - ${b.paso} (${b.filas})`)].join('\n')); process.exitCode = 3; return; }
+    process.exitCode = informe.some(i => i.paso.includes('ESTRUCTURA') && i.estado === 'APLICADO') ? 10 : 0;
     return;
   }
   console.log('\n== Plan / resultado ==');

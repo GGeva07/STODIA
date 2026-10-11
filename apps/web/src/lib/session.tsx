@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { LoginRequest, LoginResponse, SessionUser } from '@stodia/shared';
-import { api, tokenStore, UNAUTHORIZED_EVENT } from './api';
+import { api, setCicloHeader, tokenStore, UNAUTHORIZED_EVENT } from './api';
 
 const USER_KEY = 'stodia.user';
 
@@ -28,6 +28,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     tokenStore.clear();
+    setCicloHeader(''); // el ciclo consultado (Fase 2D) no sobrevive a la sesión: la API vuelve a no recibir X-Ciclo
     localStorage.removeItem(USER_KEY);
     setUser(null);
   }, []);

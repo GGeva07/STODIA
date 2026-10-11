@@ -3,9 +3,11 @@ import type { AcadHorarios } from '@stodia/shared';
 import { api } from '../../lib/api';
 import { useToast } from '../../components/system/UiProvider';
 import { errMsg } from '../../components/finanzas/fin';
+import { SL_MSG, useSoloLectura } from '../../lib/ciclo';
 
 export default function Screen() {
   const toast = useToast();
+  const sl = useSoloLectura(); // Fase 2D: ciclo que no es el activo = grilla solo lectura (no se arrastra ni se desasigna)
   const [h, setH] = useState<AcadHorarios | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const drag = useRef<{ subj: string; from: string | null } | null>(null);
@@ -40,11 +42,13 @@ export default function Screen() {
 
   const endDrag = () => { drag.current = null; setHover(null); };
   const put = async (slot: string, materia: string | null, desde?: string | null) => {
+    if (sl) { toast(SL_MSG, 'warn'); return false; }
     try { setH(await api.put<AcadHorarios>('/horarios/slot', { seccion: h.seccionId, slot, materia, desde })); return true; } catch (e) { toast(errMsg(e), 'bad'); return false; }
   };
   const drop = async (slot: string) => {
     const d = drag.current;
     endDrag();
+    if (sl) return;
     if (!d || d.from === slot) return;
     const c = conflict(d.subj, slot);
     if (c) { toast(c, 'bad'); return; }
@@ -58,7 +62,7 @@ export default function Screen() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="m-0 text-xl font-semibold tracking-[-0.01em]">Grilla de Horarios</h1>
-          <p className="mt-1 text-[13px] text-slate-600">{h.seccion} · {h.tanda} · {h.alumnos} estudiantes · Aula base: {h.aulaBase} ({h.pupitres} pupitres)</p>
+          <p className="mt-1 text-[13px] text-slate-600">{h.seccion} · {h.tanda} · {h.alumnos} estudiantes · Aula base: {h.aulaBase} ({h.pupitres} pupitres){h.ciclo ? ` · Ciclo ${h.ciclo}` : ''}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {h.secciones.length > 1 && (
@@ -82,7 +86,7 @@ export default function Screen() {
         >
           <div className="text-xs font-semibold uppercase tracking-[0.04em] text-slate-600">Por asignar · {pendTotal} h</div>
           {palette.map(p => (
-            <div key={p.k} draggable onDragStart={e => dragStart(e, p.k, null)} onDragEnd={endDrag} className="flex cursor-grab flex-col gap-0.5 rounded-md border border-slate-300 bg-white px-2.5 py-2 hover:border-accent">
+            <div key={p.k} draggable={!sl} title={sl ? SL_MSG : undefined} onDragStart={e => dragStart(e, p.k, null)} onDragEnd={endDrag} className={`flex ${sl ? 'cursor-not-allowed opacity-60' : 'cursor-grab'} flex-col gap-0.5 rounded-md border border-slate-300 bg-white px-2.5 py-2 hover:border-accent`}>
               <div className="flex justify-between gap-1.5"><span className="text-[13px] font-semibold">{p.name}</span><span className="font-mono text-[11px] font-semibold text-accent">×{p.n}</span></div>
               <span className="text-xs text-slate-600">Prof. {p.t} · {aulaOf(p.k)}</span>
             </div>
@@ -90,7 +94,7 @@ export default function Screen() {
           {palette.length === 0 && <div className="flex items-center gap-1.5 text-[13px] text-green-700"><i className="ph ph-check-circle" />Carga horaria completa ({totalH} h)</div>}
           {h.materias.filter(m => m.aulas).map(m => (
             <label key={m.k} className="mt-1.5 flex flex-col gap-1 text-xs font-medium text-slate-600">Aula para {m.name}
-              <select value={m.aula} onChange={e => setAula(m.k, e.target.value)} className="h-8 rounded-md border border-slate-300 bg-white px-2 text-[13px] text-ink">
+              <select value={m.aula} disabled={sl} title={sl ? SL_MSG : undefined} onChange={e => setAula(m.k, e.target.value)} className="h-8 rounded-md border border-slate-300 bg-white px-2 text-[13px] text-ink disabled:opacity-60">
                 {m.aulas!.map(a => <option key={a.nombre} value={a.nombre}>{a.nombre} · {a.pupitres} pupitres</option>)}
               </select>
             </label>
@@ -116,11 +120,11 @@ export default function Screen() {
                       className={`relative min-h-[76px] border-b border-l border-slate-100 border-l-slate-200 p-[5px] ${hov ? (conf ? 'bg-red-50 shadow-[inset_0_0_0_2px_#DC2626]' : 'bg-green-50 shadow-[inset_0_0_0_2px_#16A34A]') : 'bg-white'}`}
                     >
                       {S && (
-                        <div draggable onDragStart={e => dragStart(e, sub, slot)} onDragEnd={endDrag} className="relative flex h-full min-h-16 cursor-grab flex-col gap-0.5 rounded-md border border-blue-200 bg-blue-50 px-2 py-1.5">
+                        <div draggable={!sl} onDragStart={e => dragStart(e, sub, slot)} onDragEnd={endDrag} className={`relative flex h-full min-h-16 ${sl ? 'cursor-default' : 'cursor-grab'} flex-col gap-0.5 rounded-md border border-blue-200 bg-blue-50 px-2 py-1.5`}>
                           <span className="pr-4 text-xs font-semibold text-blue-900">{S.name}</span>
                           <span className="text-[11px] text-slate-700">Prof. {S.t}</span>
                           <span className="text-[11px] text-slate-500">{aulaOf(sub)}</span>
-                          <button onClick={() => put(slot, null)} title="Desasignar" className="absolute right-1 top-1 grid h-[18px] w-[18px] place-items-center rounded text-xs text-slate-500 hover:bg-info-bg hover:text-ink"><i className="ph ph-x" /></button>
+                          <button onClick={() => put(slot, null)} disabled={sl} title={sl ? SL_MSG : 'Desasignar'} className="absolute right-1 top-1 grid h-[18px] w-[18px] place-items-center rounded text-xs text-slate-500 hover:bg-info-bg hover:text-ink disabled:opacity-40"><i className="ph ph-x" /></button>
                         </div>
                       )}
                       {showMsg && <div className={`absolute inset-x-1 bottom-1 rounded bg-white/90 px-1 py-0.5 text-[10px] font-semibold leading-snug ${conf ? 'text-bad-fg' : 'text-green-700'}`}>{conf || (S ? 'Reemplazar bloque' : 'Disponible')}</div>}

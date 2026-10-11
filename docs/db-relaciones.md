@@ -1,6 +1,6 @@
 # STODIA - Relaciones de la base de datos: inventario, auditoría y diseño objetivo
 
-> Alcance: SOLO análisis y diseño. No se modificó `schema.prisma`, código ni datos. La auditoría (`docs/db-auditoria.sql`) es de solo lectura (únicamente tablas temporales `#...`).
+> Documento de análisis y diseño (secciones 1-6, estado al 2026-10-08) con el ESTADO DE EJECUCION en 0.1 (Fases 1, 2A, 2B y 2C HECHAS: base completa con todas sus llaves). Las secciones 1-3 describen la base ANTES de las fases. La auditoría (`docs/db-auditoria.sql`) es de solo lectura (únicamente tablas temporales `#...`).
 > Base auditada: `stodia` en SQL Server 2025 Express, collation `Modern_Spanish_CI_AI`, fecha de la auditoría: 2026-10-08.
 > Reproducir: `sqlcmd -S tcp:localhost,1433 -E -C -d stodia -f 65001 -i docs\db-auditoria.sql -W -s"|" -w 700`
 
@@ -31,6 +31,273 @@ Hallazgos que cambian el diseño (todos verificados en código y datos):
 8. `FinBeca.est` enlaza al alumno por nombre completo, y hay un nombre duplicado en `Alumno` (Estefany Zapata Tavárez): el enlace por nombre ya es potencialmente ambiguo.
 9. Prisma + SQL Server NO soporta `onDelete: Restrict`; el equivalente es `NoAction` (en SQL Server `NO ACTION`). Aplica a todo este diseño.
 10. El proyecto usa `prisma db push` (sin migraciones). Agregar FK/NOT NULL con filas que no cumplen hace fallar el push; hace falta un procedimiento "expandir -> rellenar -> contraer" (sección 5).
+
+## 0.1 ESTADO DE EJECUCION (actualizado tras la Fase 2C: base completa)
+
+| Fase | Estado | FK reales |
+|---|---|---|
+| Fase 1 (FK sobre tablas existentes) | **HECHA** | 4 -> 35 |
+| **Fase 2A (nucleo academico tipado)** | **HECHA** (esta seccion) | 35 -> **67** (0 no confiables) |
+| **Fase 2B (resto de catalogos tipados: cajas, rutas, tipos y conceptos de beca, metodos de pago, comidas, dietas, alergias + puentes)** | **HECHA** (ver «Fase 2B» abajo) | 67 -> **85** (0 no confiables) |
+| **Fase 2C (cierre: `Ciclo`/`PeriodoAcademico`/`Matricula`, `TutorAlumno`, `FinReciboItem/Pago`, `ServicioAlumno`, `Monedero`, `FinPlanTanda`, `TipoDocumento`; retiro de `Catalogo`; base del selector de ciclo lectivo)** | **HECHA** (ver «Fase 2C» abajo) | 85 -> **116** (0 no confiables; 76 tablas) |
+
+### Fase 2A: que se hizo (decisiones y desviaciones del diseno 4.2)
+
+- **Tipos de Catalogo que pasan en 2A** (los academicos, y se **quitan de Catalogo**): `grados`, `tandas`, `secciones`, `materias`, `rubricas`, `aulas`, `docentes`, `staff`. **Quedan para 2B**: `cajas`, `rutas`, `becas`, `conceptosBeca`, `metodosPago`, `comidas`, `dietas`, `alergias`.
+- **Tablas nuevas (16)** con los MISMOS ids de texto: `Nivel` (Inicial/Primaria/Secundaria, tabla de referencia fija sembrada siempre), `Grado` (UNIQUE nivel+nombre y orden), `Tanda`, `Aula`, `Seccion` (UNIQUE grado+letra+tanda; `cap`; los inscritos se calculan), `Materia` (`rubricaId` opcional), `Rubrica`, `RubricaCriterio` (orden, nombre, peso, `clave` C1-C4/EX), `Docente`, `Empleado`, y los puentes `MateriaGrado`, `SeccionMateria` (plan de estudios con horas), `DocenteMateria`, `DocenteSeccion`, `AsignacionAula`, `AcadExtraGrado`.
+- **Relacion con User (una, limpia)**: `Docente.userId` y `Empleado.userId` (FK opcional a `User`, indice unico filtrado cada una) mas `usuario` = usuario PROPUESTO mientras aun no hay cuenta. La API impide que una cuenta sea de un docente y de un empleado a la vez (y de un tutor). Reemplaza el campo de texto `usuario` del JSON. `Empleado.cajaId` sigue siendo referencia logica hasta 2B.
+- **Desviacion respecto de 4.2**: `RubricaMateria` no existe; la relacion es `Materia.rubricaId` (una materia tiene UNA rubrica; antes `rubricaDe()` tomaba la primera que la cubria y la API ahora rechaza solaparlas). El aula elegida entre varias posibles vive en `AcadAsignacion.aulaElegidaId` (mismo grano: una asignacion por seccion+materia) en vez de una columna de `AcadHorario`; `AcadHorario` queda limpio (`seccionId`, `materiaId`, `slot`) y desaparecen las filas `_aula:*`.
+- **Asignaciones**: `AcadAsignacion(docenteId, seccionId, materiaId)` con FK, UNIQUE(seccion, materia) (que implica UNIQUE(docente, seccion, materia), tambien declarado) y `heredada`: las asignaciones implicitas (`docentes.materias[] x secciones[]`) ya no se calculan al leer: se MATERIALIZAN como filas `heredada = true` al guardar el perfil del docente (`sincronizarAsignaciones`). Rafael Almonte conserva exactamente 3 (5to A, 5to B, 6to A de Matematicas).
+- **Alumno**: `Alumno.seccionId` (FK NOT NULL, NoAction) reemplaza `grado/sec/tanda`; el DTO los calcula. `AcadRoster.seccionId`, `AcadNota.materiaId`, `MobNota.materiaId`, `AcadExtra.docenteId/aulaId` (opcionales; el texto `instructor`/`lugar` se conserva para personas/espacios externos) y `AcadExtraGrado` (el texto "4to - 6to" se reconstruye de los grados). El cierre de ciclo (EOY) promueve por seccion (misma letra y tanda del grado siguiente).
+- **onDelete**: NoAction para lo academico/historico; Cascade solo hacia el padre "dueño" de un puente puro (`RubricaCriterio`<-Rubrica, `MateriaGrado`<-Materia, `SeccionMateria`<-Seccion, `DocenteMateria/DocenteSeccion`<-Docente, `AsignacionAula`<-AcadAsignacion, `AcadExtraGrado`<-AcadExtra); hacia el catalogo referenciado siempre NoAction. Resultado de las 67 FK: 11 CASCADE, 3 SET NULL, 53 NO ACTION; sin "multiple cascade paths".
+
+### Estado por relacion (inventario R01-R79)
+
+| R | Estado Fase 2A |
+|---|---|
+| R19 `Tutor.usuario`, R20 `docentes.usuario`, R21 `staff.usuario` | R19 hecha (Fase 1); **R20, R21 hechas** (`Docente.userId`, `Empleado.userId`) |
+| R26 secciones.grado, R27 secciones.tanda, R28 secciones.aula | **hechas** (`Seccion.gradoId/tandaId/aulaBaseId`) |
+| R29 materias.grados[], R30 rubricas.materias[], R31 docentes.materias[], R32 docentes.secciones[] | **hechas** (`MateriaGrado`, `Materia.rubricaId`, `DocenteMateria`, `DocenteSeccion`) |
+| R33 staff.caja | pendiente 2B (`Empleado.cajaId` logica hasta `Caja`) |
+| R34 AcadRoster.seccion, R35 AcadNota.materia | **hechas** |
+| R36-R38 AcadAsignacion docente/seccion/materia, R39 aulas[] | **hechas** (`AcadAsignacion`, `AsignacionAula`) |
+| R40-R42 AcadHorario seccion/materia/aula | **hechas** (la columna sobrecargada desaparece; aula elegida en la asignacion) |
+| R43 PersCupo, R44 MobAsistencia | tablas eliminadas en la Fase 1 |
+| R45 MobNota.materia (nombre) | **hecha** (`MobNota.materiaId`) |
+| R46 Alumno.grado, R47 Alumno.tanda, R48 Alumno (grado,sec,tanda) | **hechas** (`Alumno.seccionId`) |
+| R73 AcadExtra.instructor, R74 AcadExtra.grados | **hechas** (`docenteId` opcional, `AcadExtraGrado`) |
+| R77 secciones.insc | **hecha** (se calcula con `COUNT(Alumno.seccionId)`) |
+| R49-R72, R75, R76, R78, R79 | pendientes (2B/2C) o por diseno sin FK |
+
+### Fase 2B: que se hizo (decisiones)
+
+- **Tipos que migraron y SE QUITAN de Catalogo** (la tabla queda vacia; se elimina en la 2C): `cajas`, `rutas`, `becas`, `conceptosBeca`, `metodosPago`, `comidas`, `dietas`, `alergias`. Con la 2A, `Catalogo` ya no guarda ningun tipo.
+- **Tablas nuevas (14)**, con los MISMOS ids de texto: `Caja`, `RutaTransporte`, `TipoBeca` (`pct` en %, `requiereAprobacion`), `ConceptoBeca`, `MetodoPago` (`ref` = etiqueta de la referencia, NULL = no la pide), `Comida`, `Dieta`, `Alergia`, `CategoriaProducto` y los puentes `FinBecaConcepto` (orden de los conceptos), `AliPlanComida`, `AliPlanDieta`, `AlumnoAlergia`, `AliMenuAlergia`. Todas con UNIQUE sobre el nombre/codigo (claves <= 900 bytes) y borrado logico (`estado`); la API `/catalogos` conserva la forma `{id, estado, ...campos}` y ahora tambien sirve `becas`, `metodosPago`, `comidas`, `dietas`, `alergias` (sin pantalla propia en Catalogos: los usan Becas, Cobros y Alimentacion). Eliminar con historial = 409 amistoso con el conteo; el ultimo medio de pago activo no se puede quitar.
+- **Columnas nuevas / convertidas**: `Empleado.cajaId` y `FinRecibo.cajaId` -> `Caja`; `FinRecibo.metodoPagoId` -> `MetodoPago` (el medio cuando se cobro con UN solo medio; NULL si el pago es mixto o historico; el detalle por medio sigue en `pays` hasta que la 2C cree `FinReciboPago` con FK a `MetodoPago`); `FinVenta.metodoPagoId` (NOT NULL; `metodo` queda como instantanea); `FinBeca.tipoBecaId` (NOT NULL), `modo` (pct|monto) + `valor` (reemplazan `regla` en texto) y `FinBecaConcepto` (reemplaza `conceptos` en texto); `Contrato.beca` -> `Contrato.tipoBecaId` (FK, NULL = sin beca); `PersServicio.rutaId` -> `RutaTransporte` (cuando `catKey = 'rt:<id>'`; el resto de `catKey` es de la 2C); `FinProducto.cat` -> `FinProducto.categoriaId` -> `CategoriaProducto` (la API sigue devolviendo `cat` como texto).
+- **Textos / banderas que desaparecen**: `Alumno.alg` -> `AlumnoAlergia` (el DTO sigue mostrando «Maní, Lactosa»); `ComCarnet.allergies` -> se DERIVA de las alergias del alumno (si un carnet tenia una alergia que el alumno no, se agrego al alumno: no se pierde dato clinico); `AliMenu.algs` -> `AliMenuAlergia`; `AliPlan.meals/diets` (banderas POSICIONALES) -> `AliPlanComida`/`AliPlanDieta` (la API conserva `meals[]`/`diets[]` por posicion del catalogo ACTIVO ordenado por id; las posiciones que faltaban eran `false`: `ALI-002/003` quedaron con las dietas que marcaban explicitamente). No existe dato de «dieta del alumno» en el modelo anterior: no se invento (queda para 2C si se requiere).
+- **onDelete**: NoAction hacia todo catalogo; Cascade solo en puentes puros hacia su dueño (`FinBecaConcepto`<-FinBeca, `AliPlanComida/Dieta`<-AliPlan, `AlumnoAlergia`<-Alumno, `AliMenuAlergia`<-AliMenu). Resultado de las 85 FK: 16 CASCADE, 3 SET NULL, 66 NO ACTION; sin «multiple cascade paths».
+- **Casos del analisis resueltos**: `Tarjeta` vs `Tarjeta de Credito` (`pays[].m` = nombre exacto de `MetodoPago`; la API traduce `Tarjeta`), nombres de beca (`FinBeca.tipoBecaId` FK), `Solo colegiatura` -> `Colegiatura`, 29+17 alergias sin catalogo (dadas de alta), banderas posicionales de `AliPlan`, `FinMovimiento`/`FinVenta` ya con FK. `ComCarnet.plan` y `PersExpediente.medico.planAlim` (R69, R70) son ETIQUETAS de presentacion («Suscripción completa · Almuerzo»): la relacion real es `ComCarnet.aliPlanId` (FK); no son referencia.
+- **Cosas dejadas a la 2C a proposito** (para no estorbar el selector global de **ciclo lectivo**): `FinBeca.periodo` y `Contrato.ciclo` siguen siendo el texto `2026–2027` heredado; NO se agrego ninguna columna de ciclo nueva. La 2C crea `Ciclo` y convierte esos textos en FK (`cicloId`) junto con `FinCobroItem`/`FinRecibo`/`PersInscripcion`, para poder consultar anos anteriores.
+
+### Estado por relacion tras la Fase 2B
+
+| R | Estado Fase 2B |
+|---|---|
+| R33 `staff.caja` | **hecha** (`Empleado.cajaId` FK) |
+| R49 `Alumno.alg`, R50 `ComCarnet.allergies`, R51 `AliMenu.algs` | **hechas** (`AlumnoAlergia`, derivada del alumno, `AliMenuAlergia`) |
+| R52 `pays[].m`, R53 `FinRecibo.metodo` | **parcial**: `FinRecibo.metodoPagoId` FK (un solo medio) y nombre exacto en `pays`; el detalle por medio es `FinReciboPago` (2C) |
+| R54 `FinVenta.metodo` | **hecha** (`FinVenta.metodoPagoId` FK) |
+| R56 `FinBeca.tipo`, R57 `FinBeca.conceptos` | **hechas** (`tipoBecaId`, `modo`/`valor`, `FinBecaConcepto`) |
+| R61 `contrato.beca` | **hecha** (`Contrato.tipoBecaId` FK) |
+| R68 `PersServicio.catKey` | **parcial**: `rutaId` FK para transporte; las 289 claves heredadas (`com`, `fut`, `lib`...) y `ali:`/`ext:`/`prd:` son 2C (`ServicioAlumno`) |
+| R69, R70 | etiquetas de presentacion; la FK real ya existia (`ComCarnet.aliPlanId`) |
+| R71 `AliPlan.meals`, R72 `AliPlan.diets` | **hechas** (`AliPlanComida`, `AliPlanDieta`) |
+| R76 `AliPlan.inscritos` | hecha en 2A/2B (se calcula con `COUNT(ComCarnet.aliPlanId)`) |
+| Pendientes (2C) | R55 `FinRecibo.items` (1,382 lineas historicas), R58 `FinPlan.tm`, R59/R60 `ciclo` como texto, R64 `MobPagoIntencion.detalle`, R65, R23 `CmnMensaje.by` (instantanea), R78 `ComLectura.n`, R79 (polimorfica por diseno) |
+
+### Fase 2C: que se hizo (cierre de la base) — HECHA
+
+Resultado verificado sobre `stodia` (SQL Server): **76 tablas, 116 FK reales** (22 CASCADE, 3 SET NULL, 91 NO ACTION; 0 no confiables; 0 huerfanos), **9 indices unicos filtrados**, **8 CHECK**; `Catalogo`, `PersServicio` y `MobWallet` ya no existen. `docs/db-auditoria.sql` da 0 problemas.
+
+**A. El ciclo lectivo es una ENTIDAD.** `Ciclo` (id estable `cic-2026-2027`, nombre `2026–2027`, `fechaInicio`/`fechaFin` ISO, estado Planificado/Activo/Cerrado; **un solo Activo**: indice unico filtrado `UX_Ciclo_activo`) y `PeriodoAcademico` (hijo de Ciclo: 4 periodos Ago–Oct, Nov–Ene, Feb–Abr, May–Jul con su rango; `orden` 1..4 es la clave `'1'..'4'` de la API). `SisConfig 'ciclos'` desaparece: `/config` sigue devolviendo `ciclos: [{n, estado}]` pero desde la tabla; crear un ciclo crea tambien sus periodos; el **cierre (EOY)** actualiza la tabla (`lib/ciclo-cierre.ts`). Toda base tiene un ciclo activo (`asegurarCicloActivo`: la instalacion crea el del ano en curso, o el de `CICLO_INICIO`/`CICLO_FIN`). Un ciclo Cerrado es de solo lectura para la app (recibos y becas lo rechazan con 409).
+
+| Dato | Pasa a | Por que / criterio |
+|---|---|---|
+| `Contrato.ciclo` (texto) | `Contrato.cicloId` -> Ciclo (UNIQUE alumno+ciclo) | por ciclo |
+| `FinBeca.periodo` (texto) | `FinBeca.cicloId` -> Ciclo | por ciclo |
+| `PersInscripcion` | `cicloId` -> Ciclo (UNIQUE alumno+ciclo) | una inscripcion por ciclo |
+| `FinCobroItem` | `cicloId` -> Ciclo (derivado de la fecha de vencimiento) | la cartera pendiente exigible es la del ciclo ACTIVO; la deuda de un ciclo cerrado NO entra en morosidad, recaudo del mes ni proyeccion |
+| `FinRecibo` | `cicloId` -> Ciclo (ciclo activo al emitir; en migracion, el que contiene `createdAt`) | por ciclo (el recaudo por mes del Centro de Control es por FECHA) |
+| `AcadAsignacion`, `AcadHorario` | `cicloId` + UNIQUE por ciclo | asignaciones y horarios cambian cada ano |
+| `AcadNota.periodo` ('1'..'4') | `AcadNota.periodoId` -> PeriodoAcademico | el ciclo de la nota sale de su periodo |
+| `AcadAsistencia` | **sin FK**: es por fecha (`fecha` ISO); se filtra por el rango del ciclo. Para los ciclos cerrados existe `AsistenciaResumen(matriculaId, periodoId, dias, presentes, tardanzas, ausencias)` | 145 k filas diarias por ano por alumno no se conservan; el resumen es suficiente |
+| `AcadRoster`, `PersExpediente` | **sin cicloId**: la nomina es del alumno (se enlaza a la seccion por su Matricula) y la ficha del expediente es una por alumno | el historial por ciclo sale de `Matricula` + `AcadNota` |
+| **NO son por ciclo** | catalogos (grados, materias, aulas, tandas, rubricas, cajas, rutas, becas, medios de pago, alergias...), usuarios, licencia, configuracion, auditoria, `FinPlan` (plantilla reutilizable; el ciclo lo fija `Contrato`), `AliPlan`/`AliMenu`/`ComCarnet`/`ComLectura` (comedor vigente), `Monedero` y sus movimientos (por fecha), `ServicioAlumno` (servicio vigente; sus cargos si llevan ciclo), `MobAcceso` | |
+
+**B. Matricula por ciclo.** `Matricula(alumnoId, cicloId, seccionId, estado, fechaIngreso, fechaRetiro)`, UNIQUE(alumno, ciclo), estado Activo / Retirado / Promovido / Repitente / Graduado (CHECK). **Regla**: `Matricula` es la FUENTE de verdad del historial; `Alumno.seccionId` es la copia de la matricula del ciclo ACTIVO y se mantiene con `lib/matricula.sincronizarMatricula` (inscripcion, Directorio, cierre de ciclo, seeds); la auditoria verifica 0 divergencias. **Cierre / promocion**: 6to egresa (`Alumno.estado = Egresado`, matricula Graduado); el resto pasa al grado de `orden` siguiente, misma letra y tanda (matricula anterior Promovido + matricula nueva); sin seccion destino, o alumno Inactivo, repite (anterior Repitente + nueva en la misma seccion); los Retirados conservan su matricula Retirado y no pasan al ciclo siguiente. El historial nunca se pierde. El Expediente 360 (`ficha.hist`) sale de `Matricula` + `AcadNota` (promedio = media de las medias de cada nota; el ciclo activo se muestra parcial con `*`).
+
+**C. Tablas hijas / puente.**
+
+| Tabla (FK) | Reemplaza | Regla |
+|---|---|---|
+| `TutorAlumno` (alumnoId CASCADE, tutorId NO ACTION; rol Financiero/Legal/Academico; desde, hasta NULL = vigente) | `Alumno.tutorId` / `tutorLegalId` como unica fuente | indices unicos filtrados: UN Financiero y UN Legal vigentes por alumno. FUENTE = TutorAlumno; `Alumno.tutorId`/`tutorLegalId` son su copia vigente (`lib/tutor-alumno.sincronizarTutores`); Academico lo da `Tutor.tipo` |
+| `FinReciboItem` (reciboId CASCADE, cobroItemId -> FinCobroItem NULLable, orden, concepto, monto) | `FinRecibo.items` JSON | la API y los PDF devuelven la misma forma `{con, monto, cobroItemId?}`. Las lineas historicas sin cargo (reinscripciones, libros, meses anteriores al vinculo) quedan con `cobroItemId` NULL: **696** en la base migrada del 2B; 510 en la demo regenerada |
+| `FinReciboPago` (reciboId CASCADE, metodoPagoId -> MetodoPago, monto, referencia) | `FinRecibo.pays` JSON | forma `{m, r, amt}`; `FinRecibo.metodoPagoId` queda como copia del pago unico (NULL si es mixto) |
+| `ServicioAlumno` (= PersServicio): `rutaId`/`aliPlanId`/`extraId`/`productoId` + **CHECK exactamente una no nula** | `PersServicio.catKey` | la API conserva `catKey` (`rt:`/`ali:`/`ext:`/`prd:`), derivado. Claves heredadas (`com`, `fut`, `lib`, `uni0`, `seg`, `sal`): por NOMBRE contra el catalogo; si no existe, el servicio pasa a ser un `FinProducto` de la categoria Servicios (decision registrada en el informe de `fk-fase2c`) |
+| `Monedero` (alumnoId PK) + `MonederoMovimiento` (Recarga/Consumo/Ajuste, monto con signo, saldoDespues, intencionId) | `MobWallet` + `ComCarnet.wallet/limit/spent` (doble fuente de saldo) | una sola cuenta por alumno; el consumo de HOY (`spent`) se calcula con los movimientos; todo carnet tiene su monedero |
+| `FinPlanTanda` (planId CASCADE, tandaId) | `FinPlan.data.tm` (importe por NOMBRE de tanda) | `tm` = importe anual por tanda del plan; la API lo sigue devolviendo en `tm` |
+| `TipoDocumento` (`requerido`, `orden`) + `PersDocumento.tipoId` UNIQUE(alumno, tipo) | `PersDocumento.n` y `SisConfig docsRequeridos` | catalogo de documentos del expediente |
+| `MobPagoIntencionCargo` + `MobPagoIntencion.resueltoPorId` -> User | `detalle` JSON y `resueltoPor` texto | R64, R25 |
+| `AsistenciaResumen`, `PeriodoAcademico`, `Matricula`, `Ciclo` | — | ver A y B |
+
+**D. `Catalogo` eliminada** del schema, del codigo y de los seeds (las migraciones de 2A/2B solo la LEEN con SQL crudo en bases heredadas: `scripts/fk-comun.catalogo()`); `db push` la elimina de una instancia existente una vez vaciada.
+
+**E. Ciclos de la demo.** `seed-ciclos.ts`: 3 ciclos cerrados (2023–2024, 2024–2025, 2025–2026) + el activo, cada uno con sus periodos. Cada alumno con grado inferior tiene Matricula en los 3 ciclos anteriores (grado inmediato inferior; ~3 % repitentes); los de nuevo ingreso (14 del mes y el grado inicial) no tienen previa. Ciclo 2025–2026 con detalle: contrato, reinscripcion + cuotas del plan (pagadas salvo unos pocos saldos), recibos con lineas y pagos (algunos mixtos), becas, notas finales de los 4 periodos (alumnos con nomina), asistencia resumida y copia de las asignaciones y horarios. Juan Mendoza (0412): 4to A 89.4 / 3ro A 91.2 / 2do A 87.8 exactos desde `AcadNota` + el parcial 83.5 del ciclo activo.
+
+**F. Capa de lectura por ciclo** (`apps/api/src/lib/ciclo.ts`): `cicloDeRequest(req)` (cabecera `X-Ciclo` o `?ciclo=`, id o nombre; por defecto el Activo; 404 si no existe), `cicloIdActivo()`, `periodoId(cicloId, k)`, `cicloPorFecha()`, `cicloEditable()`. **Fase 2D HECHA**: se aplica a los modulos por ciclo (dashboard, directorio, expediente, notas, asistencia, horarios, cobros, planes, becas, tutores, comunica), el selector de la web envia `X-Ciclo` y un hook global rechaza (409 `CICLO_CERRADO`) las escrituras por ciclo sobre un ciclo Cerrado. Detalle, tabla pantalla -> por ciclo y regla de la deuda anterior en `docs/ciclo-lectivo.md`.
+
+### Estado por relacion tras la Fase 2C (cierre)
+
+| R | Estado final |
+|---|---|
+| R55 `FinRecibo.items` | **hecha** (`FinReciboItem`; 696/510 lineas historicas sin cargo = NULL permitido) |
+| R52, R53 `pays[].m`, `metodo` | **hechas** (`FinReciboPago.metodoPagoId` FK; `metodoPagoId` del recibo = copia del pago unico) |
+| R58 `FinPlan.tm` | **hecha** (`FinPlanTanda`) |
+| R59, R60 ciclo como texto (`Contrato.ciclo`, `PersInscripcion`) y `FinBeca.periodo` | **hechas** (`cicloId` FK; tambien `FinCobroItem`, `FinRecibo`, `AcadAsignacion`, `AcadHorario`, `AcadNota.periodoId`) |
+| R62 `PersServicio.recibo`, R67 prefijo `psv-` | FK reales (`ServicioAlumno.reciboId`, `FinCobroItem.servicioId`) |
+| R64 `MobPagoIntencion.detalle[]`, R25 `resueltoPor` | **hechas** (`MobPagoIntencionCargo`, `resueltoPorId`) |
+| R65 `FinMovimiento.ref` | `ventaId` FK (Fase 1); `ref` = etiqueta visible |
+| R68 `PersServicio.catKey` | **hecha** (`ServicioAlumno`: 4 FK + CHECK) |
+| R12/R78 `ComCarnet.code`, `ComLectura.n` | `alumnoId` FK; `n`/`name` = instantaneas |
+| R03 `MobWallet`, duplicado `ComCarnet.wallet` | **hechas** (`Monedero` + movimientos) |
+| R08 `PersDocumento.n`, `docsRequeridos` | **hechas** (`TipoDocumento`) |
+| R61 contratos / R18 tutor legal / `Tutor.tipo` | `Contrato.tipoBecaId` FK; `TutorAlumno` (Financiero/Legal/Academico con vigencia) |
+| R69, R70 `ComCarnet.plan`, `medico.planAlim` | etiquetas de presentacion (la FK real es `ComCarnet.aliPlanId`) |
+| R22 `SisAudit.usr`, R79 `SisAudit.tabla/registro`, R24 `DocFolio.emitidoPor`, R23 `CmnMensaje.by` | **deliberadas** (sin FK): bitacora/folios deben sobrevivir al borrado del usuario o del registro; `CmnMensaje` tiene `userId`/`tutorId` FK y `by`/`to` como instantanea |
+| `SisConfig`, `FinCounter` | clave/valor y secuencias sin relaciones |
+| `AcadExtra.inscritos`, `Alumno.cuenta`, `AcadExtra.instructor/lugar` | contadores operativos / texto de personas o espacios externos (FK opcionales `docenteId`/`aulaId`); la lista nominal de una actividad esta en `ServicioAlumno.extraId` |
+
+**Referencias logicas que quedan, todas DELIBERADAS**: `SisAudit.usr/tabla/registro`, `DocFolio.emitidoPor`, `CmnMensaje.by/to`, `ComLectura.n`, instantaneas de nombre en recibos/becas/movimientos/cargos/carnets, `SisConfig`, `FinCounter`, `PersExpediente.data` (ficha medica/conducta) y los contadores `AcadExtra.inscritos` y `Alumno.cuenta`. `docs/db-auditoria.sql` seccion D las lista con su motivo; no hay ninguna otra referencia por texto, nombre, posicion o JSON.
+
+### Scripts (Fase 2C)
+
+`scripts/fk-fase2c.ts` (invocado por `fk-reparar --fase2c` o `--auto`): **expandir** (13 tablas con el DDL del schema + 10 columnas NULLables; crea los `Ciclo` desde `SisConfig ciclos` y los nombres usados por `Contrato.ciclo`/`FinBeca.periodo`), **rellenar** (cicloId por texto / fecha de emision / fecha de vencimiento / ciclo activo, `AcadNota.periodoId`, `Matricula`, `TutorAlumno`, lineas y pagos del recibo, `FinPlanTanda`, `TipoDocumento`, `ServicioAlumno`, `Monedero` + consumo del dia, `MobPagoIntencionCargo`), **contraer** (`prisma db push --accept-data-loss`: NOT NULL, FK, UNIQUE; elimina `PersServicio`, `MobWallet`, `Catalogo` y las columnas heredadas) y **verificar**. BLOQUEANTE (exit 3 en `--auto`): ciclo con nombre invalido o mas de un Activo, medio de pago de un recibo inexistente, `tm` con tandas inexistentes, `catKey` hacia un elemento inexistente, documento repetido por alumno, `Catalogo` con filas. Probado: (a) restore de `stodia_fase2b_ok.bak` en una base temporal (SQL Server): 48 pasos, `db push`, 2.ª pasada rc 0, auditoria 0 y las mismas cifras del Centro de Control; (b) SQLite heredado `preview.sqlite.pre-fk.bak` (Fase 0 -> 2C con `--auto`).
+
+### Diagrama ER FINAL (base completa tras la Fase 2C)
+
+Lineas solidas = FK reales (116). Las cardinalidades y reglas ON DELETE estan en el schema (`apps/api/prisma/schema.prisma`) y en la seccion A de `docs/db-auditoria.sql`.
+
+```mermaid
+erDiagram
+    Ciclo ||--o{ PeriodoAcademico : "CASCADE"
+    Ciclo ||--o{ Matricula : ""
+    Ciclo ||--o{ Contrato : ""
+    Ciclo ||--o{ PersInscripcion : ""
+    Ciclo ||--o{ FinBeca : ""
+    Ciclo ||--o{ FinCobroItem : ""
+    Ciclo ||--o{ FinRecibo : ""
+    Ciclo ||--o{ AcadAsignacion : ""
+    Ciclo ||--o{ AcadHorario : ""
+    PeriodoAcademico ||--o{ AcadNota : ""
+    PeriodoAcademico ||--o{ AsistenciaResumen : ""
+    Matricula ||--o{ AsistenciaResumen : ""
+    Alumno ||--o{ Matricula : "historial por ciclo"
+    Seccion ||--o{ Matricula : ""
+    Seccion ||--o{ Alumno : "ciclo activo"
+    Grado ||--o{ Seccion : ""
+    Nivel ||--o{ Grado : ""
+    Tanda ||--o{ Seccion : ""
+    Aula |o--o{ Seccion : "aula base"
+    Tutor ||--o{ TutorAlumno : ""
+    Alumno ||--o{ TutorAlumno : "CASCADE"
+    Tutor ||--o{ Alumno : "financiero / legal (copia vigente)"
+    User |o--o{ Tutor : "portal"
+    Alumno ||--o{ FinCobroItem : ""
+    Tutor |o--o{ FinCobroItem : ""
+    ServicioAlumno |o--o{ FinCobroItem : ""
+    Alumno ||--o{ ServicioAlumno : ""
+    RutaTransporte |o--o{ ServicioAlumno : "una sola FK (CHECK)"
+    AliPlan |o--o{ ServicioAlumno : ""
+    AcadExtra |o--o{ ServicioAlumno : ""
+    FinProducto |o--o{ ServicioAlumno : ""
+    FinRecibo |o--o{ ServicioAlumno : ""
+    FinRecibo ||--o{ FinReciboItem : "CASCADE"
+    FinCobroItem |o--o{ FinReciboItem : "cargo cobrado (NULL historico)"
+    FinRecibo ||--o{ FinReciboPago : "CASCADE"
+    MetodoPago ||--o{ FinReciboPago : ""
+    MetodoPago |o--o{ FinRecibo : "pago unico"
+    Caja |o--o{ FinRecibo : ""
+    Tutor |o--o{ FinRecibo : ""
+    User |o--o{ FinRecibo : "cajero"
+    FinPlan ||--o{ Contrato : ""
+    FinPlan ||--o{ PersInscripcion : ""
+    FinPlan ||--o{ FinPlanTanda : "CASCADE"
+    Tanda ||--o{ FinPlanTanda : ""
+    TipoBeca |o--o{ Contrato : ""
+    TipoBeca ||--o{ FinBeca : ""
+    FinBeca ||--o{ FinBecaConcepto : "CASCADE"
+    ConceptoBeca ||--o{ FinBecaConcepto : ""
+    Alumno ||--o{ Contrato : ""
+    Alumno ||--o{ FinBeca : ""
+    Alumno ||--o{ PersInscripcion : ""
+    Alumno ||--o| PersExpediente : "CASCADE"
+    Alumno ||--o{ PersDocumento : "CASCADE"
+    TipoDocumento ||--o{ PersDocumento : ""
+    Alumno ||--o| Monedero : ""
+    Monedero ||--o{ MonederoMovimiento : ""
+    MobPagoIntencion |o--o{ MonederoMovimiento : "recarga"
+    Alumno ||--o| ComCarnet : ""
+    AliPlan |o--o{ ComCarnet : ""
+    AliPlan ||--o{ AliPlanComida : "CASCADE"
+    AliPlan ||--o{ AliPlanDieta : "CASCADE"
+    Comida ||--o{ AliPlanComida : ""
+    Dieta ||--o{ AliPlanDieta : ""
+    AliMenu ||--o{ AliMenuAlergia : "CASCADE"
+    Alumno ||--o{ AlumnoAlergia : "CASCADE"
+    Alergia ||--o{ AlumnoAlergia : ""
+    Alergia ||--o{ AliMenuAlergia : ""
+    Alumno ||--o{ MobPagoIntencion : ""
+    Tutor ||--o{ MobPagoIntencion : ""
+    FinRecibo |o--o{ MobPagoIntencion : ""
+    User |o--o{ MobPagoIntencion : "resuelto por"
+    MobPagoIntencion ||--o{ MobPagoIntencionCargo : "CASCADE"
+    FinCobroItem ||--o{ MobPagoIntencionCargo : ""
+    Alumno ||--o{ AcadRoster : "SET NULL"
+    Seccion ||--o{ AcadRoster : ""
+    AcadRoster ||--o{ AcadNota : ""
+    AcadRoster ||--o{ AcadAsistencia : ""
+    Materia ||--o{ AcadNota : ""
+    Materia |o--o{ MobNota : ""
+    Alumno ||--o{ MobNota : "CASCADE"
+    Docente ||--o{ AcadAsignacion : ""
+    Seccion ||--o{ AcadAsignacion : ""
+    Materia ||--o{ AcadAsignacion : ""
+    AcadAsignacion ||--o{ AsignacionAula : "CASCADE"
+    Seccion ||--o{ AcadHorario : ""
+    Materia ||--o{ AcadHorario : ""
+    Materia ||--o{ MateriaGrado : "CASCADE"
+    Grado ||--o{ MateriaGrado : ""
+    Seccion ||--o{ SeccionMateria : "CASCADE"
+    Docente ||--o{ DocenteMateria : "CASCADE"
+    Docente ||--o{ DocenteSeccion : "CASCADE"
+    Rubrica ||--o{ RubricaCriterio : "CASCADE"
+    Rubrica |o--o{ Materia : ""
+    AcadExtra ||--o{ AcadExtraGrado : "CASCADE"
+    User |o--o{ Docente : ""
+    User |o--o{ Empleado : ""
+    Caja |o--o{ Empleado : ""
+    CategoriaProducto ||--o{ FinProducto : ""
+    FinProducto ||--o{ FinMovimiento : ""
+    FinVenta |o--o{ FinMovimiento : ""
+    FinVenta ||--o{ FinVentaItem : "CASCADE"
+    FinProducto ||--o{ FinVentaItem : ""
+    MetodoPago ||--o{ FinVenta : ""
+    Tutor |o--o{ CmnMensaje : "SET NULL"
+    User |o--o{ CmnMensaje : ""
+    Alumno |o--o{ ComLectura : "SET NULL"
+    Alumno ||--o{ MobAcceso : ""
+```
+
+Tablas sin FK de entrada ni de salida (deliberado): `SisConfig`, `FinCounter`, `SisAudit`, `DocFolio`.
+
+**Modulo fiscal (NCF / e-NCF; `docs/fiscal-ncf.md`)**: `TipoComprobante` (catalogo fijo, id = codigo B01…E47) -> `SecuenciaFiscal` (N:1, NoAction; UNIQUE tipo+modalidad+historica+desde) y `FinRecibo.tipoComprobanteId` / `FinRecibo.secuenciaFiscalId` (FK NoAction, NOT NULL con DEFAULT B02 / secuencia historica B02 para filas creadas fuera de la API). `FinRecibo.ncf` sigue UNIQUE. `FinCounter` ya no numera NCF (solo REC/VTA/ENT/PLN) y `SisConfig 'ncf'` es legado de la migracion. `Tutor.comprobanteHabitual` es un tipo logico en texto (deliberado: es una preferencia, no una referencia).
+
+### Datos corregidos / lineas base
+
+- Linea base verificada antes de empezar (la base ya traia la limpieza de la Fase 1): 810 alumnos (786 Activo / 9 Inactivo / 15 Retirado), 13 grados, 7 tandas, **105 secciones** (el plan decia 103: son 103 + las dos creadas en la Fase 1, `3ro B` y `4to C` Matutina), 42 materias, 8 rubricas, 32 docentes, 13 empleados, 50 aulas, 21 asignaciones explicitas, 788 rosters, 12 notas, 17 actividades.
+- Tras la Fase 2A: **106 secciones**. La alumna 0501 (6 años, `1ro A Extendida`) estaba enlazada por TEXTO a la seccion de SECUNDARIA `s5` (`1ro` existe en dos niveles); se crea `s13` (1ro de Primaria, A, Extendida) y se resiembra con ella. En una instancia ya existente `fk-reparar --fase2a` NO la mueve (solo informa): el texto resolvia a un unico candidato.
+- Cifras de la demo recalculadas desde las tablas: matricula 786, recaudo del mes 2,015,700 (efectivo 818,650 + banco 1,197,050), morosidad 3,220,455, 14 inscripciones del mes, 2 becas pendientes, 3 asignaciones de Rafael Almonte.
+- El docente `d1` Rafael Almonte quedaba con rol `Director Académico` en el catalogo del prototipo mientras su cuenta `usr_ralmonte` es `Docente`: ahora se enlaza por nombre a esa cuenta y el rol visible es el de la cuenta.
+
+### Datos de la demo tras la Fase 2B
+
+Linea base (re-sembrada con los generadores corregidos): 810 alumnos (786 Activo), 560 tutores, **8,780 cargos y 760 recibos** (la linea de la Fase 1 era 8,738 / 737: los generadores de la 2A ya sembraban 8,780 cargos; el SQLite heredado actualizado con `--auto` conserva 8,738 / 737 y su conteo exacto). Cifras exactas: matricula 786; recaudo del mes 2,015,700; morosidad 3,220,455; proyeccion 62,399,666.67; 14 inscripciones del mes; 2 becas pendientes; Rafael Almonte con 3 asignaciones; 120 filas `AlumnoAlergia` (96 alumnos); 85 FK. El reparto efectivo/banco del recaudo es aleatorio por semilla (la suma es la meta).
+
+### Scripts
+
+`scripts/fk-fase2b.ts` (invocado por `fk-reparar --fase2b`/`--auto`): expandir (14 tablas con el DDL de `prisma/schema.prisma` + 8 columnas NULLables), rellenar (Catalogo -> tablas con los mismos ids; alergias faltantes dadas de alta; puentes desde CSV/JSON/banderas; `FinBeca` regla/conceptos; `FinRecibo.metodoPagoId`; rutas; categorias), contraer (`prisma db push --accept-data-loss`) y retirar los 8 tipos de Catalogo. Lo ambiguo (tipo/regla/concepto de beca inexistente, medio de pago desconocido, caja inexistente) = BLOQUEANTE (exit 3 en `--auto`). Probado sobre la base real en SQL Server (restore del respaldo de la 2A), sobre el SQLite heredado `prisma/preview.db` (Fase 0 -> 2B con `--auto`, `foreign_key_check` = 0, 85 FK) y con `db:migrar` a SQL Server (66 tablas verificadas; se corrigio un `INSERT` multifila con IDENTITY que fallaba al mezclar NULL y texto).
+
+`scripts/fk-fase2a.ts` (invocado por `fk-reparar --fase2a`/`--auto`): expandir (crea las tablas con el DDL leido de `prisma/schema.prisma`), rellenar (Catalogo -> tablas con los mismos ids; secciones faltantes; alumnos por nombre; `_aula:*` -> `aulaElegidaId`; asignaciones del perfil; extras; MobNota), contraer (`prisma db push --accept-data-loss`) y retirar los tipos de Catalogo. Probado sobre la base real (restore del respaldo de la Fase 1, SQL Server) y sobre el SQLite anterior a la Fase 1 (camino Docker). `fk-auditar` y `db-auditoria.sql` cubren las 67 FK y las nuevas comprobaciones academicas.
 
 ---
 

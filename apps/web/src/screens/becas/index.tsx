@@ -6,6 +6,7 @@ import { useToastStack } from '../../components/useToastStack';
 import SupervisorGuardModal, { type GuardCfg } from '../../components/finanzas/SupervisorGuardModal';
 import { TONE, errMsg } from '../../components/finanzas/fin';
 import { useFinCfg } from '../../components/finanzas/finConfig';
+import { SL_MSG, useCiclo } from '../../lib/ciclo';
 
 const GRID = 'grid grid-cols-[minmax(0,1.4fr)_130px_120px_minmax(0,1fr)_120px_170px_190px] gap-2';
 const TAG: Record<string, readonly [string, string]> = { Aprobada: TONE.ok, Pendiente: TONE.warn, Revocada: TONE.mute };
@@ -21,12 +22,13 @@ export default function Screen() {
   const isSuper = user?.rol === 'Super Admin';
   const canApprove = isSuper || user?.rol === 'Director Académico';
   const cfg = useFinCfg();
+  const { soloLectura: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: las becas son las del ciclo elegido en el selector global; en otro ciclo, solo lectura
   const [periodo, setPeriodo] = useState('');
   const [tipos, setTipos] = useState<string[]>([]);
   const [BC, setBC] = useState<string[]>([]);
   const [ests, setEsts] = useState<Estudiante[]>([]);
   const [qEst, setQEst] = useState('');
-  const per = periodo || cfg.ciclo;
+  const per = periodo || cicloSeleccionado || cfg.ciclo;
   const [rows, setRows] = useState<BecaFin[]>([]);
   const [bf, setBf] = useState<BecaForm | null>(null);
   const [guard, setGuard] = useState<GuardCfg | null>(null);
@@ -68,13 +70,13 @@ export default function Screen() {
     try {
       await api.post('/becas', body);
       setBf(null);
-      if (periodo && periodo !== cfg.ciclo) setPeriodo(cfg.ciclo); else await load();
+      if (periodo && periodo !== (cicloSeleccionado || cfg.ciclo)) setPeriodo(''); else await load();
       toast('Beca registrada · enviada a aprobación', 'ok');
     } catch (e) { toast(errMsg(e), 'bad'); }
   };
 
   const addBtn = (
-    <button onClick={openForm} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark"><i className="ph ph-plus" />Registrar Beca</button>
+    <button onClick={openForm} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark disabled:opacity-50"><i className="ph ph-plus" />Registrar Beca</button>
   );
 
   return (
@@ -85,7 +87,7 @@ export default function Screen() {
           <p className="mb-0 mt-1 text-[13px] text-slate-600">Toda beca requiere expediente de soporte y aprobación del Director Financiero antes de impactar el estado de cuenta.</p>
         </div>
         <div className="flex items-center gap-2">
-          <select value={per} onChange={e => setPeriodo(e.target.value)} className="h-[34px] rounded-md border border-slate-300 bg-white px-2 text-[13px]">{cfg.ciclos.map(c => <option key={c.n}>{c.n}</option>)}</select>
+          <span className="inline-flex h-[34px] items-center rounded-md border border-slate-300 bg-white px-2.5 text-[13px] font-medium" title="Cambia el ciclo en la barra lateral">Ciclo {per}</span>
           {addBtn}
         </div>
       </div>
@@ -110,8 +112,8 @@ export default function Screen() {
                     <span className="text-[11px] text-slate-500">{b.aprob}</span>
                   </span>
                   <span className="flex justify-end gap-1.5">
-                    {b.estado === 'Pendiente' && <button onClick={() => approve(b)} className="h-7 rounded-md border border-blue-200 bg-white px-2.5 text-xs font-medium text-accent hover:bg-blue-50">{canApprove ? 'Aprobar' : 'Solicitar aprobación'}</button>}
-                    {b.estado === 'Aprobada' && <button onClick={() => revoke(b)} className="h-7 rounded-md border border-red-300 bg-white px-2.5 text-xs font-medium text-red-600 hover:bg-bad-bg">Revocar</button>}
+                    {b.estado === 'Pendiente' && <button onClick={() => approve(b)} disabled={sl} title={sl ? SL_MSG : undefined} className="h-7 rounded-md border border-blue-200 bg-white px-2.5 text-xs font-medium text-accent hover:bg-blue-50 disabled:opacity-50">{canApprove ? 'Aprobar' : 'Solicitar aprobación'}</button>}
+                    {b.estado === 'Aprobada' && <button onClick={() => revoke(b)} disabled={sl} title={sl ? SL_MSG : undefined} className="h-7 rounded-md border border-red-300 bg-white px-2.5 text-xs font-medium text-red-600 hover:bg-bad-bg disabled:opacity-50">Revocar</button>}
                   </span>
                 </div>
               );

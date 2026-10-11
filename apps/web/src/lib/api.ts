@@ -85,8 +85,16 @@ export const tokenStore = {
 
 export const UNAUTHORIZED_EVENT = 'stodia:unauthorized';
 
+/**
+ * Ciclo lectivo consultado (Fase 2D). Solo se fija cuando el elegido NO es el activo: entonces TODAS las peticiones llevan `X-Ciclo` (ASCII: «2025-2026»,
+ * las cabeceras HTTP no admiten el guion largo); con el ciclo activo no se envia nada y la API se comporta como siempre. Lo maneja `lib/ciclo.tsx`.
+ */
+let cicloHeader = '';
+export const setCicloHeader = (nombre: string) => { cicloHeader = nombre ? nombre.replace(/[–—]/g, '-') : ''; };
+
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /** `code` = codigo de negocio de la API (p. ej. CICLO_CERRADO). */
+  constructor(public status: number, message: string, public code?: string) {
     super(message);
   }
 }
@@ -95,6 +103,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (config.licenseKey) headers['X-License-Key'] = config.licenseKey;
+  if (cicloHeader) headers['X-Ciclo'] = cicloHeader;
   const token = tokenStore.get();
   if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -107,7 +116,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const data = text ? JSON.parse(text) : undefined;
   if (!res.ok) {
     if (res.status === 401 && token) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-    throw new ApiError(res.status, data?.error ?? data?.message ?? res.statusText);
+    throw new ApiError(res.status, data?.error ?? data?.message ?? res.statusText, data?.code);
   }
   return data as T;
 }
@@ -116,5 +125,5 @@ export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body ?? {}),
-  del: <T>(path: string) => request<T>('DELETE', path),
+  del: <T>(path: string, body?: unknown) => request<T>('DELETE', path, body),
 };

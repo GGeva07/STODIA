@@ -113,3 +113,17 @@ export async function supervisorOk(req: FastifyRequest, credencial?: unknown, ac
   }
   return (await verificarPin(req, credencial)).ok;
 }
+
+/**
+ * Autorizacion de supervisor SIN la excepcion del Super Admin: SIEMPRE se exige el token de un solo uso (o la clave). Es la que usan las notas de credito / debito (devuelven o
+ * cobran dinero). Devuelve el resultado con el codigo HTTP que corresponde (403 clave invalida / ausente, 429 bloqueo por intentos).
+ */
+export async function supervisorSiempre(req: FastifyRequest, credencial: unknown, accion?: string): Promise<PinResult> {
+  if (typeof credencial !== 'string' || !credencial) return { ok: false, status: 403, error: 'Se requiere la clave de supervisor' };
+  if (credencial.startsWith(TOKEN_PREFIX)) {
+    if (consumirToken(req, credencial, accion)) return { ok: true };
+    await audit(req.user, 'Update', { tabla: 'Supervisor', id: accion ?? 'token', prev: 'token', next: 'RECHAZADO (inválido, vencido o ya usado)', ip: req.ip });
+    return { ok: false, status: 403, error: 'La autorización del supervisor venció o ya se usó: vuelve a ingresar la clave' };
+  }
+  return verificarPin(req, credencial);
+}

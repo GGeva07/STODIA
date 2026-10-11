@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import type { CfgAssets, CfgCiclo, CfgNcf, CfgPerfil, ConfigGlobal, ScreenId } from '@stodia/shared';
+import type { CfgAssets, CfgCiclo, CfgPerfil, ConfigGlobal, ScreenId } from '@stodia/shared';
 import { btn, btnPrimary, card, input, pill, pillBase, td, th, type PillTone } from '../../components/system/styles';
 import { useToast, useUi } from '../../components/system/UiProvider';
 import { ACCESS, NAV, setAccessOverride } from '../../lib/access';
 import { api } from '../../lib/api';
+import { rncValido } from '../../lib/rnc';
 import SupervisorPin from './SupervisorPin';
+import Fiscal from './Fiscal';
 import Canales from './Canales';
 import { loadFinCfg } from '../../components/finanzas/finConfig';
 
@@ -23,13 +25,25 @@ function useAction(reload: Reload) {
   };
 }
 
+/** Indicador de solo lectura: el RNC lo verifica el instalador contra la DGII; no se puede marcar desde la web. */
+function RncEstado({ saved, actual }: { saved: CfgPerfil; actual: string }) {
+  const dg = (v: string) => (v ?? '').replace(/\D/g, '');
+  const cambiado = dg(actual) !== dg(saved.rnc);
+  if (!cambiado && saved.rncVerificado) {
+    const f = saved.rncVerificadoAt ? new Date(saved.rncVerificadoAt) : null;
+    const fecha = f && !Number.isNaN(f.getTime()) ? f.toLocaleDateString('es-DO') : '';
+    return <span className="text-xs font-normal text-ok-fg"><i className="ph ph-seal-check" /> Verificado en la DGII{saved.razonSocial ? ` · ${saved.razonSocial}` : ''}{fecha ? ` · ${fecha}` : ''}</span>;
+  }
+  return <span className="text-xs font-normal text-warn-fg"><i className="ph ph-warning" /> RNC no verificado{cambiado ? ' (cambiado: se marcará como no verificado al guardar)' : ''}</span>;
+}
+
 function Inst({ cfg, reload }: TabProps) {
   const toast = useToast();
   const run = useAction(reload);
   const [p, setP] = useState<CfgPerfil>(cfg.perfil);
   const set = (k: keyof CfgPerfil) => (e: React.ChangeEvent<HTMLInputElement>) => setP({ ...p, [k]: e.target.value });
   const save = () => {
-    if (!p.nombre.trim() || p.rnc.replace(/\D/g, '').length !== 9) return toast('Razón social obligatoria y RNC de 9 dígitos', 'bad');
+    if (!p.nombre.trim() || !rncValido(p.rnc)) return toast('Razón social obligatoria y RNC de 9 u 11 dígitos', 'bad');
     void run(() => api.put('/config/perfil', p), 'Perfil institucional guardado · se usará en recibos y documentos');
   };
   const ASSETS: [keyof CfgAssets, string, string][] = [['logo', 'Logotipo institucional', 'ph-image'], ['fAcad', 'Firma · Director Académico', 'ph-signature'], ['fFin', 'Firma · Director Financiero', 'ph-signature']];
@@ -37,7 +51,9 @@ function Inst({ cfg, reload }: TabProps) {
     <section className={`${card} flex max-w-[860px] flex-col gap-4 p-[18px]`}>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(240px,100%),1fr))] gap-3">
         <label className={label}>Razón social<input value={p.nombre} onChange={set('nombre')} className={input} /></label>
-        <label className={label}>RNC<input value={p.rnc} onChange={set('rnc')} className={`${input} font-mono`} /></label>
+        <label className={label}>RNC<input value={p.rnc} onChange={set('rnc')} className={`${input} font-mono`} />
+          <RncEstado saved={cfg.perfil} actual={p.rnc} />
+        </label>
         <label className={label}>Teléfono<input value={p.tel} onChange={set('tel')} className={input} /></label>
         <label className={label}>Dirección física<input value={p.dir} onChange={set('dir')} className={input} /></label>
       </div>
@@ -55,94 +71,6 @@ function Inst({ cfg, reload }: TabProps) {
       </div>
       <div className="flex justify-end"><button onClick={save} className={btnPrimary}><i className="ph ph-floppy-disk" />Guardar perfil</button></div>
     </section>
-  );
-}
-
-function ncfRow(n: CfgNcf) {
-  const act = n.act ?? n.desde, total = n.hasta - n.desde + 1, rem = n.hasta - act, remPct = rem / total * 100;
-  const st = rem <= 0 ? 'Agotada' : remPct <= n.umbral ? 'Por agotar' : 'Vigente';
-  const tone: PillTone = st === 'Vigente' ? 'ok' : st === 'Por agotar' ? 'warn' : 'bad';
-  const bar = tone === 'ok' ? 'bg-[#16A34A]' : tone === 'warn' ? 'bg-[#D97706]' : 'bg-[#DC2626]';
-  const fg = tone === 'ok' ? 'text-ok-fg' : tone === 'warn' ? 'text-warn-fg' : 'text-bad-fg';
-  return { act, total, rem, st, tone, bar, fg, pct: Math.min(100, Math.round((act - n.desde) / total * 100)) };
-}
-
-function Fiscal({ cfg, reload }: TabProps) {
-  const toast = useToast();
-  const run = useAction(reload);
-  const [form, setForm] = useState<{ pref: string; desde: string; hasta: string } | null>(null);
-  const [um, setUm] = useState<Record<number, string>>({});
-  const saveNcf = async () => {
-    if (!form) return;
-    const d = parseInt(form.desde), h = parseInt(form.hasta);
-    if (!(d >= 1) || !(h > d)) return toast('El rango debe ser válido: «hasta» mayor que «desde»', 'bad');
-    if (await run(() => api.post('/config/ncf', { pref: form.pref, desde: d, hasta: h }), `Resolución ${form.pref} registrada (${d}–${h})`)) setForm(null);
-  };
-  const saveUm = (i: number, n: CfgNcf) => {
-    const v = parseInt(um[i] ?? String(n.umbral));
-    if (!(v >= 1 && v <= 50)) return toast('El umbral debe estar entre 1 y 50 %', 'bad');
-    if (v !== n.umbral) void run(() => api.put('/config/ncf/' + i, { umbral: v }), `Alerta de ${n.pref} al ${v}% restante`);
-  };
-  const digits = (k: 'desde' | 'hasta') => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form!, [k]: e.target.value.replace(/\D/g, '') });
-  return (
-    <div className="flex flex-col gap-3.5">
-      <section className={`${card} overflow-hidden`}>
-        <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-slate-200 px-4 py-3">
-          <span className="text-sm font-semibold">Secuencias de NCF (DGII)</span>
-          <button onClick={() => setForm({ pref: 'B01', desde: '1', hasta: '500' })} className={btn}><i className="ph ph-plus" />Registrar resolución</button>
-        </div>
-        {form && (
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] items-end gap-2.5 border-b border-slate-200 bg-slate-50 px-4 py-3">
-            <label className={label}>Prefijo
-              <select value={form.pref} onChange={e => setForm({ ...form, pref: e.target.value })} className={input}>
-                <option value="B01">B01 · Crédito fiscal</option><option value="B02">B02 · Consumo</option><option value="B04">B04 · Nota de crédito</option><option value="B14">B14 · Regímenes especiales</option>
-              </select>
-            </label>
-            <label className={label}>Desde<input value={form.desde} onChange={digits('desde')} className={input} /></label>
-            <label className={label}>Hasta<input value={form.hasta} onChange={digits('hasta')} className={input} /></label>
-            <div className="flex gap-1.5">
-              <button onClick={saveNcf} className="h-9 rounded-md bg-accent px-3.5 text-[13px] font-semibold text-white">Registrar</button>
-              <button onClick={() => setForm(null)} className="h-9 rounded-md border border-slate-300 bg-white px-3 text-[13px]">Cancelar</button>
-            </div>
-          </div>
-        )}
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[820px] border-collapse text-[13px]">
-            <thead><tr>
-              {['Prefijo', 'Tipo', 'Rango', 'Actual', 'Uso', 'Restantes', 'Alerta al (%)', 'Estado'].map((c, i) => <th key={c} className={`${th} ${[2, 3, 5, 6].includes(i) ? '!text-right' : ''}`}>{c}</th>)}
-            </tr></thead>
-            <tbody>
-              {cfg.ncf.map((n, i) => {
-                const r = ncfRow(n);
-                return (
-                  <tr key={i} className="h-12">
-                    <td className={`${td} font-mono font-semibold`}>{n.pref}</td>
-                    <td className={td}>{n.tipo}</td>
-                    <td className={`${td} whitespace-nowrap text-right font-mono text-xs text-slate-600`}>{n.desde} – {n.hasta}</td>
-                    <td className={`${td} text-right font-mono font-medium`}>{r.act}</td>
-                    <td className={`${td} w-40`}><div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className={`h-full ${r.bar}`} style={{ width: r.pct + '%' }} /></div></td>
-                    <td className={`${td} text-right font-mono font-semibold ${r.fg}`}>{r.rem}</td>
-                    <td className={`${td} text-right`}>
-                      <input value={um[i] ?? String(n.umbral)} onChange={e => setUm({ ...um, [i]: e.target.value })} onBlur={() => saveUm(i, n)} className="h-[30px] w-14 rounded-md border border-slate-300 px-1.5 text-right font-mono text-[13px] text-ink" />
-                    </td>
-                    <td className={td}><span className={`${pillBase} w-[92px] ${pill[r.tone]}`}>{r.st}</span></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section className={`${card} flex flex-wrap items-center gap-3.5 p-4`}>
-        <span className="grid h-11 w-11 place-items-center rounded-lg bg-slate-100 text-[22px] text-slate-600"><i className="ph ph-certificate" /></span>
-        <div className="min-w-[220px] flex-1">
-          <div className="text-sm font-semibold">Certificado digital e-CF</div>
-          <div className={`text-xs ${cfg.ecf ? 'text-ok-fg' : 'text-warn-fg'}`}>{cfg.ecf ? [cfg.ecfInfo?.archivo || 'Certificado cargado', cfg.ecfInfo?.vence ? `vence ${cfg.ecfInfo.vence}` : ''].filter(Boolean).join(' · ') : 'Sin certificado: no se pueden firmar e-CF'}</div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-500"><i className="ph ph-lock-key" />Almacenado cifrado (AES-256) en Key Vault · nunca se muestra ni se descarga</div>
-        </div>
-        <button onClick={() => run(() => api.post('/config/ecf'), 'Certificado cargado y cifrado en el Key Vault')} className={btn}><i className="ph ph-upload-simple" />{cfg.ecf ? 'Reemplazar certificado' : 'Cargar certificado'}</button>
-      </section>
-    </div>
   );
 }
 
@@ -301,7 +229,7 @@ export default function Screen() {
   const [tab, setTab] = useState<Tab>(() => (TABS.some(t => t[0] === sp.get('tab')) ? (sp.get('tab') as Tab) : 'inst'));
   const [cfg, setCfg] = useState<ConfigGlobal | null>(null);
   const toast = useToast();
-  const reload = useCallback(async () => { setCfg(await api.get<ConfigGlobal>('/config')); }, []);
+  const reload = useCallback(async () => { setCfg(await api.get<ConfigGlobal>('/config')); window.dispatchEvent(new Event('stodia:ciclos')); }, []); // avisa al selector de ciclo lectivo (lib/ciclo.tsx)
   useEffect(() => { reload().catch(e => toast((e as Error).message, 'bad')); }, [reload, toast]);
 
   return (

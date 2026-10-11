@@ -1,6 +1,12 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 
-const base = new PrismaClient();
+/**
+ * SQLite: con varias peticiones escribiendo a la vez, una conexion que espera el candado de escritura falla en 5 s por defecto («database is locked»). `socket_timeout` (= busy_timeout de SQLite)
+ * lo sube a 60 s para que las escrituras concurrentes (cobros, numeracion fiscal) se encolen en vez de fallar. Una URL que ya lo trae no se toca.
+ */
+const urlEntorno = process.env.DATABASE_URL ?? '';
+const urlSqlite = /socket_timeout=/.test(urlEntorno) ? urlEntorno : urlEntorno + (urlEntorno.includes('?') ? '&' : '?') + 'socket_timeout=60';
+const base = urlEntorno.startsWith('file:') ? new PrismaClient({ datasources: { db: { url: urlSqlite } } }) : new PrismaClient();
 
 /** true cuando DATABASE_URL apunta a SQL Server (schema generado para ese motor). */
 export const esSqlServer = (process.env.DATABASE_URL ?? '').startsWith('sqlserver:');

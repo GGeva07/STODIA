@@ -21,6 +21,11 @@ services:
       CITY: ${CITY:-}
       PHONE: ${PHONE:-}
       CONTACT_EMAIL: ${CONTACT_EMAIL:-}
+      RNC_VERIFICADO: ${RNC_VERIFICADO:-}   # los escribe el instalador tras validar el RNC en la DGII (nunca la API key)
+      RNC_RAZON_SOCIAL: ${RNC_RAZON_SOCIAL:-}
+      RNC_NOMBRE_COMERCIAL: ${RNC_NOMBRE_COMERCIAL:-}
+      RNC_ESTADO: ${RNC_ESTADO:-}
+      RNC_VERIFICADO_AT: ${RNC_VERIFICADO_AT:-}
       CURRENCY: ${CURRENCY:-DOP}
       TIMEZONE: ${TIMEZONE:-America/Santo_Domingo}
       TZ: ${TIMEZONE:-America/Santo_Domingo}

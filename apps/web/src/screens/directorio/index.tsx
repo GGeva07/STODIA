@@ -13,6 +13,7 @@ import { cartaDoc, printCarta } from '../../components/personas/printCarta';
 import { xlsxBlob } from '../../components/finanzas/xlsx';
 import { opciones, usePersRef } from '../../components/personas/ref';
 import { descargarPdf, guardarBlob, hoyDMY, runPrint, usePrintBusy } from '../../components/finanzas/print';
+import { SL_MSG, useCiclo } from '../../lib/ciclo';
 
 const ESTADO_TONE: Record<string, PillTone> = { Activo: 'ok', Inactivo: 'warn', Retirado: 'mute', Egresado: 'info' };
 const PAGE = 50;
@@ -29,7 +30,8 @@ export default function Screen() {
   const navigate = useNavigate();
   const toast = useToast();
   const ref = usePersRef();
-  const cicloTxt = ref.ciclo ? ` · Ciclo ${ref.ciclo}` : '';
+  const { soloLectura: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: otro ciclo = solo lectura (editar / eliminar / ingreso deshabilitados)
+  const cicloTxt = (cicloSeleccionado || ref.ciclo) ? ` · Ciclo ${cicloSeleccionado || ref.ciclo}` : '';
   const [rows, setRows] = useState<Alumno[] | null>(null);
   const [q, setQ] = useState('');
   const [fil, setFil] = useState({ grado: '', tanda: '', estado: '', cuenta: '' });
@@ -151,7 +153,7 @@ export default function Screen() {
               </>
             )}
           </div>
-          {user && canAccess(user.rol, 'inscripcion') && <button onClick={() => navigate('/inscripcion')} className={btn}><i className="ph ph-user-plus" />Nuevo ingreso vía Inscripción</button>}
+          {user && canAccess(user.rol, 'inscripcion') && <button onClick={() => navigate('/inscripcion')} disabled={sl} title={sl ? SL_MSG : undefined} className={btn}><i className="ph ph-user-plus" />Nuevo ingreso vía Inscripción</button>}
         </div>
       </div>
 
@@ -202,8 +204,8 @@ export default function Screen() {
                     <td className={`${td} whitespace-nowrap text-right`}>
                       <div className="inline-flex gap-1">
                         <button onClick={() => open(x, 'view')} title="Ver ficha" aria-label="Ver ficha" className="grid h-[30px] w-[30px] place-items-center rounded-md border border-transparent text-base text-slate-600 hover:border-slate-200 hover:bg-slate-100"><i className="ph ph-eye" /></button>
-                        <button onClick={() => open(x, 'edit')} title="Editar" aria-label="Editar" className="grid h-[30px] w-[30px] place-items-center rounded-md border border-transparent text-base text-accent hover:border-blue-200 hover:bg-blue-50"><i className="ph ph-pencil-simple" /></button>
-                        <button onClick={() => askDelete(x)} title="Eliminar" aria-label="Eliminar" className="grid h-[30px] w-[30px] place-items-center rounded-md border border-transparent text-base text-red-600 hover:border-red-300 hover:bg-red-100"><i className="ph ph-trash" /></button>
+                        <button onClick={() => open(x, 'edit')} disabled={sl} title={sl ? SL_MSG : 'Editar'} aria-label="Editar" className="grid h-[30px] w-[30px] place-items-center rounded-md border border-transparent text-base text-accent hover:border-blue-200 hover:bg-blue-50 disabled:opacity-40 disabled:hover:border-transparent disabled:hover:bg-transparent"><i className="ph ph-pencil-simple" /></button>
+                        <button onClick={() => askDelete(x)} disabled={sl} title={sl ? SL_MSG : 'Eliminar'} aria-label="Eliminar" className="grid h-[30px] w-[30px] place-items-center rounded-md border border-transparent text-base text-red-600 hover:border-red-300 hover:bg-red-100 disabled:opacity-40 disabled:hover:border-transparent disabled:hover:bg-transparent"><i className="ph ph-trash" /></button>
                       </div>
                     </td>
                   </tr>
@@ -273,8 +275,8 @@ export default function Screen() {
           <div className="flex flex-col gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
             <button onClick={() => navigate(`/expediente/${cur.id}`)} className="flex h-[38px] w-full items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white text-[13px] font-semibold text-accent hover:bg-blue-50"><i className="ph ph-identification-card" />Ver expediente completo</button>
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => askDelete(cur)} className="flex h-[38px] items-center justify-center gap-1.5 rounded-md border border-red-300 bg-white text-[13px] font-medium text-red-600 hover:bg-red-100"><i className="ph ph-trash" />Eliminar</button>
-              <button onClick={save} className="flex h-[38px] items-center justify-center gap-1.5 rounded-md bg-accent text-[13px] font-semibold text-white hover:bg-accent-dark"><i className={`ph ${ro ? 'ph-pencil-simple' : 'ph-floppy-disk'}`} />{ro ? 'Editar' : 'Guardar cambios'}</button>
+              <button onClick={() => askDelete(cur)} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-[38px] items-center justify-center gap-1.5 rounded-md border border-red-300 bg-white text-[13px] font-medium text-red-600 hover:bg-red-100 disabled:opacity-40"><i className="ph ph-trash" />Eliminar</button>
+              <button onClick={save} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-[38px] items-center justify-center gap-1.5 rounded-md bg-accent text-[13px] font-semibold text-white hover:bg-accent-dark disabled:opacity-40"><i className={`ph ${ro ? 'ph-pencil-simple' : 'ph-floppy-disk'}`} />{ro ? 'Editar' : 'Guardar cambios'}</button>
             </div>
             {!ro && <button onClick={() => setSheet({ id: sheet.id, mode: 'view', f: { ...cur }, err: '' })} className="h-8 text-xs font-medium text-slate-600 hover:underline">Cancelar edición</button>}
           </div>

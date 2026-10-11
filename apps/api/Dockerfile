@@ -7,7 +7,7 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY apps/api apps/api
 # La fuente de verdad del schema es SQL Server; la imagen (SQLite) usa el schema generado para ese motor.
-RUN cd apps/api && node scripts/gen-schema.mjs sqlite --inplace
+RUN cd apps/api && STODIA_DOCKER_BUILD=1 node scripts/gen-schema.mjs sqlite --inplace
 RUN pnpm install --filter @stodia/api...
 # Explicito: garantiza el cliente SQLite aunque el postinstall de @prisma/client corra despues del de la API.
 RUN cd apps/api && pnpm exec prisma generate

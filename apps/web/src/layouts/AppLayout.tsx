@@ -3,7 +3,8 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { LicenseProvider, useLicense } from '../components/system/License';
 import { UiProvider, useUi } from '../components/system/UiProvider';
 import type { CfgCiclo, ConfigGlobal } from '@stodia/shared';
-import { NAV, canAccess, setAccessOverride, useAccessVersion } from '../lib/access';
+import { CicloProvider, POR_CICLO, seleccionable, useCiclo } from '../lib/ciclo';
+import { MENU_OCULTO, NAV, canAccess, setAccessOverride, useAccessVersion } from '../lib/access';
 import { api, getConfig } from '../lib/api';
 import { useSession } from '../lib/session';
 import { preloadScreens } from '../screens';
@@ -35,23 +36,23 @@ function Sidebar({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?: 
   const { user } = useSession();
   const { screenOn } = useLicense();
   useAccessVersion();
-  const [ciclos, setCiclos] = useState<CfgCiclo[]>([]);
-  const [ciclo, setCiclo] = useState('');
-  useEffect(() => {
-    if (!user) return;
-    api.get<ConfigGlobal>('/config').then(c => { setCiclos(c.ciclos); setCiclo(c.ciclos.find(x => x.estado === 'Activo')?.n ?? ''); }).catch(() => undefined);
-  }, [user]);
+  const { ciclos, cicloSeleccionado: ciclo, esActivo, cambiar } = useCiclo();
+  const { pathname } = useLocation();
   if (!user) return null;
-  const groups = NAV.map(g => ({ ...g, items: g.items.filter(i => canAccess(user.rol, i[0]) && screenOn(i[0])) })).filter(g => g.items.length);
+  const groups = NAV.map(g => ({ ...g, items: g.items.filter(i => !MENU_OCULTO.has(i[0]) && canAccess(user.rol, i[0]) && screenOn(i[0])) })).filter(g => g.items.length);
+  // El Expediente 360 no tiene ítem propio: cuando se está en él, el Directorio (de donde se abre) queda resaltado.
+  const enExpediente = pathname.startsWith('/expediente');
+  const resaltado = (id: string, isActive: boolean) => isActive || (id === 'directorio' && enExpediente);
   return (
     <>
       {!collapsed && (
         <div className="px-3 pb-2 pt-3">
-          <div className="mb-1 text-[11px] font-medium text-[#64748B]">Ciclo lectivo activo</div>
-          <select value={ciclo} onChange={e => setCiclo(e.target.value)} className="h-8 w-full rounded-md border border-[#334155] bg-[#1E293B] px-2 text-[13px] text-[#F1F5F9]">
+          <label htmlFor="sel-ciclo" className="mb-1 block text-[11px] font-medium text-[#64748B]">{esActivo ? 'Ciclo lectivo activo' : 'Ciclo lectivo (consulta)'}</label>
+          <select id="sel-ciclo" value={ciclo} onChange={e => cambiar(e.target.value)} title={esActivo ? undefined : 'Estás consultando un ciclo que no es el activo (solo lectura)'}
+            className={`h-8 w-full rounded-md border px-2 text-[13px] text-[#F1F5F9] ${esActivo ? 'border-[#334155] bg-[#1E293B]' : 'border-[#B45309] bg-[#422006]'}`}>
             {ciclos.length === 0 && <option value="">Sin ciclos configurados</option>}
             {[...ciclos].sort((a, b) => ORDEN_CICLO[a.estado] - ORDEN_CICLO[b.estado] || b.n.localeCompare(a.n)).map(c => (
-              <option key={c.n} value={c.n}>{c.n.replace('–', ' – ')}{c.estado === 'Cerrado' ? ' (cerrado)' : c.estado === 'Planificado' ? ' (planificado)' : ''}</option>
+              <option key={c.n} value={c.n} disabled={!seleccionable(c)} title={!seleccionable(c) ? 'Ciclo planificado sin datos todavía' : undefined}>{c.n.replace('–', ' – ')}{c.estado === 'Activo' ? ' (activo)' : c.estado === 'Cerrado' ? ' (cerrado)' : ' (planificado)'}</option>
             ))}
           </select>
         </div>
@@ -66,11 +67,11 @@ function Sidebar({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?: 
                 to={`/${id}`}
                 title={label}
                 onClick={onNavigate}
-                className={({ isActive }) => `flex h-[34px] cursor-pointer items-center gap-2.5 whitespace-nowrap rounded-md px-3 text-left text-[13px] font-medium hover:bg-[#1E293B] ${isActive ? 'bg-[#1E293B] text-[#F8FAFC]' : 'text-[#CBD5E1]'}`}
+                className={({ isActive }) => `flex h-[34px] cursor-pointer items-center gap-2.5 whitespace-nowrap rounded-md px-3 text-left text-[13px] font-medium hover:bg-[#1E293B] ${resaltado(id, isActive) ? 'bg-[#1E293B] text-[#F8FAFC]' : 'text-[#CBD5E1]'}`}
               >
                 {({ isActive }) => (
                   <>
-                    <i className={`ph ${icon} flex-none text-lg`} style={{ color: isActive ? '#60A5FA' : '#94A3B8' }} aria-hidden />
+                    <i className={`ph ${icon} flex-none text-lg`} style={{ color: resaltado(id, isActive) ? '#60A5FA' : '#94A3B8' }} aria-hidden />
                     {!collapsed && <span className="flex-1">{label}</span>}
                   </>
                 )}
@@ -124,8 +125,22 @@ function SessionTimer() {
   );
 }
 
+/** Franja pegajosa bajo la cabecera cuando se consulta un ciclo que no es el activo: solo lectura + atajo para volver. */
+function CicloBanner() {
+  const { cicloSeleccionado, estado, cicloActivo, volverAlActivo } = useCiclo();
+  const plan = estado === 'Planificado';
+  return (
+    <div role="status" className={`sticky top-0 z-10 -mx-6 -mt-3.5 mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b px-6 py-2 text-[13px] ${plan ? 'border-[#BFDBFE] bg-[#EFF6FF] text-[#1E3A8A]' : 'border-[#FCD34D] bg-[#FFFBEB] text-[#78350F]'}`}>
+      <i className={`ph-fill ${plan ? 'ph-calendar-dots' : 'ph-lock-simple'} text-base`} aria-hidden />
+      <span className="min-w-0 flex-1">Estás viendo el ciclo <b>{cicloSeleccionado}</b> · solo lectura{plan ? ' (planificado)' : ''}</span>
+      <button onClick={volverAlActivo} className={`h-7 whitespace-nowrap rounded-md border bg-white px-2.5 text-xs font-semibold ${plan ? 'border-[#93C5FD] text-[#1D4ED8] hover:bg-[#DBEAFE]' : 'border-[#F59E0B] text-[#92400E] hover:bg-[#FEF3C7]'}`}>Volver al ciclo activo{cicloActivo ? ` (${cicloActivo})` : ''}</button>
+    </div>
+  );
+}
+
 function Shell() {
   const { user, logout } = useSession();
+  const { cicloSeleccionado, esActivo, clave } = useCiclo();
   const { info } = useLicense();
   const { openPalette, tanda, setTanda, save } = useUi();
   const loc = useLocation();
@@ -150,6 +165,7 @@ function Shell() {
   const screenId = loc.pathname.split('/')[1];
   const grp = NAV.find(g => g.items.some(i => i[0] === screenId));
   const title = grp?.items.find(i => i[0] === screenId)?.[1];
+  const porCiclo = POR_CICLO.includes(screenId);
   const ini = (user?.nombre ?? '').split(' ').map(x => x[0]).join('').slice(0, 2);
 
   return (
@@ -225,12 +241,14 @@ function Shell() {
         )}
 
         <main ref={main} className="no-scrollbar relative min-w-0 flex-1 overflow-auto px-6 pb-16 pt-3.5">
+          {porCiclo && !esActivo && <CicloBanner />}
           {grp && title && (
             <div className="mb-2.5 flex items-center gap-1.5 text-xs text-slate-500">
               <span>Inicio</span><i className="ph ph-caret-right text-[10px]" /><span>{grp.g}</span><i className="ph ph-caret-right text-[10px]" /><span className="font-medium text-ink">{title}</span>
+              {porCiclo && cicloSeleccionado && <span className={`ml-1 inline-flex h-[18px] items-center rounded-full px-2 text-[10.5px] font-medium ${esActivo ? 'bg-slate-100 text-slate-600' : 'bg-[#FEF3C7] text-[#92400E]'}`}>Ciclo {cicloSeleccionado}</span>}
             </div>
           )}
-          {info && (info.estado === 'vencida' || info.estado === 'invalida' || info.estado === 'sin_licencia') && loc.pathname !== '/licencia' ? <ExpiredGate /> : <Suspense fallback={<DelayedLoading />}><Outlet /></Suspense>}
+          {info && (info.estado === 'vencida' || info.estado === 'invalida' || info.estado === 'sin_licencia') && loc.pathname !== '/licencia' ? <ExpiredGate /> : <Suspense fallback={<DelayedLoading />}><Outlet key={clave} /></Suspense>}
         </main>
       </div>
     </div>
@@ -241,7 +259,9 @@ export default function AppLayout() {
   return (
     <LicenseProvider>
       <UiProvider>
-        <Shell />
+        <CicloProvider>
+          <Shell />
+        </CicloProvider>
       </UiProvider>
     </LicenseProvider>
   );

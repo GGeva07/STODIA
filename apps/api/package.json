@@ -5,6 +5,7 @@
   "scripts": {
     "postinstall": "prisma generate",
     "dev": "prisma db push --skip-generate && tsx src/seed-dev.ts && tsx watch src/server.ts",
+    "dev:watch": "tsx watch src/server.ts",
     "db:push": "prisma db push --skip-generate",
     "seed": "tsx src/seed.ts",
     "seed:dev": "tsx src/seed-dev.ts",

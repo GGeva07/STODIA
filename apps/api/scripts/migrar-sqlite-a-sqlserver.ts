@@ -9,6 +9,12 @@
  *   - El ORIGEN debe estar en el esquema de la Fase 1. Un SQLite anterior (FinCobroItem.kid, sin Contrato, Tutor.usuario...) se actualiza ANTES:
  *     scripts/fk-reparar.ts --aplicar sobre ese .db (con DATABASE_URL=file:...), `prisma db push --accept-data-loss --schema prisma/schema.sqlite.prisma`, y
  *     otra vez fk-reparar --aplicar (ver README, «Actualizar una base anterior a la Fase 1»). El script lo detecta y se detiene.
+ *   - Tambien debe estar en la Fase 2A (Alumno.seccionId, tablas Grado/Seccion...): un SQLite con Catalogo academico y Alumno.grado/sec/tanda se actualiza ANTES con
+ *     `fk-reparar --fase2a --aplicar` sobre ese .db + `prisma db push --accept-data-loss --schema prisma/schema.sqlite.prisma` + `fk-reparar --fase2a --aplicar`.
+ *   - Y en la Fase 2B (tablas Caja, RutaTransporte, TipoBeca, MetodoPago, Alergia... y sin Alumno.alg): un SQLite con esos catalogos en Catalogo se actualiza ANTES con
+ *     `fk-reparar --fase2b --aplicar` + `prisma db push --accept-data-loss --schema prisma/schema.sqlite.prisma` + `fk-reparar --fase2b --aplicar` (retira Catalogo).
+ *   - Y en la Fase 2C (tablas Ciclo, Matricula, TutorAlumno, FinReciboItem/Pago, ServicioAlumno, Monedero...; sin Catalogo): un SQLite anterior se actualiza ANTES con
+ *     `fk-reparar --auto` (o --fase2c --aplicar) + `prisma db push --accept-data-loss --schema prisma/schema.sqlite.prisma` + `fk-reparar --auto`.
  *   - Convierte DateTime (ms epoch / ISO) a Date y 0/1 a boolean; los campos JSON ya son String en el schema (sin cambios).
  *   - Verificacion por tabla: conteo y checksum de una columna (suma numerica o suma de longitudes de texto).
  */
@@ -34,6 +40,22 @@ const origen = new DatabaseSync(ruta, { readOnly: true });
   const cols = (t: string) => (origen.prepare(`PRAGMA table_info("${t}")`).all() as { name: string }[]).map(c => c.name);
   if (cols('FinCobroItem').length && !cols('FinCobroItem').includes('alumnoId')) {
     console.error('El origen es ANTERIOR a la Fase 1 (FinCobroItem sin alumnoId). Actualizalo primero con scripts/fk-reparar.ts + prisma db push (README, «Actualizar una base anterior a la Fase 1»).');
+    process.exit(2);
+  }
+  if (cols('Alumno').includes('grado') || (cols('Alumno').length && !cols('Alumno').includes('seccionId'))) {
+    console.error('El origen es ANTERIOR a la Fase 2A (Alumno con grado/sec/tanda de texto y catalogos academicos en Catalogo). Actualizalo primero: fk-reparar --fase2a --aplicar, prisma db push --accept-data-loss y fk-reparar --fase2a --aplicar (README).');
+    process.exit(2);
+  }
+  if (cols('Alumno').includes('alg') || (cols('Alumno').length && !cols('Caja').length)) {
+    console.error('El origen es ANTERIOR a la Fase 2B (Alumno.alg en texto y cajas, rutas, becas, medios de pago, comidas, dietas y alergias en Catalogo). Actualizalo primero: fk-reparar --fase2b --aplicar, prisma db push --accept-data-loss y fk-reparar --fase2b --aplicar (README).');
+    process.exit(2);
+  }
+  if (cols('Alumno').length && (!cols('Ciclo').length || cols('FinRecibo').includes('items') || cols('Contrato').includes('ciclo'))) {
+    console.error('El origen es ANTERIOR a la Fase 2C (ciclo lectivo como tabla, matricula por ciclo, lineas y pagos de recibo en tablas, ServicioAlumno, Monedero; Catalogo ya no existe). Actualizalo primero: fk-reparar --auto, prisma db push --accept-data-loss y fk-reparar --auto (README).');
+    process.exit(2);
+  }
+  if (cols('Alumno').length && (!cols('TipoComprobante').length || !cols('FinRecibo').includes('tipoComprobanteId'))) {
+    console.error('El origen es ANTERIOR al modulo fiscal (SecuenciaFiscal / tipo de comprobante por recibo). Actualizalo primero: fk-reparar --fiscal --aplicar y prisma db push (aditivo).');
     process.exit(2);
   }
   const malas = origen.prepare('PRAGMA foreign_key_check').all();
@@ -111,8 +133,9 @@ async function main() {
       const cols = escalares.filter(f => f.name in filas[0]);
       const faltan = escalares.filter(f => !(f.name in filas[0]) && !f.hasDefaultValue && f.isRequired);
       if (faltan.length) throw new Error(`${n}: faltan columnas obligatorias en el origen: ${faltan.map(f => f.name).join(', ')}`);
-      const tam = Math.max(1, Math.min(1000, Math.floor(2000 / cols.length)));
       const identidad = escalares.some(f => f.isId && f.type === 'Int' && f.hasDefaultValue);
+      // IDENTITY: una fila por INSERT (un VALUES multifila mezcla NULL tipado int con texto y SQL Server falla con «Conversion failed»).
+      const tam = identidad ? 1 : Math.max(1, Math.min(1000, Math.floor(2000 / cols.length)));
       const datos = filas.map(r => Object.fromEntries(cols.map(f => [f.name, convertir(f, r[f.name])])));
       await prisma.$transaction(async tx => {
         for (let i = 0; i < datos.length; i += tam) {
@@ -123,7 +146,7 @@ async function main() {
             await tx.$executeRawUnsafe(sql, ...lote.flatMap(r => cols.map(c => r[c.name])));
           } else await delegado(tx, n).createMany({ data: lote });
         }
-      }, { timeout: 300_000, maxWait: 60_000 });
+      }, { timeout: 300_000, maxWait: 60_000 }).catch((e: Error) => { throw new Error(`Tabla ${n}: ${e.message}`); });
     }
     const destino = await delegado(prisma, n).count();
     const ckO = filas.reduce((s, r) => s + checksumFila(colCk, colCk.type === 'DateTime' ? null : r[colCk.name]), 0);
@@ -141,7 +164,7 @@ async function main() {
   }
 
   // Los autoincrement de SQLite se conservan como IDENTITY; reseed al maximo.
-  for (const n of ['CmnMensaje', 'FinMovimiento', 'FinVentaItem']) {
+  for (const n of ['CmnMensaje', 'FinMovimiento', 'FinVentaItem', 'FinReciboItem', 'FinReciboPago', 'TutorAlumno', 'MonederoMovimiento', 'AsistenciaResumen']) {
     if (solo && !solo.includes(n)) continue;
     try { await prisma.$executeRawUnsafe(`DECLARE @m int = (SELECT ISNULL(MAX(id),0) FROM [dbo].[${n}]); DBCC CHECKIDENT ('dbo.${n}', RESEED, @m) WITH NO_INFOMSGS`); } catch (e) { console.warn(`reseed ${n}:`, (e as Error).message); }
   }

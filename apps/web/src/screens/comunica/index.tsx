@@ -1,3 +1,4 @@
+import { SL_MSG, useSoloLectura } from '../../lib/ciclo';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CmnCanal, CmnDestinatarios, CmnEnviarRes, CmnMensajeDto } from '@stodia/shared';
 import { api } from '../../lib/api';
@@ -16,6 +17,7 @@ interface Bandeja { rows: CmnMensajeDto[]; conteos: Record<string, number> }
 
 export default function Screen() {
   const { toast, toasts } = useToastStack();
+  const sl = useSoloLectura(); // Fase 2D: en otro ciclo los destinatarios se consultan pero no se envía nada
   const [tab, setTab] = useState<'write' | 'out'>('write');
   const [f, setF] = useState({ grado: '', tanda: '', cuenta: 'mora', canales: [true, true, false, false], asunto: '', msg: '' });
   const [dest, setDest] = useState<CmnDestinatarios>({ tutores: [], muestra: null });
@@ -154,7 +156,7 @@ export default function Screen() {
               </div>
             )}
             <div className="flex justify-end">
-              <button onClick={() => void send()} className="flex h-[34px] items-center gap-1.5 whitespace-nowrap rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark"><i className="ph ph-paper-plane-tilt" />Enviar circular</button>
+              <button onClick={() => void send()} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-[34px] items-center gap-1.5 whitespace-nowrap rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark disabled:opacity-50"><i className="ph ph-paper-plane-tilt" />Enviar circular</button>
             </div>
           </section>
         </div>

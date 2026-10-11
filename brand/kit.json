@@ -1,0 +1,317 @@
+{
+  "kit": {
+    "id": "9241c668-aa7d-4d6f-92c4-98ff2b87d279",
+    "url": "https://moda.app/brand-kit/9241c668-aa7d-4d6f-92c4-98ff2b87d279",
+    "title": "STODIA",
+    "is_default": true,
+    "created_at": "2026-10-09T23:51:15.452886",
+    "updated_at": "2026-10-09T23:51:15.452886",
+    "company_name": "STODIA",
+    "company_url": "https://stodia.vercel.app",
+    "company_description": "STODIA es una plataforma de gestión escolar para colegios, especialmente adaptada a las necesidades de instituciones educativas de República Dominicana. Reúne en un solo sistema la inscripción, las notas, la asistencia, los cobros, el comedor, la comunicación y el portal de tutores. Puede instalarse en la infraestructura del colegio o alojarse y mantenerse mediante SynsetSolutions.",
+    "tagline": "Tu colegio, organizado y en un solo lugar",
+    "brand_values": [
+      "simplicidad",
+      "transparencia",
+      "control",
+      "propiedad de los datos",
+      "productividad",
+      "cercanía"
+    ],
+    "brand_aesthetic": [
+      "moderno",
+      "funcional",
+      "limpio",
+      "ordenado",
+      "accesible"
+    ],
+    "brand_tone_of_voice": [
+      "claro",
+      "práctico",
+      "confiable",
+      "directo",
+      "cercano"
+    ],
+    "default_color_mode": null,
+    "default_theme_canvas_id": null,
+    "colors": [
+      {
+        "id": "7964c8db-d173-4e9c-b1b2-6705f460d38d",
+        "color": "#f8fafc",
+        "label": "bg-primary",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "7cb9c479-2e56-4672-8330-26ba6fca189f",
+        "color": "#edeef0",
+        "label": "bg-secondary",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "f447cfeb-6af8-401c-bcc3-cc3e48db496d",
+        "color": "#e1e3e5",
+        "label": "bg-tertiary",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "8faea056-83b4-4d65-b354-99ae890761f9",
+        "color": "#0f172a",
+        "label": "bg-inverted",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "8f182d15-e7d1-4ac4-829e-74d33ade9389",
+        "color": "#2f333a",
+        "label": "text-primary",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "d50dfb9f-16ac-4bbc-83fa-02728a958dc1",
+        "color": "#51555d",
+        "label": "text-secondary",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "0c403faf-373a-4c13-ad47-2fb9b1157caf",
+        "color": "#6c7078",
+        "label": "text-muted",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "48c13153-1ef2-4660-9eb6-bc313c190f7c",
+        "color": "#d0d4dd",
+        "label": "text-inverted",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "2e50fa85-25d2-4310-9f5b-5a9118f423c9",
+        "color": "#ffffff",
+        "label": "text-on-accent",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "8827e08a-bbd8-4ed3-8a0e-38eed52f217f",
+        "color": "#1d4ed8",
+        "label": "accent-primary",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "091a0dc9-e32b-439a-8536-31ef2bdc7e0e",
+        "color": "#38bdf8",
+        "label": "accent-secondary",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "ed61de7d-620a-4a41-b752-907c4b767ec3",
+        "color": "#878f9c",
+        "label": "border-primary",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "35b0732f-b092-441a-bfeb-d5b82353d03a",
+        "color": "#bfc7d6",
+        "label": "border-subtle",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "cecaed92-1be2-4e8a-92a8-3fb730bd11f6",
+        "color": "#1d4ed8",
+        "label": "border-focus",
+        "mode": "light",
+        "gradient": null
+      },
+      {
+        "id": "02fd1ab7-775d-4d44-b897-72a8ea143e17",
+        "color": "#0f172a",
+        "label": "bg-primary",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "2ee4231e-864b-4e90-b6e9-a31488cdde1e",
+        "color": "#1f2129",
+        "label": "bg-secondary",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "d7363cf3-5d25-46c1-bb76-f6b1b10503d5",
+        "color": "#2a2c34",
+        "label": "bg-tertiary",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "83157db5-7302-4919-9b11-dde275a12301",
+        "color": "#f8fafc",
+        "label": "bg-inverted",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "eb5de165-8161-4770-bb5a-4f86b9fcf1e7",
+        "color": "#d0d4dd",
+        "label": "text-primary",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "0d5daabd-ac89-496f-a4d4-e8ef26535f54",
+        "color": "#9fa3ac",
+        "label": "text-secondary",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "42b040b9-8fb5-47d9-aa8f-b78d7baebeee",
+        "color": "#7f848c",
+        "label": "text-muted",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "86bd8828-6d93-4ada-bf93-5dab150cf701",
+        "color": "#2f333a",
+        "label": "text-inverted",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "c913a00e-6101-475c-b580-381efe7912cd",
+        "color": "#ffffff",
+        "label": "text-on-accent",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "952ddf7d-53e7-4e49-b413-374283071e59",
+        "color": "#1d4ed8",
+        "label": "accent-primary",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "5fe07785-0a7a-4251-bb86-97dfdd9404c7",
+        "color": "#38bdf8",
+        "label": "accent-secondary",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "a11be462-e68e-427d-88ab-3ee95b6b0c3f",
+        "color": "#5f6673",
+        "label": "border-primary",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "013b9c39-1544-42c5-b019-c99167565fa1",
+        "color": "#353c47",
+        "label": "border-subtle",
+        "mode": "dark",
+        "gradient": null
+      },
+      {
+        "id": "e656ef5d-7565-4518-8cf9-baa71f049b60",
+        "color": "#3357e3",
+        "label": "border-focus",
+        "mode": "dark",
+        "gradient": null
+      }
+    ],
+    "fonts": [
+      {
+        "family": "Inter",
+        "label": "body",
+        "weight": null,
+        "supported": true,
+        "suggestions": []
+      },
+      {
+        "family": "Caveat",
+        "label": "body",
+        "weight": null,
+        "supported": true,
+        "suggestions": []
+      },
+      {
+        "family": "Phosphor",
+        "label": "body",
+        "weight": null,
+        "supported": false,
+        "suggestions": [
+          "Orbitron",
+          "Audiowide",
+          "Monoton",
+          "Faster One",
+          "Bungee Inline"
+        ]
+      },
+      {
+        "family": "Phosphor Fill",
+        "label": "body",
+        "weight": null,
+        "supported": false,
+        "suggestions": [
+          "Bungee",
+          "Righteous",
+          "Monoton",
+          "Rubik Mono One",
+          "Black Ops One"
+        ]
+      },
+      {
+        "family": "Cambria",
+        "label": "body",
+        "weight": null,
+        "supported": false,
+        "suggestions": [
+          "Merriweather",
+          "Lora",
+          "Crimson Text",
+          "EB Garamond",
+          "Cormorant Garamond"
+        ]
+      }
+    ],
+    "logos": [
+      {
+        "group_name": "Website Logos",
+        "images": [
+          {
+            "name": "Primary Logo",
+            "id": "file_3AW44YBXCP9XMVJ2XAP0DNSDYA",
+            "uuid": "6ae109e5-f596-4f69-b90b-aab01b5cb7ca"
+          }
+        ]
+      }
+    ]
+  },
+  "guides": [],
+  "assets": [
+    {
+      "id": "bki_1QAD3ETTCY9SFRWVTBFG1QZ91S",
+      "role": "logo",
+      "file_id": "file_3AW44YBXCP9XMVJ2XAP0DNSDYA",
+      "name": "Primary Logo",
+      "group_id": "f0cd56e6-1817-4ac5-b244-70e77ce57d84",
+      "group_name": "Website Logos",
+      "path": "assets/file_3AW44YBXCP9XMVJ2XAP0DNSDYA.png",
+      "downloaded": true,
+      "sha256": "f67dc0c2c4636b2b48e087408bd304978ce5a58f3efab4145640067527184da6"
+    }
+  ]
+}

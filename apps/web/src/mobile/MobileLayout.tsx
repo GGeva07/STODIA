@@ -1,11 +1,12 @@
 import { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
-import { getConfig } from '../lib/api';
+import { getConfig, setCicloHeader } from '../lib/api';
 import { useSession } from '../lib/session';
 
 /** Layout móvil (portal tutor 390x800 / lista en tableta). Ancho fluido con tope para tableta. */
 export default function MobileLayout() {
   const { user, logout } = useSession();
+  useEffect(() => { setCicloHeader(''); }, []); // la app móvil siempre trabaja con el ciclo activo (sin X-Ciclo)
   useEffect(() => { if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {}); }, []);
   return (
     <div className="mx-auto flex h-[100vh] h-[100dvh] w-full max-w-[1080px] flex-col overflow-hidden bg-canvas">
