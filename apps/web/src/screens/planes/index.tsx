@@ -8,6 +8,7 @@ import SupervisorGuardModal, { type GuardCfg } from '../../components/finanzas/S
 import { TONE, errMsg, fmt, norm } from '../../components/finanzas/fin';
 import { B, descargarPdf, hoyDMY, runPrint, usePrintBusy, type PBlock, type PDoc } from '../../components/finanzas/print';
 import { useFinCfg } from '../../components/finanzas/finConfig';
+import { useDraft } from '../../lib/useDraft';
 import PlanDrawer, { type DrawerMode } from './PlanDrawer';
 import { FREQ_L, MN, moraLbl, planCalc } from './planCalc';
 
@@ -22,11 +23,12 @@ export default function Screen() {
   const { user } = useSession();
   const { toast, toasts } = useToastStack();
   const isSuper = user?.rol === 'Super Admin';
-  const { soloLectura: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: ciclo que no es el activo = crear / editar / duplicar / eliminar deshabilitados
+  const { soloLecturaFin: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: ciclo que no es el activo = crear / editar / duplicar / eliminar deshabilitados
   const [plans, setPlans] = useState<PlanPagoFin[]>([]);
-  const [q, setQ] = useState('');
+  const [q, setQ] = useDraft('planes:q', '');
   const [tab, setTab] = useState('all');
-  const [drawer, setDrawer] = useState<{ plan: PlanPagoFin | null; mode: DrawerMode; pin?: string } | null>(null);
+  // Solo el drawer «Nuevo plan» se reabre al volver (los de ver/editar llevan el plan y el PIN, que no se persisten): el contenido va en PlanDrawer.
+  const [drawer, setDrawer] = useDraft<{ plan: PlanPagoFin | null; mode: DrawerMode; pin?: string } | null>('planes:drawer', null, { transformar: d => (d && d.plan === null ? d : null) });
   const [guard, setGuard] = useState<GuardCfg | null>(null);
   const [tarOpen, setTarOpen] = useState(false);
   const [tarOpts, setTarOpts] = useState<Record<string, boolean>>({ col: true, com: true, tra: true, ext: true, pol: true });
@@ -97,7 +99,7 @@ export default function Screen() {
     if (tarOpts.com) bl.push(B.text('Comedor y alimentación', true), B.table(['Plan', 'Incluye', 'Tarifa'], (ali?.planes ?? []).filter(p => p.estado === 'Activo').map(p => [p.name, p.modelo === 'sub' ? MEALS.filter((_, i) => p.meals[i]).join(' · ') : 'Monedero virtual', p.modelo === 'sub' ? fmt(p.precio) + (p.freq === 'Semestral' ? '/sem' : '/mes') : 'Recarga mín. ' + fmt(p.recarga)]), ['1fr', '1fr', '120px'], ['left', 'left', 'right']));
     if (tarOpts.tra) bl.push(B.text('Transporte escolar', true), B.table(['Ruta', 'Servicio', 'Tarifa'], rutas.map(([l, sp, pr]) => [l, sp, fmt(pr) + '/mes']), ['1fr', '1fr', '110px'], ['left', 'left', 'right']));
     if (tarOpts.ext) bl.push(B.text('Actividades y cursos extracurriculares', true), B.table(['Actividad', 'Categoría', 'Horario', 'Costo'], ext.filter(a => a.estado !== 'Cerrada').map(a => [a.name, a.cat, a.dias + ' · ' + a.hora, Number(a.costo) ? fmt(a.costo) + (a.kind === 'curso' ? ' total' : '/mes') : 'Gratuita']), ['1fr', '70px', '1fr', '110px'], ['left', 'left', 'left', 'right']));
-    if (tarOpts.pol) bl.push(B.text('Políticas de facturación', true), B.table(['Plan', 'Gracia', 'Cobro por mora', 'Pronto pago'], act.map(p => [p.name, p.gracia + ' días', p.moraTipo === 'pct' ? p.moraVal + '% mensual' : p.moraTipo === 'fijo' ? fmt(p.moraVal) + ' por día' : 'Sin recargo', Number(p.pronto) ? p.pronto + '% hasta el día ' + p.prontoDia : 'No aplica']), ['1fr', '56px', '110px', '120px'], ['left', 'left', 'left', 'left']));
+    if (tarOpts.pol) bl.push(B.text('Políticas de facturación', true), B.table(['Plan', 'Gracia', 'Cobro por mora', 'Pronto pago'], act.map(p => [p.name, p.gracia + ' días', p.moraTipo === 'pct' ? p.moraVal + '% mensual' : p.moraTipo === 'fijo' ? fmt(p.moraVal) + ' por día' : 'Sin recargo', Number(p.pronto) && Number(p.prontoDias) > 0 ? p.pronto + '% con ' + p.prontoDias + ' días de anticipación' : 'No aplica']), ['1fr', '56px', '110px', '120px'], ['left', 'left', 'left', 'left']));
     bl.push(B.text('Montos expresados en pesos dominicanos (RD$). Tarifas vigentes para el ciclo lectivo ' + cfg.ciclo + ' y sujetas a cambios con previo aviso. Los servicios opcionales se contratan al momento de la inscripción.'));
     return { kind: 'carta', name: 'Tarifario anual ' + cfg.ciclo, file: 'tarifario_' + cfg.ciclo.replace('–', '-') + '.pdf', format: 'Carta 8.5 × 11 in', sign: [], pages: [{ title: 'Tarifario anual', sub: 'Ciclo lectivo ' + cfg.ciclo + ' · Generado el ' + hoyDMY(), blocks: bl }] };
   };
@@ -139,11 +141,11 @@ export default function Screen() {
 
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1040px] border-collapse text-[13px]">
+          <table className="w-full min-w-[1240px] border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH}>Plan</th><th className={TH}>Esquema</th><th className={`${TH} text-right`}>Monto anual</th><th className={`${TH} text-right`}>Desc.</th>
-                <th className={`${TH} text-right`}>Cuota</th><th className={TH}>Mora</th><th className={TH}>Pronto pago</th><th className={`${TH} text-right`}>Alumnos</th>
+                <th className={`${TH} text-right`}>Cuota</th><th className={TH}>Mora</th><th className={TH}>Pronto pago</th><th className={`${TH} text-right`}>Inscripción</th><th className={`${TH} text-right`}>Materiales</th><th className={`${TH} text-right`}>Alumnos</th>
                 <th className={TH}>Estado</th><th className={`${TH} text-right`}>Acciones</th>
               </tr>
             </thead>
@@ -163,7 +165,9 @@ export default function Screen() {
                     <td className={`${TD} text-right font-mono`} style={{ color: c.desc ? '#16A34A' : '#94A3B8' }}>{c.desc ? c.desc + '%' : '—'}</td>
                     <td className={`${TD} text-right font-mono font-semibold`}>{c.tandas ? (c.tandas.some(x => !x.sinPrecio) ? `${fmt(Math.min(...c.tandas.filter(x => !x.sinPrecio).map(x => x.cuota)))} – ${fmt(Math.max(...c.tandas.map(x => x.cuota)))}` : '—') : fmt(c.cuota)}</td>
                     <td className={`${TD} whitespace-nowrap text-xs text-slate-600`}>{moraLbl(p)}</td>
-                    <td className={`${TD} whitespace-nowrap text-xs text-slate-600`}>{Number(p.pronto) ? `${p.pronto}% hasta día ${p.prontoDia}` : '—'}</td>
+                    <td className={`${TD} whitespace-nowrap text-xs text-slate-600`}>{Number(p.pronto) && Number(p.prontoDias) > 0 ? `${p.pronto}% · ${p.prontoDias} d antes` : '—'}</td>
+                    <td className={`${TD} whitespace-nowrap text-right font-mono text-xs`}>{cfg.finanzas.inscripcionModo === 'plan' ? (Number(p.inscripcion) > 0 ? fmt(Number(p.inscripcion)) : <span title="Sin monto en el plan: se usa la cuota fija" className="text-slate-400">fija</span>) : <span title="Modalidad: cuota fija para todos" className="text-slate-400">fija</span>}</td>
+                    <td className={`${TD} whitespace-nowrap text-right font-mono text-xs`}>{p.materialesOn && Number(p.materiales) > 0 ? fmt(Number(p.materiales)) : Number(p.materiales) > 0 ? <span title="Monto guardado, no se agrega" className="text-slate-400">{fmt(Number(p.materiales))} (no)</span> : '—'}</td>
                     <td className={`${TD} text-right font-mono font-medium`}>{p.alumnos}</td>
                     <td className={TD}><span className="inline-flex h-[19px] w-[76px] items-center justify-center rounded-full text-[10px] font-semibold leading-none" style={{ background: et[0], color: et[1] }}>{p.estado}</span></td>
                     <td className={`${TD} whitespace-nowrap text-right`}>
@@ -190,7 +194,7 @@ export default function Screen() {
         </div>
       </section>
 
-      {drawer && <PlanDrawer tandas={tandas} ciclo0={cfg.ciclo0} moraPct={cfg.finanzas.recargoMoraPct} key={(drawer.plan?.id ?? 'new') + drawer.mode} plan={drawer.plan} mode={drawer.mode} pin0={drawer.pin} plans={plans} onClose={() => setDrawer(null)} authorize={authorize} onSave={save} onDelete={del} />}
+      {drawer && <PlanDrawer tandas={tandas} ciclo0={cfg.ciclo0} moraPct={cfg.finanzas.recargoMoraPct} insModo={cfg.finanzas.inscripcionModo === 'plan' ? 'plan' : 'fija'} insFija={cfg.finanzas.inscripcion} key={(drawer.plan?.id ?? 'new') + drawer.mode} plan={drawer.plan} mode={drawer.mode} pin0={drawer.pin} plans={plans} onClose={() => setDrawer(null)} authorize={authorize} onSave={save} onDelete={del} />}
       {tarOpen && (
         <div className="fixed inset-0 z-[85] grid place-items-center bg-slate-900/50 p-5">
           <div className="w-[480px] max-w-full overflow-hidden rounded-[10px] bg-white shadow-2xl">

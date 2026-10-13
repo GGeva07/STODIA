@@ -28,7 +28,7 @@ const plugin: FastifyPluginAsync = async app => {
       return mats.map(m => ({ ...toAlumno({ ...m.alumno, seccionId: m.seccionId, seccion: m.seccion, estado: estadoDe(m.estado) }), cuenta: cuentaDe(m.alumnoId) }))
         .sort((a, b) => a.apellidos.localeCompare(b.apellidos, 'es'));
     }
-    const rows = await prisma.alumno.findMany({ include: { tutor: { select: { nombre: true } }, ...SEC_INC }, orderBy: { apellidos: 'asc' } });
+    const rows = await prisma.alumno.findMany({ where: { estado: { not: 'Preinscrito' } }, include: { tutor: { select: { nombre: true } }, ...SEC_INC }, orderBy: { apellidos: 'asc' } });
     const cuentaDe = await cuentaDerivada();
     return rows.map(r => ({ ...toAlumno(r), cuenta: cuentaDe(r.id) }));
   });
@@ -39,8 +39,9 @@ const plugin: FastifyPluginAsync = async app => {
   // Fecha límite de pago de las notificaciones de cobro: próximo día de corte configurado (o hoy + plazo estándar).
   app.get('/corte', auth, async (): Promise<DirCorte> => fechaCorte());
 
-  app.put<{ Params: { id: string }; Body: Edit }>('/:id', auth, async (req, reply) => {
+  app.put<{ Params: { id: string }; Body: Edit & { pin?: string } }>('/:id', auth, async (req, reply) => {
     if (READONLY_ROLES.includes(req.user.rol)) return reply.code(403).send({ error: `El rol ${req.user.rol} solo tiene lectura sobre la ficha del estudiante` });
+    if (!(await supervisorOk(req, req.body?.pin, 'alumno.editar'))) return reply.code(403).send({ error: 'Clave de supervisor inválida. Intento registrado en auditoría.' });
     const prevDb = await prisma.alumno.findUnique({ where: { id: req.params.id }, include: SEC_INC });
     if (!prevDb) return reply.code(404).send({ error: 'Alumno no encontrado' });
     const prev = { ...prevDb, ...gst(prevDb) };
@@ -64,11 +65,19 @@ const plugin: FastifyPluginAsync = async app => {
   });
 
   // Eliminación jerárquica: Super Admin directo; el resto necesita la clave de supervisor.
-  app.post<{ Params: { id: string }; Body: { pin?: string } }>('/:id/eliminar', auth, async (req, reply) => {
+  app.post<{ Params: { id: string }; Body: { pin?: string; baja?: boolean } }>('/:id/eliminar', auth, async (req, reply) => {
     if (READONLY_ROLES.includes(req.user.rol)) return reply.code(403).send({ error: 'Sin permiso' });
     if (!(await supervisorOk(req, req.body?.pin, 'alumno.eliminar'))) return reply.code(403).send({ error: 'Clave de supervisor inválida. Intento registrado en auditoría.' });
     const a = await prisma.alumno.findUnique({ where: { id: req.params.id } });
     if (!a) return reply.code(404).send({ error: 'Alumno no encontrado' });
+    // Baja lógica (la usa el expediente): estado Retirado, conserva historial y FKs. Se revierte editando el estado.
+    if (req.body?.baja) {
+      if (a.estado === 'Retirado') return reply.code(409).send({ error: `${a.nombres} ${a.apellidos} ya está Retirado.` });
+      await prisma.alumno.update({ where: { id: a.id }, data: { estado: 'Retirado' } });
+      await sincronizarMatricula(a.id);
+      await audit(req.user, 'Delete', { tabla: 'Alumnos', id: `${a.code}/estado`, prev: a.estado, next: 'Retirado (baja lógica)', ip: req.ip });
+      return { ok: true };
+    }
     // Borrado LÓGICO por defecto: con historial (cobros, NCF, notas, monedero...) la FK NoAction lo impide y se responde 409 con la alternativa.
     const dep = await dependenciasAlumno(a.id);
     if (dep.length) return reply.code(409).send({ error: `No se puede eliminar a ${a.nombres} ${a.apellidos}: tiene historial (${dep.join(', ')}). Márcalo como Retirado o Inactivo para conservar su historial.` });

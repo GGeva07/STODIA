@@ -23,7 +23,23 @@ type Db = typeof prisma | Prisma.TransactionClient;
  */
 export function datosSinTm(form: object): string {
   const { tm: _tm, ...resto } = form as { tm?: unknown };
-  return JSON.stringify(resto);
+  return JSON.stringify(normalizarPronto(resto as Record<string, unknown>));
+}
+/**
+ * Dias de anticipacion del pronto pago (data.prontoDias). Compatibilidad con el campo ANTIGUO `prontoDia` (dia limite del mes): si el plan no trae
+ * `prontoDias`, N = dia de vencimiento del plan − prontoDia cuando es positivo; si no, 0 (sin pronto pago hasta que se configure). No se inventan valores.
+ */
+export function prontoDiasDe(f: Record<string, unknown>): number {
+  const num = (k: string) => { const v = parseFloat(String(f[k] ?? '')); return Number.isFinite(v) ? v : NaN; };
+  const nuevo = num('prontoDias');
+  if (!isNaN(nuevo)) return Math.max(0, Math.round(nuevo));
+  const pd = num('prontoDia'), n = pd > 0 ? (num('dia') || 1) - pd : 0;
+  return n > 0 ? Math.round(n) : 0;
+}
+/** Reemplaza el `prontoDia` antiguo por `prontoDias` (texto, como el resto del JSON del plan). */
+export function normalizarPronto(f: Record<string, unknown>): Record<string, unknown> {
+  const { prontoDia: _viejo, ...resto } = f;
+  return { ...resto, prontoDias: String(prontoDiasDe(f)) };
 }
 /** Reemplaza las filas FinPlanTanda del plan por las del `tm` del formulario (tandas inexistentes o importes vacios/no numericos se ignoran). */
 export async function guardarTandasPlan(db: Db, planId: string, tm: Record<string, string> | undefined): Promise<void> {
@@ -38,5 +54,5 @@ export async function guardarTandasPlan(db: Db, planId: string, tm: Record<strin
 }
 /** `data` del plan + `tm` reconstruido desde FinPlanTanda (importes como texto, como los envia el formulario). */
 export const datosConTm = (r: { data: string; tandas: { monto: number; tanda: { nombre: string } }[] }): Record<string, unknown> =>
-  ({ ...(JSON.parse(r.data) as Record<string, unknown>), ...(r.tandas.length ? { tm: Object.fromEntries(r.tandas.map(t => [t.tanda.nombre, String(t.monto)])) } : {}) });
+  ({ ...normalizarPronto(JSON.parse(r.data) as Record<string, unknown>), ...(r.tandas.length ? { tm: Object.fromEntries(r.tandas.map(t => [t.tanda.nombre, String(t.monto)])) } : {}) });
 export const PLAN_INC = { tandas: { include: { tanda: { select: { nombre: true } } } } } as const;

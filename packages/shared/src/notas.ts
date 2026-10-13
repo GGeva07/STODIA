@@ -1,4 +1,4 @@
-/** Tipos de las NOTAS DE CREDITO / DEBITO (Cobros). Solo tipos. Ver docs/fiscal-ncf.md §10. */
+/** Tipos de las NOTAS DE CREDITO / DEBITO (Cobros). Solo tipos. Ver docs/fiscal-ncf.md §12. */
 import type { EstadoDgii, ModalidadFiscal } from './sistema';
 
 export type NotaClase = 'CREDITO' | 'DEBITO';

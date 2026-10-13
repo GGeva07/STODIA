@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { fmt, fmtDoc } from './fin';
 import { cajaSync } from './caja';
 import { nombreLegal, rncTxt, ciudadTxt, usePerfil } from './perfil';
+import { conFirmas } from './firmas';
 
 /**
  * Documento imprimible del prototipo: modelo de bloques (B.kv/text/total/table), vista previa de
@@ -19,7 +20,11 @@ export type PBlock =
   | { isTable: true; cols: string; head: { l: string; al: string }[]; rows: { cells: { v: string; al: string; ff: string }[] }[] };
 export interface PPage { title: string; sub: string; blocks: PBlock[] }
 /** file = nombre del PDF descargable; folioTipo (p. ej. 'BOL') = cada página lleva folio + SHA-256 + QR verificable (GET /verificar/:folio). */
-export interface PDoc { kind: 'carta' | 'tirilla'; name: string; format: string; sign: string[]; pages: PPage[]; sede?: string; file?: string; folioTipo?: string; porAlumno?: boolean }
+export interface PDoc { kind: 'carta' | 'tirilla'; name: string; format: string; sign: string[]; pages: PPage[]; sede?: string; file?: string; folioTipo?: string; porAlumno?: boolean;
+  /** Quién firma cada rol (login o nombre): Cajero = quien emitió, Docente = docente del curso. Director = el Director Académico activo con firma (ver firmas.ts). */
+  firmaDe?: { Cajero?: string; Docente?: string };
+  /** Imágenes de firma (data URL) paralelas a `sign`; las rellena `conFirmas`. NO entran al hash del folio. */
+  signImg?: (string | null)[]; firmasListas?: boolean }
 
 export const B = {
   kv: (rows: [string, string][]): PBlock => ({ isKv: true, rows: rows.map(([k, v]) => ({ k, v })) }),
@@ -36,12 +41,19 @@ export const B = {
  * docTirilla del prototipo. Si el recibo trae los datos del comprobante que fija la API (fecha, cajero, caja, sucursal, estado), la tirilla sale SOLO de ellos:
  * asi la de un recibo recien emitido y la reimpresion desde el historial son identicas. Sin ellos (Venta Rapida) usa la caja/cajero/fecha de la sesion.
  */
-export function docTirilla(r: { id: string; ncf: string; tutor: string; hora: string; monto: number; items: { con: string; monto: number }[]; pays: { m: string; r?: string; amt: number }[]; change: number; abono?: boolean; saldo?: number; est?: string; nc?: string; fecha?: string; cajero?: string; caja?: string; sucursal?: string;
+export function docTirilla(r: { id: string; ncf: string; tutor: string; hora: string; monto: number; items: { con: string; monto: number; descuento?: number; descuentoMotivo?: string; montoBruto?: number; descuentoBeca?: number; becaMotivo?: string }[]; pays: { m: string; r?: string; amt: number }[]; change: number; abono?: boolean; saldo?: number; est?: string; nc?: string; fecha?: string; cajero?: string; caja?: string; sucursal?: string;
   tipoComprobante?: { codigo: string; nombre: string; modalidad: string }; clienteRnc?: string; clienteNombre?: string; regimenEspecial?: string; estadoDgii?: string }, cajero = '', fecha = hoyDMY()): PDoc {
   const cj = cajaSync();
   const electronico = r.tipoComprobante?.modalidad === 'ELECTRONICA';
   const caja = r.caja ?? cj.caja, sucursal = r.sucursal ?? cj.sucursal, anulado = r.est === 'Anulado';
-  const items = (r.items || []).map(i => [i.con, fmt(i.monto)]);
+  const conDesc = (r.items || []).some(i => (i.descuento ?? 0) > 0); // columna «Desc.» solo si alguna linea tiene descuento aplicado
+  // Lineas con beca / Plan Hermano (ya incluida en el monto): Monto real · Descuento por beca · Total. Las demas lineas salen como siempre.
+  const items = (r.items || []).flatMap(i => {
+    const beca = (i.descuentoBeca ?? 0) > 0 && (i.montoBruto ?? 0) > 0;
+    const fila = (c: string, m: string, d?: string) => (conDesc ? [c, m, d ?? ''] : [c, m]);
+    const total = conDesc ? [(beca ? '   Total' : i.con) + ((i.descuento ?? 0) > 0 && i.descuentoMotivo ? ` (${i.descuentoMotivo})` : ''), fmt(i.monto), (i.descuento ?? 0) > 0 ? '−' + fmt(i.descuento!) : '—'] : [beca ? '   Total' : i.con, fmt(i.monto)];
+    return beca ? [fila(i.con, ''), fila('   Monto real', fmt(i.montoBruto!)), fila(`   Desc. beca${i.becaMotivo ? ` (${i.becaMotivo})` : ''}`, '−' + fmt(i.descuentoBeca!)), total] : [total];
+  });
   const tot: [string, string, boolean?][] = [
     ...(r.pays || []).map(p => [p.m + (p.r ? ' ' + p.r : ''), fmt(p.amt)] as [string, string]),
     [r.abono ? 'ABONO' : 'TOTAL', fmt(r.monto), true],
@@ -49,11 +61,11 @@ export function docTirilla(r: { id: string; ncf: string; tutor: string; hora: st
     ...(r.change > 0 ? [['Cambio', fmt(r.change)] as [string, string]] : []),
   ];
   return {
-    kind: 'tirilla', name: 'Tirilla ' + r.id, file: 'recibo_' + r.id + '.pdf', format: 'Tirilla 80 mm', sign: [], sede: [caja, sucursal ? 'Sucursal ' + sucursal : ''].filter(Boolean).join(' · '),
+    kind: 'tirilla', name: 'Tirilla ' + r.id, file: 'recibo_' + r.id + '.pdf', format: 'Tirilla 80 mm', sign: [], firmaDe: { Cajero: (r.cajero ?? cajero) || undefined }, sede: [caja, sucursal ? 'Sucursal ' + sucursal : ''].filter(Boolean).join(' · '),
     pages: [{ title: anulado ? 'Recibo ANULADO' : r.abono ? 'Recibo de abono' : 'Recibo de pago', sub: anulado && r.nc ? 'Nota de crédito ' + r.nc : '', blocks: [
       B.kv([['Recibo', r.id], [electronico ? 'e-NCF' : 'NCF', r.ncf], ...(r.tipoComprobante ? [['Comprobante', `${r.tipoComprobante.nombre} (${r.tipoComprobante.codigo}…)`] as [string, string]] : []), ['Fecha', (r.fecha ?? fecha) + ' ' + r.hora], ['Cajero', r.cajero ?? cajero], ['Tutor', r.tutor],
         ...(r.clienteRnc ? [['RNC/Cédula', fmtDoc(r.clienteRnc)] as [string, string]] : []), ...(r.clienteNombre ? [['Razón social', r.clienteNombre] as [string, string]] : []), ...(r.regimenEspecial ? [['Régimen especial', r.regimenEspecial] as [string, string]] : [])]),
-      B.table(['Concepto', 'Monto'], items, ['1fr', 'auto'], ['left', 'right']),
+      conDesc ? B.table(['Concepto', 'Monto', 'Desc.'], items, ['1fr', 'auto', 'auto'], ['left', 'right', 'right']) : B.table(['Concepto', 'Monto'], items, ['1fr', 'auto'], ['left', 'right']),
       B.total(tot),
       ...(electronico && r.estadoDgii === 'PendienteEnvio' ? [B.text('e-NCF pendiente de envío a la DGII')] : []),
       B.text('Gracias por su pago. Conserve este comprobante.'),
@@ -112,11 +124,12 @@ export function runPrint(key: string, doc: PDoc | null | undefined) {
   if (!doc || S.st.busy) return;
   ensureHost();
   set({ busy: key });
-  setTimeout(() => set({ busy: null, doc }), 650);
+  void Promise.all([conFirmas(doc), new Promise(r => setTimeout(r, 650))]).then(([d]) => set({ busy: null, doc: d }));
 }
 export const closePrint = () => set({ doc: null });
 
 /** Estado del botón de impresión (pbtn del prototipo): etiqueta, icono y animación. */
+export function usePrintOcupado() { const s = useSyncExternalStore(sub, getSt); return !!s.busy || !!s.doc; }
 export function usePrintBusy() {
   const s = useSyncExternalStore(sub, getSt);
   return (key: string, label: string, icon: string) => {
@@ -162,7 +175,7 @@ export function Paper({ doc, pi, bare }: { doc: PDoc; pi: number; bare?: boolean
       })}
       {doc.sign.length > 0 && (
         <div className="prow">
-          <div style={{ display: 'flex', justifyContent: 'space-around', gap: 40, marginTop: 64 }}>{doc.sign.map((l, i) => <div key={i} style={{ flex: 1, textAlign: 'center' }}><div style={{ borderTop: '1px solid #000000', paddingTop: 4, fontSize: 11 }}>{l}</div></div>)}</div>
+          <div style={{ display: 'flex', justifyContent: 'space-around', gap: 40, marginTop: 64 }}>{doc.sign.map((l, i) => <div key={i} style={{ flex: 1, textAlign: 'center', position: 'relative' }}>{doc.signImg?.[i] && <img src={doc.signImg[i]!} alt="" style={{ position: 'absolute', left: '50%', bottom: '100%', transform: 'translateX(-50%)', marginBottom: -3, maxHeight: 48, maxWidth: '85%', objectFit: 'contain' }} />}<div style={{ borderTop: '1px solid #000000', paddingTop: 4, fontSize: 11 }}>{l}</div></div>)}</div>
           <div style={{ marginTop: 18, fontSize: 9, textAlign: 'center' }}>Documento generado por STODIA · {hoyDMY()}</div>
         </div>
       )}

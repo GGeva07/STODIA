@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client';
-import type { CfgModalidadFiscal, CfgNcf, EstadoSecuencia, ModalidadFiscal, TipoComprobanteDto, TipoLogico } from '@stodia/shared';
+import type { AlertaSecuencia, CfgModalidadFiscal, CfgNcf, EstadoSecuencia, ModalidadFiscal, TipoComprobanteDto, TipoLogico } from '@stodia/shared';
 import { prisma } from '../db';
 import { cfgGet, cfgSet, CFG_DEFAULTS } from './sisconfig';
 import { hoyISO, zonaHoraria } from './cxc';
@@ -173,6 +173,25 @@ export async function asignarNcf(db: Db, logico: TipoLogico, ctx?: ContextoFisca
   throw new FiscalError(409, msgSinSecuencia(t.codigo, t.modalidad));
 }
 
+/**
+ * Aviso de «secuencia por agotarse» DESPUES de facturar: lee la secuencia que acaba de usar la venta y, si lo libre / total <= su umbral (%), devuelve el aviso.
+ * Si estaba agotada pero el tipo aun tiene otra secuencia activa con numeros, no avisa. Nunca lanza: un fallo aqui no debe afectar la venta ya confirmada.
+ */
+export async function alertaSecuencia(secuenciaFiscalId: string, db: Db = prisma): Promise<AlertaSecuencia | undefined> {
+  try {
+    const s = await db.secuenciaFiscal.findUnique({ where: { id: secuenciaFiscalId }, include: { tipoComprobante: true } });
+    if (!s || s.historica) return undefined;
+    const total = s.hasta - s.desde + 1, restantes = Math.max(0, s.hasta - s.actual);
+    if (total <= 0 || (restantes / total) * 100 > s.umbralPct) return undefined;
+    if (restantes === 0) {
+      const otras = await db.secuenciaFiscal.findMany({ where: { tipoComprobanteId: s.tipoComprobanteId, modalidad: s.modalidad, estado: 'Activa', historica: false, id: { not: s.id } } });
+      const dia = await fechaHoyFiscal();
+      if (otras.some(o => o.hasta > o.actual && !(o.vence && o.vence < dia))) return undefined;
+    }
+    return { tipo: s.tipoComprobante.nombre, codigo: s.tipoComprobanteId, restantes, total, umbralPct: s.umbralPct, ...(s.vence ? { vence: s.vence } : {}), estado: restantes === 0 ? 'Agotada' : restantes === 1 ? 'Ultimo' : 'PorAgotarse' };
+  } catch { return undefined; }
+}
+
 // ---------------------------------------------------------------- consulta y DTO
 type SecRow = Prisma.SecuenciaFiscalGetPayload<{ include: { tipoComprobante: true } }>;
 export function estadoEfectivo(s: { estado: string; actual: number; hasta: number; vence: string | null; historica: boolean }, hoy: string): EstadoSecuencia {
@@ -272,13 +291,14 @@ export async function editarSecuencia(id: string, c: CambioSecuencia): Promise<{
   if (c.vence !== undefined) {
     const v = c.vence === null || c.vence === '' ? null : String(c.vence).trim();
     if (v && !fechaValida(v)) throw new FiscalError(400, 'La fecha de vencimiento no es válida (usa AAAA-MM-DD)');
+    if (v && v < hoy && v !== cur.vence) throw new FiscalError(400, `La nueva fecha de vencimiento no puede ser anterior a hoy (${hoy.slice(8, 10)}/${hoy.slice(5, 7)}/${hoy.slice(0, 4)}). Si la autorización ya venció y debe quedar así, deja la fecha sin cambios.`);
     vence = v; data.vence = v;
   }
   let estado = cur.estado;
   if (c.estado === 'Inactiva') { if (cur.estado === 'Inactiva') throw new FiscalError(409, 'La secuencia ya está inactiva'); estado = 'Inactiva'; }
   else if (c.estado === 'Activa' && cur.estado === 'Inactiva') estado = 'Activa';
   // Reactivar (o prorrogar el vencimiento de una Vencida) solo si quedan numeros y la autorizacion esta vigente.
-  if (estado === 'Vencida' && vence && vence >= hoy) estado = 'Activa';
+  if (estado === 'Vencida' && (!vence || vence >= hoy) && cur.actual < cur.hasta) estado = 'Activa'; // una agotada no se reactiva
   if (estado === 'Activa' || (estado === 'Vencida' && c.estado === 'Activa')) {
     if (cur.actual >= cur.hasta) throw new FiscalError(409, 'La secuencia está agotada: registra una nueva autorización.');
     if (vence && vence < hoy) throw new FiscalError(409, 'La autorización está vencida: actualiza la fecha de vencimiento (prórroga de la DGII) o registra una nueva.');
@@ -307,7 +327,7 @@ export async function cambiarModalidad(logico: TipoLogico, modalidad: ModalidadF
     const hay = t ? await prisma.secuenciaFiscal.findMany({ where: { tipoComprobanteId: t.codigo, modalidad, estado: 'Activa', historica: false } }) : [];
     if (!hay.some(s => s.actual < s.hasta && !(s.vence && s.vence < hoy))) throw new FiscalError(409, `No hay una secuencia electrónica activa para ${t?.codigo ?? NOMBRE_LOGICO[logico]}: registra la autorización de e-CF primero (Registrar autorización DGII › Electrónicos).`);
     if (!(await cfgGet('ecf'))) {
-      advertencias.push('El certificado digital e-CF no está cargado: sin él no se puede firmar ni transmitir a la DGII. Los e-NCF quedarán «Pendiente de envío».');
+      advertencias.push('El certificado digital e-CF no está cargado. Los e-NCF quedarán «Pendiente de envío».');
       if (!confirmar) throw new FiscalError(409, advertencias[0] + ' Confirma para continuar de todos modos.');
     }
   }

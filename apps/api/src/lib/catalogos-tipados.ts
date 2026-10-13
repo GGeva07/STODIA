@@ -5,7 +5,8 @@
  */
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../db';
-import { cicloIdActivo } from './ciclo';
+import { cicloActivoRow, cicloIdActivo } from './ciclo';
+import { sinLiberarEn } from './reinscripcion';
 
 export type Row = { id: string; estado: string } & Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 export const TIPOS_2A = ['grados', 'tandas', 'aulas', 'secciones', 'materias', 'rubricas', 'docentes', 'staff'] as const;
@@ -98,7 +99,7 @@ export async function leerTipo(tipo: TipoTipado, opts: { insc?: boolean; interno
     case 'secciones': {
       const [rows, cuenta] = await Promise.all([
         db.seccion.findMany(asc),
-        opts.insc ? db.alumno.groupBy({ by: ['seccionId'], where: { estado: { not: 'Retirado' } }, _count: { _all: true } }) : Promise.resolve([]),
+        opts.insc ? cicloActivoRow(db).then(act => db.alumno.groupBy({ by: ['seccionId'], where: { estado: { not: 'Retirado' }, ...(act ? sinLiberarEn(act.id) : {}) }, _count: { _all: true } })) : Promise.resolve([]),
       ]);
       const n = new Map(cuenta.map(c => [c.seccionId, c._count._all]));
       return rows.map(r => ({ id: r.id, grado: r.gradoId, seccion: r.letra, tanda: r.tandaId, aula: r.aulaBaseId ?? '', cap: r.cap, estado: r.estado, ...(opts.insc ? { insc: n.get(r.id) ?? 0 } : {}) }));

@@ -24,6 +24,8 @@ export interface ExpServicio {
 
 export interface ExpCatalogoItem {
   k: string; l: string; cat: string; freq: string; mora: string; price: number; rec: boolean; icon: string; spec: string; food?: boolean;
+  /** Solo artículos de inventario (`prd:`): unidades disponibles; null/ausente = ilimitado o servicio. */
+  stock?: number | null;
 }
 
 export interface ExpPersona { nombre: string; parentesco: string; cedula: string; tel: string }
@@ -34,6 +36,11 @@ export interface PersPlan {
   dia: number; gracia: number; mora: string; detalle: string;
 }
 
+/** Nota fiscal que afecta un cargo de la cuenta. `reabierto` = la NC lo devolvió a la deuda («volver a cobrar»). `acreditado` = devolución definitiva (el cargo sigue pagado). */
+export interface ExpCuentaNota { nota: string; ncf: string; clase: 'CREDITO' | 'DEBITO'; recibo: string | null; reabierto: boolean; acreditado: boolean; montoAcreditado: number }
+export interface ExpCuentaItem { id: string; con: string; vence: string; est: string; monto: number; paid: boolean; nc?: ExpCuentaNota }
+export interface ExpNotaMov { id: string; ncf: string; clase: 'CREDITO' | 'DEBITO'; recibo: string | null; fecha: string; monto: number; motivo: string; efecto: string; lineas: { concepto: string; monto: number; efecto: string }[] }
+
 export interface ExpedienteResp {
   alumno: Alumno;
   tutor: ExpPersona | null;
@@ -42,8 +49,12 @@ export interface ExpedienteResp {
   ficha: ExpFicha;
   docs: ExpDoc[];
   servicios: ExpServicio[];
-  cuenta: { id: string; con: string; vence: string; est: string; monto: number; paid: boolean }[];
+  cuenta: ExpCuentaItem[];
+  /** Movimientos de notas de crédito/débito que afectan esta cuenta (más recientes primero). */
+  notas?: ExpNotaMov[];
   becasActivas: string[];
+  /** Solicitudes de beca Pendientes de aprobación (Becas y Convenios): NO descuentan hasta que el Director las apruebe. */
+  becasPendientes?: string[];
   /** Fase 2D: solo al consultar un ciclo NO activo. Notas por materia y periodo (media de las competencias) y asistencia resumida de ese ciclo. */
   cicloDetalle?: {
     ciclo: string; cerrado: boolean;
@@ -61,6 +72,8 @@ export interface ExpedienteResp {
     hoy: string; mesActual: number;
     /** Fin del ciclo (aaaa-mm-dd) para limitar las bajas. */
     finCiclo: string;
+    /** Día de cobro por defecto de las suscripciones (día de corte de la institución). */
+    diaCorte?: number;
     avisos: string[];
   };
 }
@@ -70,14 +83,21 @@ export interface InsPlan {
   id: string; name: string; n: number; freq: number; desc: number; dia: number; gracia: number; mora: string; detalle: string;
   /** Monto anual bruto por tanda ('*' = todas). */
   anual: Record<string, number>;
+  /** Cuota de inscripcion que aplica con este plan segun la modalidad configurada, y de donde sale ('fija' global, 'plan' propia, 'respaldo' = modo plan sin monto en el plan: se usa la global). */
+  inscripcion: number; inscripcionOrigen: 'fija' | 'plan' | 'respaldo';
+  /** Cuota de materiales del plan si esta activada (0 = no se agrega). Se carga como cargo aparte en el primer vencimiento. */
+  materiales: number;
 }
 export interface InsConfigResp {
   cupos: InsCupo[]; docs: string[]; ciclo: string;
+  /** Ciclos donde se puede inscribir (el activo y los planificados = inscripcion anticipada); `ciclo` es el destino al que corresponde esta configuracion. */
+  ciclosDestino?: { n: string; estado: 'Activo' | 'Planificado' }[]; anticipada?: boolean;
   planes: InsPlan[];
   grados: { id: string; label: string }[];
   tandas: string[];
   servicios: { k: string; n: string; price: number }[];
-  inscripcion: number;
+  /** Cuota de inscripcion FIJA global (finanzas.inscripcion) y la modalidad vigente. */
+  inscripcion: number; inscripcionModo: 'fija' | 'plan';
   avisos: string[];
 }
 /** Datos de contacto del tutor que pide el wizard (mismos campos y validaciones que la pantalla Tutores). La responsabilidad la deriva el servidor del rol. */
@@ -109,11 +129,24 @@ export interface InsReq {
   /** Registra una beca «Plan Hermano» PENDIENTE de aprobación (flujo normal de Becas) para el alumno nuevo; solo si la familia ya tiene hijos. */
   becaHermano?: boolean;
   /** Sección elegida (id de InsCupo); grado/tanda/sec se derivan en el servidor. */
+  /** Ciclo destino (nombre «2027–2028»): el activo por defecto o un ciclo PLANIFICADO (pre-inscripcion); nunca uno cerrado. */
+  ciclo?: string;
   cupo: string; tanda: string; grado: string; sec: string; plan: string; serv: string[]; firma: 'digital' | 'fisica';
   /** Alergias del alumno (ids del catálogo Alergia; opcional). */
   alergias?: string[];
 }
-export interface InsResp { code: string; ncf: string; factura: number; cuotas: number; /** Beca Plan Hermano creada (Pendiente de aprobación). */ becaId?: string }
+/** Persona (tutor) tal como queda registrada al inscribir; alimenta el documento «Contrato de servicios educativos e inscripción». */
+export interface InsContratoTutor { nombre: string; cedula: string; parentesco: string; tel: string; email: string; rnc: string }
+/** Datos que el servidor ya resolvió al inscribir (cartera real, tutores vinculados, regla del plan) para generar el contrato sin recalcular nada en el cliente. */
+export interface InsContrato {
+  alumnoId: string; ctr: string; ciclo: string; fecha: string;
+  tutorLegal: InsContratoTutor; tutorFinanciero: InsContratoTutor;
+  /** Calendario de vencimientos del plan (colegiatura) más la cuota de materiales si aplica. `enFactura` = la cuota única va en la factura inicial. */
+  calendario: { con: string; vence: string; monto: number; enFactura?: boolean }[];
+  servicios: { n: string; price: number }[];
+  plan: { name: string; n: number; freq: number; desc: number; dia: number; gracia: number; mora: string; pronto: number; prontoDias: number; total: number };
+}
+export interface InsResp { code: string; ncf: string; factura: number; cuotas: number; /** Datos para generar el contrato (ver InsContrato). */ contrato?: InsContrato; /** Cuota de materiales cargada como cargo aparte (0/ausente = no aplica). */ materiales?: number; /** Cuota de inscripcion cobrada en la factura. */ inscripcion?: number; /** Beca Plan Hermano creada (Pendiente de aprobación). */ becaId?: string }
 export interface DirCorte { fecha: string; texto: string }
 
 // ---------- Tutores (pantalla «Tutores») ----------

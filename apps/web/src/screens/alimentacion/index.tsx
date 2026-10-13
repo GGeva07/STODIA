@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { AliCatalogos, AliData, AliMenuDto, AliPlanDto, AliPlanInput } from '@stodia/shared';
 import { api } from '../../lib/api';
+import { AvisoBorrador, useDraft } from '../../lib/useDraft';
 import { useSession } from '../../lib/session';
 import { useToastStack } from '../../components/useToastStack';
 import { td } from '../../components/system/styles';
+import ConfirmModal from '../../components/system/ConfirmModal';
 
 const fmt = (n: number | string) => 'RD$ ' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Error inesperado');
@@ -27,13 +29,18 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 export default function Screen() {
   const { user } = useSession();
   const canEdit = user?.rol === 'Super Admin' || user?.rol === 'Encargado Comedor';
+  const canPlan = canEdit || user?.rol === 'Director Académico'; // el Director crea/edita planes, no el menú
   const { toast, toasts } = useToastStack();
   const [data, setData] = useState<AliData | null>(null);
   const [tab, setTab] = useState<'cat' | 'menu'>('cat');
-  const [ad, setAd] = useState<{ id: string | null; mode: 'view' | 'edit' | 'create'; f: AliPlanInput; inscritos: number; err: string } | null>(null);
-  const [menuEdit, setMenuEdit] = useState<number | null>(null);
-  const [draft, setDraft] = useState('');
-  const [draftAlgs, setDraftAlgs] = useState<string[]>([]);
+  // Borrador del drawer de plan (crear/editar; el modo «ver» no se guarda): «×»/fondo solo lo ocultan (se retoma al abrir el mismo plan o «Nuevo plan»); «Cancelar» y guardar con éxito lo descartan.
+  const [ad, setAd, , metaAd] = useDraft<{ id: string | null; mode: 'view' | 'edit' | 'create'; f: AliPlanInput; inscritos: number; err: string } | null>('alimentacion:plan', null, { transformar: a => (a && a.mode !== 'view' ? { ...a, err: '' } : null) });
+  const [oculto, setOculto] = useState(false);
+  const cerrar = () => { if (ad?.mode === 'view') setAd(null); else setOculto(true); };
+  const [menuEdit, setMenuEdit] = useDraft<number | null>('alimentacion:menuEdit', null);
+  const [draft, setDraft] = useDraft('alimentacion:menuPlato', '');
+  const [draftAlgs, setDraftAlgs] = useDraft<string[]>('alimentacion:menuAlgs', []);
+  const [delPlan, setDelPlan] = useState<AliPlanDto | null>(null); // antes de cualquier return temprano (reglas de hooks)
 
   const load = useCallback(() => api.get<AliData>('/alimentacion').then(setData).catch(e => toast(errMsg(e), 'bad')), [toast]);
   useEffect(() => { void load(); }, [load]);
@@ -49,12 +56,18 @@ export default function Screen() {
     ['Alumnos con alergias', data.alumnosConAlergia, '#DC2626'],
   ];
 
-  const openAd = (p: AliPlanDto | null, mode: 'view' | 'edit' | 'create') =>
+  const openAd = (p: AliPlanDto | null, mode: 'view' | 'edit' | 'create') => {
+    if (ad && oculto && ad.id === (p?.id ?? null) && ad.mode === mode) { setOculto(false); return; } // retoma el borrador oculto
+    setOculto(false);
     setAd({ id: p?.id ?? null, mode, inscritos: p?.inscritos ?? 0, err: '', f: p ? { ...p, meals: MEALS.map((_, i) => !!p.meals[i]), diets: DIETS.map((_, i) => !!p.diets[i]) } : blank(data.catalogos) });
+  };
 
-  const del = async (p: AliPlanDto) => {
+  const del =(p: AliPlanDto) => {
     if (p.inscritos > 0) { toast(`No se puede eliminar: ${p.inscritos} alumnos inscritos. Márcalo Inactivo para cerrar nuevas inscripciones.`, 'bad'); return; }
-    if (!window.confirm(`Eliminar plan ${p.id}\nSe eliminará «${p.name}» del catálogo de comedor.`)) return;
+    setDelPlan(p);
+  };
+  const doDel = async (p: AliPlanDto) => {
+    setDelPlan(null);
     try { await api.del('/alimentacion/planes/' + p.id); setAd(null); await load(); toast(`Plan ${p.id} eliminado`, 'warn'); } catch (e) { toast(errMsg(e), 'bad'); }
   };
 
@@ -73,7 +86,7 @@ export default function Screen() {
     if (!draft.trim()) { toast('El plato no puede quedar vacío', 'bad'); return; }
     try {
       await api.put('/alimentacion/menu/' + i, { plato: draft.trim(), algs: draftAlgs });
-      await load(); setMenuEdit(null);
+      await load(); setMenuEdit(null); setDraft(''); setDraftAlgs([]);
       toast(`Menú del ${menu[i].dia} actualizado · notificado en el portal de tutores`, 'ok');
     } catch (e) { toast(errMsg(e), 'bad'); }
   };
@@ -117,8 +130,8 @@ export default function Screen() {
           <h1 className="text-xl font-semibold tracking-tight">Planes de Alimentación</h1>
           <p className="mt-1 text-[13px] text-slate-600">Suscripciones de comedor integradas al plan de pago y monederos virtuales para cafetería.</p>
         </div>
-        {tab === 'cat' && canEdit && (
-          <button onClick={() => openAd(null, 'create')} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark"><i className="ph ph-plus" />Nuevo Plan Alimenticio</button>
+        {tab === 'cat' && canPlan && (
+          <button onClick={() => openAd(null, 'create')} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark"><i className="ph ph-plus" />Crear plan de alimentación</button>
         )}
       </div>
       <div className="flex flex-wrap gap-7">
@@ -163,7 +176,7 @@ export default function Screen() {
                       <td className={TD + ' whitespace-nowrap text-right'}>
                         <div className="inline-flex gap-0.5">
                           <button onClick={() => openAd(p, 'view')} title="Ver detalle" className="grid h-[30px] w-[30px] place-items-center rounded-md text-base text-slate-600 hover:bg-slate-100"><i className="ph ph-eye" /></button>
-                          {canEdit && <>
+                          {canPlan && <>
                             <button onClick={() => openAd(p, 'edit')} title="Editar" className="grid h-[30px] w-[30px] place-items-center rounded-md text-base text-accent hover:bg-blue-50"><i className="ph ph-pencil-simple" /></button>
                             <button onClick={() => void del(p)} title="Eliminar" className="grid h-[30px] w-[30px] place-items-center rounded-md text-base text-red-600 hover:bg-red-100"><i className="ph ph-trash" /></button>
                           </>}
@@ -179,7 +192,7 @@ export default function Screen() {
                 <span className="grid h-[52px] w-[52px] place-items-center rounded-full bg-blue-50 text-[26px] text-accent"><i className="ph ph-bowl-food" /></span>
                 <div className="text-[15px] font-semibold">No hay planes alimenticios configurados.</div>
                 <div className="text-[13px] text-slate-600">Crea una suscripción de comedor o un monedero virtual para ofrecerlo en la inscripción.</div>
-                {canEdit && <button onClick={() => openAd(null, 'create')} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white"><i className="ph ph-plus" />Nuevo Plan Alimenticio</button>}
+                {canPlan && <button onClick={() => openAd(null, 'create')} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white"><i className="ph ph-plus" />Crear plan de alimentación</button>}
               </div>
             )}
           </div>
@@ -236,17 +249,18 @@ export default function Screen() {
         </div>
       )}
 
-      {ad && f && (
-        <div onClick={() => setAd(null)} className="fixed inset-0 z-[66] flex justify-end bg-slate-900/40">
+      {ad && f && !oculto && (
+        <div onClick={cerrar} className="fixed inset-0 z-[66] flex justify-end bg-slate-900/40">
           <div onClick={e => e.stopPropagation()} className="flex h-full w-[min(520px,100vw)] flex-col bg-white shadow-[-12px_0_32px_rgba(15,23,42,0.2)]">
             <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-4">
               <div className="min-w-0 flex-1">
                 <div className="text-[15px] font-semibold">{ad.mode === 'create' ? 'Nuevo plan alimenticio' : (ad.mode === 'edit' ? 'Editar · ' : '') + f.name}</div>
                 <div className="text-xs text-slate-500">{ad.mode === 'create' ? 'Quedará disponible en Inscripción y en el expediente (Servicios y Contrato)' : `${ad.id} · ${ad.inscritos} alumnos inscritos`}</div>
               </div>
-              <button onClick={() => setAd(null)} aria-label="Cerrar" className="h-8 w-8 rounded-md border border-slate-300 bg-white"><i className="ph ph-x" /></button>
+              <button onClick={cerrar} aria-label="Cerrar" className="h-8 w-8 rounded-md border border-slate-300 bg-white"><i className="ph ph-x" /></button>
             </div>
             <div className="flex flex-1 flex-col gap-3.5 overflow-auto px-5 py-[18px]">
+              {!ro && <AvisoBorrador meta={{ ...metaAd, descartar: () => { setAd(null); setOculto(false); } }} />}
               <Field label="Nombre del plan *"><input value={f.name} onChange={e => setF({ name: e.target.value })} disabled={ro} className={`${INPUT} ${bd}`} /></Field>
               <div className="flex flex-col gap-1.5">
                 <span className="text-xs font-medium text-slate-600">Modelo</span>
@@ -283,13 +297,13 @@ export default function Screen() {
               {ad.err && <div className="flex items-center gap-1.5 text-xs font-medium text-red-600"><i className="ph ph-warning-circle" />{ad.err}</div>}
             </div>
             <div className="flex justify-between gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
-              {ad.mode !== 'create' && canEdit && (
+              {ad.mode !== 'create' && canPlan && (
                 <button onClick={() => void del(planes.find(p => p.id === ad.id)!)} className="flex h-9 items-center gap-1.5 rounded-md border border-red-300 bg-white px-3 text-[13px] font-medium text-red-600"><i className="ph ph-trash" />Eliminar</button>
               )}
               <span className="flex-1" />
               <div className="flex gap-2">
-                <button onClick={() => setAd(null)} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium text-ink">{ro ? 'Cerrar' : 'Cancelar'}</button>
-                {(canEdit || !ro) && (
+                <button onClick={() => { setAd(null); setOculto(false); }} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium text-ink">{ro ? 'Cerrar' : 'Cancelar'}</button>
+                {(canPlan || !ro) && (
                   <button onClick={() => void save()} className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white">
                     <i className={ro ? 'ph ph-pencil-simple' : 'ph ph-floppy-disk'} />{ro ? 'Editar' : ad.mode === 'create' ? 'Crear plan' : 'Guardar cambios'}
                   </button>
@@ -298,6 +312,11 @@ export default function Screen() {
             </div>
           </div>
         </div>
+      )}
+      {delPlan && (
+        <ConfirmModal danger title={`Eliminar plan ${delPlan.id}`} confirmLabel="Eliminar" onConfirm={() => void doDel(delPlan)} onClose={() => setDelPlan(null)}>
+          Se eliminará «{delPlan.name}» del catálogo de comedor.
+        </ConfirmModal>
       )}
     </div>
   );

@@ -4,6 +4,7 @@ import { btn, btnPrimary, card, input } from '../../components/system/styles';
 import { useToast } from '../../components/system/UiProvider';
 import { api } from '../../lib/api';
 import { useSession } from '../../lib/session';
+import { AvisoBorrador, useDraft } from '../../lib/useDraft';
 
 const label = 'flex flex-col gap-1 text-xs font-medium text-slate-600';
 
@@ -11,23 +12,23 @@ const label = 'flex flex-col gap-1 text-xs font-medium text-slate-600';
 export default function Canales() {
   const { user } = useSession();
   const toast = useToast();
-  const [c, setC] = useState<CmnCanalesCfg | null>(null);
-  const [p, setP] = useState<MobPasarelaCfg | null>(null);
-  const [em, setEm] = useState({ activo: false, host: '', port: '587', user: '', pass: '', from: '' });
-  const [pay, setPay] = useState({ instr: '', recargas: '' });
-  const [busy, setBusy] = useState(false);
+  const [d, setD] = useState<{ c: CmnCanalesCfg; p: MobPasarelaCfg; v: number } | null>(null);
   const sa = user?.rol === 'Super Admin';
-
-  const fill = (cc: CmnCanalesCfg, pp: MobPasarelaCfg) => {
-    setC(cc); setP(pp);
-    setEm({ activo: cc.email.activo, host: cc.email.host, port: String(cc.email.port), user: cc.email.user, pass: '', from: cc.email.from });
-    setPay({ instr: pp.instruccionesPago, recargas: pp.recargas.join(', ') });
-  };
   useEffect(() => {
     if (!sa) return;
-    Promise.all([api.get<CmnCanalesCfg>('/comunica/canales'), api.get<MobPasarelaCfg>('/movil/pasarela')]).then(([a, b]) => fill(a, b)).catch(e => toast((e as Error).message, 'bad'));
+    Promise.all([api.get<CmnCanalesCfg>('/comunica/canales'), api.get<MobPasarelaCfg>('/movil/pasarela')]).then(([a, b]) => setD(x => ({ c: a, p: b, v: (x?.v ?? 0) + 1 }))).catch(e => toast((e as Error).message, 'bad'));
   }, [sa, toast]);
-  if (!sa || !c || !p) return null;
+  if (!sa || !d) return null;
+  return <CanalesForm key={d.v} c={d.c} p={d.p} onFill={(a, b) => setD(x => ({ c: a, p: b, v: (x?.v ?? 0) + 1 }))} />;
+}
+
+/** Borradores: correo (sin la contraseña SMTP) e instrucciones de pago se conservan al salir; se descartan al guardar con éxito. Al guardar se vuelve a montar con los datos del servidor. */
+function CanalesForm({ c, p, onFill }: { c: CmnCanalesCfg; p: MobPasarelaCfg; onFill: (a: CmnCanalesCfg, b: MobPasarelaCfg) => void }) {
+  const toast = useToast();
+  const [em, setEm, limEm, metaEm] = useDraft('config:canales:email', { activo: c.email.activo, host: c.email.host, port: String(c.email.port), user: c.email.user, pass: '', from: c.email.from }, { porCiclo: false, omitir: ['pass'] });
+  const [pay, setPay, limPay, metaPay] = useDraft('config:canales:pay', { instr: p.instruccionesPago, recargas: p.recargas.join(', ') }, { porCiclo: false });
+  const [busy, setBusy] = useState(false);
+  const fill = (cc: CmnCanalesCfg, pp: MobPasarelaCfg, que: 'email' | 'pay' | 'todo') => { if (que !== 'pay') limEm(); if (que !== 'email') limPay(); onFill(cc, pp); };
 
   const run = async (fn: () => Promise<void>, ok: string) => {
     setBusy(true);
@@ -35,17 +36,17 @@ export default function Canales() {
   };
   const saveEmail = () => run(async () => {
     const r = await api.put<CmnCanalesCfg>('/comunica/canales', { email: { activo: em.activo, host: em.host, port: Number(em.port), user: em.user, pass: em.pass, from: em.from } });
-    fill(r, p);
+    fill(r, p, 'email');
   }, 'Canal de correo guardado');
   const probar = () => run(async () => { await api.post('/comunica/canales/probar'); }, 'Conexión SMTP correcta');
   const savePay = () => run(async () => {
     const recargas = pay.recargas.split(/[,\s]+/).filter(Boolean).map(Number);
     const r = await api.put<MobPasarelaCfg>('/movil/pasarela', { instruccionesPago: pay.instr, recargas });
-    fill(c, r);
+    fill(c, r, 'pay');
   }, 'Pagos del portal guardados');
   const setDemo = (demo: boolean) => run(async () => {
     const [a, b] = await Promise.all([api.put<CmnCanalesCfg>('/comunica/canales', { demo }), api.put<MobPasarelaCfg>('/movil/pasarela', { demo })]);
-    fill(a, b);
+    fill(a, b, 'todo');
   }, demo ? 'Modo demo activado (envíos y pagos simulados)' : 'Modo demo desactivado');
 
   return (
@@ -56,6 +57,7 @@ export default function Canales() {
       </div>
 
       <div className="flex flex-col gap-3">
+        <AvisoBorrador meta={metaEm} className="w-fit" />
         <label className="flex items-center gap-2 text-[13px] font-medium"><input type="checkbox" checked={em.activo} onChange={e => setEm({ ...em, activo: e.target.checked })} />Correo (SMTP) activo{c.email.fuente === 'env' && c.email.host ? <span className="text-xs font-normal text-slate-500"> · valores iniciales desde SMTP_* del servidor</span> : null}</label>
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(200px,100%),1fr))] gap-3">
           <label className={label}>Servidor SMTP<input value={em.host} onChange={e => setEm({ ...em, host: e.target.value })} placeholder="smtp.ejemplo.com" className={input} /></label>
@@ -71,6 +73,7 @@ export default function Canales() {
       </div>
 
       <div className="flex flex-col gap-3 border-t border-slate-200 pt-3">
+        <AvisoBorrador meta={metaPay} className="w-fit" />
         <label className={label}>Instrucciones de pago (cuentas bancarias, teléfono) · se muestran al tutor al pulsar «Pagar ahora»
           <textarea value={pay.instr} onChange={e => setPay({ ...pay, instr: e.target.value })} rows={3} className="w-full resize-y rounded-md border border-slate-300 bg-white p-2.5 text-[13px] text-ink outline-none focus:border-accent" />
         </label>

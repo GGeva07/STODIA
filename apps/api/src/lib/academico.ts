@@ -8,6 +8,7 @@ import { prisma } from '../db';
 import { cfgGet } from './sisconfig';
 import { leerTipo } from './catalogos-tipados';
 import { cicloIdActivo, esCicloActivo, periodoId, type CicloRow } from './ciclo';
+import { ESTADOS_SIN_CUPO, sinLiberarEn } from './reinscripcion';
 
 type Row = { id: string; estado: string } & Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 /** Rúbrica ACTIVA de una materia (Materia.rubricaId) con sus criterios clasificados en competencias C1-C4 / examen EX. */
@@ -123,8 +124,9 @@ export async function nomina(c: Cat, seccionId: string, ciclo?: CicloRow): Promi
 /** Alumnos inscritos en la sección (no Retirados): se CALCULA desde Alumno (no hay contador guardado). */
 export async function inscritosSeccion(c: Cat, seccionId: string, ciclo?: CicloRow): Promise<number> {
   if (!c.secciones.has(seccionId)) return 0;
-  if (ciclo && !esCicloActivo(ciclo)) return prisma.matricula.count({ where: { cicloId: ciclo.id, seccionId, estado: { not: 'Retirado' } } });
-  return prisma.alumno.count({ where: { seccionId, estado: { not: 'Retirado' } } });
+  if (ciclo && !esCicloActivo(ciclo)) return prisma.matricula.count({ where: { cicloId: ciclo.id, seccionId, estado: { notIn: ESTADOS_SIN_CUPO } } });
+  const activoId = ciclo?.id ?? (await prisma.ciclo.findFirst({ where: { estado: 'Activo' }, select: { id: true } }))?.id;
+  return prisma.alumno.count({ where: { seccionId, estado: { notIn: ['Retirado', 'Preinscrito'] }, ...(activoId ? sinLiberarEn(activoId) : {}) } });
 }
 /** Devuelve el id de AcadRoster del item, creándolo (enlazado al Alumno) si aún no existe. */
 export async function materializar(item: NomItem, seccionId: string): Promise<string> {
@@ -161,7 +163,7 @@ const DEF_COMPS: Comp[] = [
   { k: 'C4', n: 'Resolución', w: 17.5, field: 'c4' }, { k: 'EX', n: 'Examen', w: 30, field: 'ex' },
 ];
 /** Rúbrica activa de la materia (Materia.rubricaId); criterios -> hasta 4 competencias C1–C4 y el examen (EX), según las claves de RubricaCriterio. */
-export function rubricaDe(c: Cat, materiaId: string): { nombre: string; comps: Comp[]; minimo: number } {
+export function rubricaDe(c: Pick<Cat, 'rubricaDeMateria'>, materiaId: string): { nombre: string; comps: Comp[]; minimo: number } {
   const r = c.rubricaDeMateria.get(materiaId);
   if (!r) return { nombre: 'Predeterminada', comps: DEF_COMPS, minimo: 70 };
   const fields = ['c1', 'c2', 'c3', 'c4'] as const;

@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { AvisoBorrador, useDraft } from '../../lib/useDraft';
 import type { CfgNcf, ConfigGlobal, ModalidadFiscal, SecuenciaNuevaReq, TipoLogico } from '@stodia/shared';
 import SegTabs from '../../components/SegTabs';
 import { btn, btnPrimary, card, input, pill, pillBase, td, th, type PillTone } from '../../components/system/styles';
@@ -7,13 +8,14 @@ import { api } from '../../lib/api';
 
 /**
  * Configuración › Gestión fiscal (DGII): «Secuencias de comprobantes fiscales» (físicos B / electrónicos E), «Modalidad por tipo de comprobante» y certificado e-CF.
- * Registrar / desactivar / reactivar / prorrogar / eliminar y cambiar la modalidad exigen el PIN de supervisor (también al Super Admin). Este sistema NO firma ni
- * transmite e-NCF a la DGII (docs/fiscal-ncf.md): los e-NCF quedan «Pendiente de envío».
+ * Registrar / desactivar / reactivar / prorrogar / eliminar y cambiar la modalidad exigen el PIN de supervisor (también al Super Admin). Los e-NCF quedan «Pendiente de envío»
+ * (el envío a la DGII se integrará en la fase final: docs/integracion-ecf.md).
  */
 const label = 'flex flex-col gap-1 text-xs font-medium text-slate-600';
 const n0 = (n: number) => n.toLocaleString('en-US');
 const fmtFecha = (iso?: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '—');
 const diasHasta = (iso: string) => Math.round((Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) - Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())) / 86_400_000);
+const hoyLocal = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const LARGO: Record<ModalidadFiscal, number> = { FISICA: 8, ELECTRONICA: 10 };
 
 /** Tipos que se usan en Cobros (y notas, etapa 2) con su par físico/electrónico, en el orden del panel de modalidad. */
@@ -53,7 +55,8 @@ interface Form { modalidad: ModalidadFiscal; tipo: string; serie: string; desde:
 function RegistrarModal({ cfg, modalidad, onClose, onDone }: { cfg: ConfigGlobal; modalidad: ModalidadFiscal; onClose: () => void; onDone: () => Promise<void> }) {
   const toast = useToast();
   const tiposDe = (m: ModalidadFiscal) => cfg.tiposComprobante.filter(t => t.modalidad === m);
-  const [f, setF] = useState<Form>({ modalidad, tipo: (tiposDe(modalidad).find(t => t.logico === 'CONSUMO') ?? tiposDe(modalidad)[0]).codigo, serie: '', desde: '1', hasta: '', actual: '', vence: '', autorizacion: '', umbral: '10', pin: '' });
+  // Borrador del alta de autorización DGII: «×»/fondo lo conservan, «Cancelar» y registrar con éxito lo descartan. La clave de supervisor (pin) nunca se guarda.
+  const [f, setF, limpiar, meta] = useDraft<Form>('config:fiscal:registrar', { modalidad, tipo: (tiposDe(modalidad).find(t => t.logico === 'CONSUMO') ?? tiposDe(modalidad)[0]).codigo, serie: '', desde: '1', hasta: '', actual: '', vence: '', autorizacion: '', umbral: '10', pin: '' }, { porCiclo: false, omitir: ['pin'] });
   const [busy, setBusy] = useState(false);
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value });
   const num = (k: 'desde' | 'hasta' | 'actual') => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value.replace(/\D/g, '') });
@@ -69,6 +72,7 @@ function RegistrarModal({ cfg, modalidad, onClose, onDone }: { cfg: ConfigGlobal
     try {
       const body: SecuenciaNuevaReq = { tipo: f.tipo, modalidad: f.modalidad, prefijo: f.modalidad === 'ELECTRONICA' ? 'E' : 'B', serie: f.serie.trim(), desde, hasta, ...(f.actual !== '' ? { actual } : {}), ...(f.vence ? { vence: f.vence } : {}), autorizacion: f.autorizacion.trim(), umbral: +f.umbral, pin: f.pin };
       await api.post('/config/fiscal/secuencias', body);
+      limpiar();
       await onDone();
       toast(`Autorización ${f.tipo} registrada (${n0(desde)}–${n0(hasta)})`, 'ok');
       onClose();
@@ -79,6 +83,7 @@ function RegistrarModal({ cfg, modalidad, onClose, onDone }: { cfg: ConfigGlobal
       <div className="flex max-h-[88vh] flex-col overflow-y-auto">
         <div className="border-b border-slate-200 px-5 py-4"><div className="text-base font-semibold">Registrar autorización DGII</div><div className="text-xs text-slate-500">Rango de comprobantes autorizado por la DGII. Se usa en orden de vencimiento; al agotarse o vencer pasa a la siguiente.</div></div>
         <div className="grid grid-cols-2 gap-3 px-5 py-4 max-[560px]:grid-cols-1">
+          <AvisoBorrador meta={meta} className="col-span-2 w-fit max-[560px]:col-span-1" />
           <div className={`${label} col-span-2 max-[560px]:col-span-1`}>Modalidad
             <SegTabs<ModalidadFiscal> value={f.modalidad} onChange={m => setF({ ...f, modalidad: m, tipo: (tiposDe(m).find(t => t.logico === (tipo?.logico ?? 'CONSUMO')) ?? tiposDe(m)[0]).codigo })} options={[{ k: 'FISICA', label: 'Física · NCF serie B' }, { k: 'ELECTRONICA', label: 'Electrónica · e-NCF serie E' }]} />
           </div>
@@ -95,17 +100,55 @@ function RegistrarModal({ cfg, modalidad, onClose, onDone }: { cfg: ConfigGlobal
           <label className={label}>Último número usado (opcional)<input value={f.actual} onChange={num('actual')} placeholder={String(Number.isFinite(desde) ? desde - 1 : 0)} className={`${input} font-mono`} /></label>
           <label className={label}>Vence (autorización DGII)<input type="date" value={f.vence} min={hoy} onChange={set('vence')} className={input} data-testid="fiscal-vence" /></label>
           <label className={label}>Número de autorización DGII<input value={f.autorizacion} onChange={set('autorizacion')} maxLength={60} className={`${input} font-mono`} data-testid="fiscal-aut" /></label>
-          <label className={label}>Alerta al quedar (%)<input value={f.umbral} onChange={e => setF({ ...f, umbral: e.target.value.replace(/D/g, '') })} className={`${input} font-mono`} /></label>
+          <label className={label}>Alerta al quedar (%)<input value={f.umbral} onChange={e => setF({ ...f, umbral: e.target.value.replace(/\D/g, '') })} className={`${input} font-mono`} /></label>
           <label className={`${label} col-span-2 max-[560px]:col-span-1`}>Clave de supervisor<input type="password" autoComplete="off" value={f.pin} onChange={set('pin')} className={`${input} font-mono`} data-testid="fiscal-pin" /></label>
         </div>
         <div className="mx-5 mb-3 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
           Formato: <b className="font-mono">{tipo?.codigo ?? '—'} + {L} dígitos = {3 + L} caracteres</b> · primer número <span className="font-mono">{ejemplo}</span>
-          {f.modalidad === 'ELECTRONICA' && <div className="mt-1 text-warn-fg">Un e-NCF necesita certificado digital y transmisión a la DGII, que este sistema no realiza: los recibos quedan «Pendiente de envío».</div>}
         </div>
         {err && f.hasta !== '' && <div className="mx-5 mb-3 text-xs font-medium text-[#DC2626]" data-testid="fiscal-err">{err}</div>}
         <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3">
-          <button onClick={onClose} className={btn}>Cancelar</button>
+          <button onClick={() => { limpiar(); onClose(); }} className={btn}>Cancelar</button>
           <button onClick={() => void submit()} disabled={!!err || busy} className={btnPrimary} data-testid="fiscal-registrar-ok"><i className="ph ph-check" />Registrar</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** Edición de una secuencia: solo vencimiento, número de autorización DGII y umbral de alerta. Rango, tipo, modalidad y número actual NO se editan (alterarían numeración ya emitida). */
+function EditarModal({ s, onClose, onSave }: { s: CfgNcf; onClose: () => void; onSave: (cambios: { umbral?: number; vence?: string | null; autorizacion?: string }, pin: boolean) => void }) {
+  const [vence, setVence] = useState(s.vence ?? '');
+  const [aut, setAut] = useState(s.autorizacion ?? '');
+  const [umbral, setUmbral] = useState(String(s.umbral));
+  const hoy = hoyLocal();
+  const cambiaVence = vence !== (s.vence ?? ''), cambiaAut = aut.trim() !== (s.autorizacion ?? ''), u = Number(umbral), cambiaUmbral = u !== s.umbral;
+  const venceYa = !!s.vence && s.vence < hoy;
+  const err = cambiaVence && vence && !/^\d{4}-\d{2}-\d{2}$/.test(vence) ? 'La fecha de vencimiento no es válida'
+    : cambiaVence && vence && vence < hoy ? 'El vencimiento no puede ser anterior a hoy. Si la autorización ya venció y debe quedar así, deja la fecha sin cambios.'
+    : !Number.isInteger(u) || u < 1 || u > 50 ? 'El umbral de alerta va de 1 a 50 %' : '';
+  const nada = !cambiaVence && !cambiaAut && !cambiaUmbral;
+  const guardar = () => onSave({ ...(cambiaUmbral ? { umbral: u } : {}), ...(cambiaVence ? { vence: vence || null } : {}), ...(cambiaAut ? { autorizacion: aut.trim() } : {}) }, cambiaVence || cambiaAut);
+  return (
+    <Modal onClose={onClose} width={480} z={80}>
+      <div className="flex flex-col">
+        <div className="border-b border-slate-200 px-5 py-4"><div className="text-base font-semibold">Editar {s.pref} {n0(s.desde)}–{n0(s.hasta)}</div><div className="text-xs text-slate-500">{s.modalidad === 'ELECTRONICA' ? 'Electrónica' : 'Física'} · estado {s.estado}. El tipo, la modalidad, el rango y el número actual no se editan: cambiarían numeración ya emitida.</div></div>
+        <div className="flex flex-col gap-3 px-5 py-4">
+          <label className={label}>Vence (autorización DGII)
+            <div className="flex items-center gap-2">
+              <input type="date" value={vence} min={venceYa && vence === s.vence ? undefined : hoy} onChange={e => setVence(e.target.value)} className={`${input} flex-1`} data-testid="fiscal-edit-vence" />
+              {vence && <button type="button" onClick={() => setVence('')} className={btn} data-testid="fiscal-edit-sinvence">Sin vencimiento</button>}
+            </div>
+            <span className="text-[11px] font-normal text-slate-500">{vence ? 'Una prórroga de la DGII sobre una secuencia «Vencida» con números libres la deja «Activa».' : 'Sin fecha: la secuencia no vence.'}</span>
+          </label>
+          <label className={label}>Número de autorización DGII<input value={aut} onChange={e => setAut(e.target.value)} maxLength={60} className={`${input} font-mono`} data-testid="fiscal-edit-aut" /></label>
+          <label className={label}>Alerta al quedar (%)<input value={umbral} onChange={e => setUmbral(e.target.value.replace(/\D/g, ''))} className={`${input} w-24 font-mono`} data-testid="fiscal-edit-umbral" /></label>
+          {(cambiaVence || cambiaAut) && <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">Cambiar el vencimiento o la autorización pide la clave de supervisor y queda en la auditoría.</div>}
+          {err && <div className="text-xs font-medium text-[#DC2626]" data-testid="fiscal-edit-err">{err}</div>}
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3">
+          <button onClick={onClose} className={btn}>Cancelar</button>
+          <button onClick={guardar} disabled={!!err || nada} className={btnPrimary} data-testid="fiscal-edit-ok"><i className="ph ph-check" />Guardar</button>
         </div>
       </div>
     </Modal>
@@ -123,7 +166,7 @@ export default function Fiscal({ cfg, reload }: { cfg: ConfigGlobal; reload: () 
   const [tab, setTab] = useState<ModalidadFiscal>('FISICA');
   const [reg, setReg] = useState(false);
   const [pin, setPin] = useState<null | { title: string; desc?: ReactNode; label: string; warn?: string; danger?: boolean; run: (pin: string) => Promise<boolean> }>(null);
-  const [vence, setVence] = useState<{ s: CfgNcf; fecha: string } | null>(null);
+  const [edit, setEdit] = useState<CfgNcf | null>(null);
   const [um, setUm] = useState<Record<string, string>>({});
   const filas = useMemo(() => cfg.ncf.filter(s => (s.modalidad ?? 'FISICA') === tab), [cfg.ncf, tab]);
   const nF = cfg.ncf.filter(s => (s.modalidad ?? 'FISICA') === 'FISICA').length, nE = cfg.ncf.length - nF;
@@ -154,7 +197,7 @@ export default function Fiscal({ cfg, reload }: { cfg: ConfigGlobal; reload: () 
       await api.put('/config/fiscal/modalidad', { tipo: p.logico, modalidad: m, confirmar: sinCert, pin });
     }, `${p.nombre} se emitirá como ${m === 'ELECTRONICA' ? p.e + ' (e-NCF)' : p.b + ' (NCF)'}`), {
       desc: `Desde ahora, cobrar ${p.nombre.toLowerCase()} usará ${m === 'ELECTRONICA' ? `la serie ${p.e} (13 caracteres)` : `la serie ${p.b} (11 caracteres)`}.`,
-      warn: sinCert ? 'No hay certificado digital e-CF cargado: los comprobantes no podrán firmarse ni transmitirse a la DGII y quedarán «Pendiente de envío». Confirma solo si lo preparas para después.' : m === 'ELECTRONICA' ? 'Este sistema no transmite a la DGII: los e-NCF quedan «Pendiente de envío».' : undefined,
+      warn: sinCert ? 'No hay certificado digital e-CF cargado: los e-NCF quedarán «Pendiente de envío». Confirma solo si lo preparas para después.' : undefined,
     });
   };
 
@@ -171,7 +214,7 @@ export default function Fiscal({ cfg, reload }: { cfg: ConfigGlobal; reload: () 
         {tab === 'ELECTRONICA' && (
           <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-warn-bg px-4 py-2 text-xs font-medium text-warn-fg">
             <i className="ph ph-info" />
-            <span>Facturación electrónica: este sistema reserva y asigna el e-NCF, pero <b>no genera el XML firmado ni lo transmite a la DGII</b>. Los recibos quedan «Pendiente de envío». {cfg.ecf ? '' : 'Además no hay certificado e-CF cargado.'}</span>
+            <span>Facturación electrónica: los recibos electrónicos quedan «Pendiente de envío». {cfg.ecf ? '' : 'No hay certificado e-CF cargado.'}</span>
           </div>
         )}
         <div className="overflow-x-auto">
@@ -208,7 +251,7 @@ export default function Fiscal({ cfg, reload }: { cfg: ConfigGlobal; reload: () 
                     <td className={`${td} whitespace-nowrap text-right`}>
                       {s.estado === 'Inactiva' ? <button onClick={() => cambiarEstado(s, 'Activa')} className="h-[28px] rounded-md border border-slate-300 bg-white px-2 text-xs font-medium hover:bg-slate-100">Reactivar</button>
                         : s.estado === 'Agotada' ? null : <button onClick={() => cambiarEstado(s, 'Inactiva')} className="h-[28px] rounded-md border border-slate-300 bg-white px-2 text-xs font-medium hover:bg-slate-100">Desactivar</button>}
-                      {s.estado !== 'Agotada' && <button onClick={() => setVence({ s, fecha: s.vence ?? '' })} title="Cambiar vencimiento (prórroga)" className="ml-1 h-[28px] rounded-md border border-slate-300 bg-white px-2 text-xs hover:bg-slate-100"><i className="ph ph-calendar" /></button>}
+                      {s.estado !== 'Agotada' && <button onClick={() => setEdit(s)} title="Editar vencimiento, autorización y alerta" className="ml-1 h-[28px] rounded-md border border-slate-300 bg-white px-2 text-xs font-medium hover:bg-slate-100" data-testid="fiscal-editar"><i className="ph ph-pencil-simple" /> Editar</button>}
                       <button onClick={() => (usada ? toast('Esta secuencia ya emitió comprobantes: por trazabilidad fiscal no se elimina. Desactívala para que no se use más.', 'warn') : eliminar(s))} title={usada ? 'Ya emitió comprobantes: no se elimina' : 'Eliminar (sin uso)'} className={`ml-1 h-[28px] rounded-md border border-slate-300 bg-white px-2 text-xs ${usada ? 'opacity-40' : 'hover:bg-bad-bg'}`}><i className="ph ph-trash" /></button>
                     </td>
                   </tr>
@@ -245,7 +288,7 @@ export default function Fiscal({ cfg, reload }: { cfg: ConfigGlobal; reload: () 
         <span className="grid h-11 w-11 place-items-center rounded-lg bg-slate-100 text-[22px] text-slate-600"><i className="ph ph-certificate" /></span>
         <div className="min-w-[220px] flex-1">
           <div className="text-sm font-semibold">Certificado digital e-CF</div>
-          <div className={`text-xs ${cfg.ecf ? 'text-ok-fg' : 'text-warn-fg'}`}>{cfg.ecf ? [cfg.ecfInfo?.archivo || 'Certificado cargado', cfg.ecfInfo?.vence ? `vence ${cfg.ecfInfo.vence}` : ''].filter(Boolean).join(' · ') : 'Sin certificado: no se pueden firmar comprobantes electrónicos'}</div>
+          <div className={`text-xs ${cfg.ecf ? 'text-ok-fg' : 'text-warn-fg'}`}>{cfg.ecf ? [cfg.ecfInfo?.archivo || 'Certificado cargado', cfg.ecfInfo?.vence ? `vence ${cfg.ecfInfo.vence}` : ''].filter(Boolean).join(' · ') : 'Sin certificado cargado'}</div>
           <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-500"><i className="ph ph-lock-key" />Almacenado cifrado (AES-256) en Key Vault · nunca se muestra ni se descarga</div>
         </div>
         <button onClick={async () => { try { await api.post('/config/ecf'); await reload(); toast('Certificado cargado y cifrado en el Key Vault', 'ok'); } catch (e) { toast((e as Error).message, 'bad'); } }} className={btn}><i className="ph ph-upload-simple" />{cfg.ecf ? 'Reemplazar certificado' : 'Cargar certificado'}</button>
@@ -253,11 +296,12 @@ export default function Fiscal({ cfg, reload }: { cfg: ConfigGlobal; reload: () 
 
       {reg && <RegistrarModal cfg={cfg} modalidad={tab} onClose={() => setReg(false)} onDone={reload} />}
       {pin && <PinModal title={pin.title} desc={pin.desc} warn={pin.warn} danger={pin.danger} confirmLabel={pin.label} onClose={() => setPin(null)} onConfirm={pin.run} />}
-      {vence && (
-        <PinModal title={`Vencimiento de ${vence.s.pref} ${fmtRango(vence.s)}`} confirmLabel="Guardar vencimiento"
-          desc={<label className={label}>Nueva fecha de vencimiento de la autorización<input type="date" value={vence.fecha} onChange={e => setVence({ ...vence, fecha: e.target.value })} className={input} /></label>}
-          onClose={() => setVence(null)} onConfirm={exec(p => api.put('/config/fiscal/secuencias/' + encodeURIComponent(vence.s.id!), { vence: vence.fecha || null, pin: p }), 'Vencimiento actualizado')} />
-      )}
+      {edit && <EditarModal s={edit} onClose={() => setEdit(null)} onSave={(cambios, conPin) => {
+        const url = '/config/fiscal/secuencias/' + encodeURIComponent(edit.id!), s0 = edit;
+        if (!conPin) { void (async () => { try { await api.put(url, cambios); await reload(); toast('Secuencia actualizada', 'ok'); setEdit(null); } catch (e) { toast((e as Error).message, 'bad'); } })(); return; }
+        withPin(`Guardar cambios de ${s0.pref} ${fmtRango(s0)}`, 'Guardar cambios', async p => { const ok = await exec(q => api.put(url, { ...cambios, pin: q }), 'Secuencia actualizada')(p); if (ok) setEdit(null); return ok; }, { desc: 'Vencimiento y autorización cambian lo que se puede facturar con este rango.' });
+      }} />}
+
     </div>
   );
 }

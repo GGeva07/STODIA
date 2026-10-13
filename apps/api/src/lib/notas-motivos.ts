@@ -5,7 +5,7 @@ type Db = typeof prisma | Prisma.TransactionClient;
 
 /**
  * CATALOGO de motivos de nota de credito / debito (tabla MotivoNota). Los codigos 01..05 son los «codigos de modificacion» de la DGII para notas de credito y debito
- * (el equipo no tiene certeza de su redaccion exacta ni de su alcance por tipo: A VALIDAR con contador / DGII, ver docs/fiscal-ncf.md §11). Los OPxx son motivos operativos
+ * (el equipo no tiene certeza de su redaccion exacta ni de su alcance por tipo: A VALIDAR con contador / DGII, ver docs/fiscal-ncf.md §12). Los OPxx son motivos operativos
  * del colegio; cada uno informa el `codigoDgii` mas cercano (hoy 03 «Corrección de montos»; A VALIDAR).
  */
 export interface MotivoSeed { codigo: string; nombre: string; origen: 'DGII' | 'Operativo'; aplica: 'CREDITO' | 'DEBITO' | 'AMBAS'; codigoDgii: string }

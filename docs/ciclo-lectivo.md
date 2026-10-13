@@ -39,3 +39,9 @@ Desde el ciclo **activo**, `GET /cobros/cuenta` añade `deudaAnterior` (cargos s
 ## Verificación (resumen)
 
 Cifras con el ciclo activo, sin cabecera o con `X-Ciclo: 2026-2027`, idénticas a antes: 786 / 2,015,700 / 3,220,455 / ≈62.4 M / 14 / 2. Ciclo 2025–2026: 690 matrículas, recaudo de julio 2026 RD$ 600,000, barras feb–jul 4.4/3.9/5.6/2.0/1.2/0.6, contratado RD$ 65,287,000, saldo pendiente histórico RD$ 198,800 (13 cargos), Juan Mendoza en 4to A con 89.4.
+
+## Cierre del año escolar (EOY) y promoción
+
+El **cierre del año escolar** (Configuración → Ciclos lectivos → «Cerrar año escolar») es un cierre **contable y de edición**: guarda la foto financiera del ciclo en `CierreCiclo`, deja el ciclo **Cerrado** (solo lectura con el selector, 409 `CICLO_CERRADO` en el servidor) y activa el Planificado siguiente. **No promueve alumnos ni crea matrículas**; la deuda del ciclo cerrado se sigue cobrando desde el activo como «deuda anterior». La **promoción de curso** es un proceso aparte basado en la Matriz de Notas (Configuración → Promoción de curso, `/academico/promocion`). Detalle completo: [cierre-y-promocion.md](cierre-y-promocion.md).
+
+La **reinscripción** de alumnos existentes (reserva de cupo en el ciclo Planificado, cuota de reinscripción cobrable como «anticipado», política de pérdida de cupo y job diario) está en [cierre-y-promocion.md](cierre-y-promocion.md) §6.

@@ -1,4 +1,5 @@
 import type { CfgFinanzas, ExpCatalogoItem, InsPlan, PersPlan } from '@stodia/shared';
+import { prontoDiasDe } from './planes';
 import { prisma } from '../db';
 import { CFG_DEFAULTS, cfgGet } from './sisconfig';
 import { partesEnZona, round2, zonaHoraria } from './cxc';
@@ -41,10 +42,32 @@ export async function cicloActivo(): Promise<CicloInfo> {
   return { id: null, nombre, y0, configurado: false, otros: otros(nombre) };
 }
 
+/**
+ * Ciclo DESTINO de una inscripcion: el nombre pedido (activo o PLANIFICADO = inscripcion anticipada) o, sin nombre, el activo. Un ciclo cerrado / inexistente es
+ * un error (`error`). `estado` es el del ciclo elegido.
+ */
+export async function cicloDestino(nombre?: string): Promise<{ info: CicloInfo; estado: 'Activo' | 'Planificado'; fechaInicio: string } | { error: string; code: number }> {
+  const n = String(nombre ?? '').trim();
+  const act = await cicloActivo();
+  if (!n || n.replace('-', '–') === act.nombre) {
+    const a = act.id ? await cicloActivoRow() : null;
+    return { info: act, estado: 'Activo', fechaInicio: a?.fechaInicio ?? `${act.y0}-08-01` };
+  }
+  const c = await prisma.ciclo.findFirst({ where: { nombre: n.replace('-', '–') } });
+  if (!c) return { error: `El ciclo lectivo «${n}» no existe`, code: 404 };
+  if (c.estado !== 'Planificado') return { error: `El ciclo ${c.nombre} está ${c.estado === 'Cerrado' ? 'cerrado' : 'activo'}: la inscripción solo admite el ciclo activo o un ciclo planificado`, code: 409 };
+  const todos = await prisma.ciclo.findMany({ select: { nombre: true } });
+  return { info: { id: c.id, nombre: c.nombre, y0: anioInicio(c.nombre), configurado: true, otros: todos.map(x => x.nombre).filter(x => x !== c.nombre).sort().reverse() }, estado: 'Planificado', fechaInicio: c.fechaInicio };
+}
+
 // ---- Planes de pago ----
 export interface PlanRow {
   id: string; name: string; estado: string; n: number; freq: number; start: number; dia: number; gracia: number; desc: number;
   moraTipo: string; moraVal: number; porTanda: boolean; anual: number; tm: Record<string, number>;
+  /** Pronto pago DEL PLAN: % de descuento (0 = no ofrece) y día límite del mes de la cuota (1–31). */
+  pronto: number; prontoDias: number;
+  /** Cuota de inscripcion DEL PLAN (0 = sin definir) y cuota de materiales (el monto se conserva aunque `materialesOn` este apagado). */
+  inscripcion: number; materiales: number; materialesOn: boolean;
 }
 export async function planesPago(): Promise<PlanRow[]> {
   const rows = await prisma.finPlan.findMany({ orderBy: { id: 'asc' }, include: { tandas: { include: { tanda: { select: { nombre: true } } } } } });
@@ -56,7 +79,8 @@ export async function planesPago(): Promise<PlanRow[]> {
     return {
       id: r.id, name: r.name, estado: r.estado, n, freq: Math.round(num('freq', 1)), start: Math.round(num('start', MES_INICIO_DEFECTO)) || MES_INICIO_DEFECTO,
       dia: Math.round(num('dia', 1)) || 1, gracia: Math.round(num('gracia', 0)), desc: num('desc', 0), moraTipo: String(f.moraTipo ?? 'none'), moraVal: num('moraVal', 0),
-      porTanda: !!f.porTanda, anual: num('anual', 0), tm,
+      porTanda: !!f.porTanda, anual: num('anual', 0), tm, pronto: num('pronto', 0), prontoDias: prontoDiasDe(f),
+      inscripcion: Math.max(0, num('inscripcion', 0)), materiales: Math.max(0, num('materiales', 0)), materialesOn: f.materialesOn === true || f.materialesOn === 'true',
     };
   });
 }
@@ -98,9 +122,20 @@ export function persPlan(p: PlanRow, tanda: string, fin: CfgFinanzas, y0: number
   const total = totalDe(p, tanda);
   return { name: p.name, gross: round2(total / p.n), n: p.n, unit: unidad(p.freq), freq: p.freq, desc: p.desc, total, dia: p.dia, gracia: p.gracia, mora: moraTxt(p, fin), detalle: detalleDe(p, y0) };
 }
+/**
+ * Cuota de inscripcion segun la modalidad configurada (finanzas.inscripcionModo): 'fija' (por defecto) = la cuota global para todos;
+ * 'plan' = la del plan elegido, y si el plan no tiene monto (0) se usa la global como respaldo ('respaldo') para no cobrar 0 por omision.
+ */
+export function inscripcionDe(p: PlanRow, fin: CfgFinanzas): { monto: number; origen: 'fija' | 'plan' | 'respaldo' } {
+  if (fin.inscripcionModo !== 'plan') return { monto: fin.inscripcion, origen: 'fija' };
+  return p.inscripcion > 0 ? { monto: round2(p.inscripcion), origen: 'plan' } : { monto: fin.inscripcion, origen: 'respaldo' };
+}
+/** Cuota de materiales que se agrega al asignar el plan (0 si el check del plan esta apagado). */
+export const materialesDe = (p: PlanRow): number => (p.materialesOn && p.materiales > 0 ? round2(p.materiales) : 0);
 export function insPlan(p: PlanRow, tandas: string[], fin: CfgFinanzas, y0: number): InsPlan {
   const anual: Record<string, number> = p.porTanda ? Object.fromEntries(tandas.map(t => [t, p.tm[t] ?? 0])) : { '*': p.anual };
-  return { id: p.id, name: p.name, n: p.n, freq: p.freq, desc: p.desc, dia: p.dia, gracia: p.gracia, mora: moraTxt(p, fin), detalle: detalleDe(p, y0), anual };
+  const ins = inscripcionDe(p, fin);
+  return { id: p.id, name: p.name, n: p.n, freq: p.freq, desc: p.desc, dia: p.dia, gracia: p.gracia, mora: moraTxt(p, fin), detalle: detalleDe(p, y0), anual, inscripcion: ins.monto, inscripcionOrigen: ins.origen, materiales: materialesDe(p) };
 }
 
 /** Meses del ciclo, en orden: los del plan mensual más largo (o agosto–mayo si aún no hay planes). */
@@ -152,7 +187,7 @@ export async function catalogoServicios(): Promise<ExpCatalogoItem[]> {
   }
   for (const p of prods) {
     const serv = p.categoria.nombre === 'Servicios';
-    out.push({ k: `prd:${p.id}`, l: p.name, cat: serv ? 'Esporádico' : 'Materiales', freq: serv ? 'Por demanda' : 'Eventual', mora: 'Sin mora', price: p.price, rec: false, icon: '', spec: '' });
+    out.push({ k: `prd:${p.id}`, l: p.name, cat: serv ? 'Esporádico' : 'Materiales', freq: serv ? 'Por demanda' : 'Eventual', mora: 'Sin mora', price: p.price, rec: false, icon: '', spec: '', stock: p.stock });
   }
   return out;
 }

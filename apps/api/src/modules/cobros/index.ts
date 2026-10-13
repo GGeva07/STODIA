@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { CobroTurno, CobroCuenta, CobroComprobantes, CobroHijo, CobroMetodo, CobroItem, CobroProcesarReq, ReciboEnvioRes, ReciboListaRes } from '@stodia/shared';
+import type { BecaDesglose, CobroTurno, VentaTurnoFila,CobroCuenta, CobroComprobantes, CobroHijo, CobroMetodo, CobroItem, CobroProcesarReq, ReciboEnvioRes, ReciboListaRes } from '@stodia/shared';
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { cfgGet } from '../../lib/sisconfig';
@@ -12,11 +12,15 @@ import { cicloIdActivo, cicloReq, esCicloActivo } from '../../lib/ciclo';
 import { nextSeq, nowHM, round2, supervisorOk } from '../../fin-utils';
 import { estadoCuota, hoyISO, inicioDia, zonaHoraria } from '../../lib/cxc';
 import { fmtCed as fmtCedula } from '../../lib/tutor-datos';
-import { reglaBeca } from '../../lib/pers-fin';
+import { planesPago, reglaBeca, resolverPlan } from '../../lib/pers-fin';
+import { contextosBeca, desgloseBeca, desglosePorcion } from '../../lib/beca-desglose';
+import { generarMorasSeguro } from '../../lib/mora';
+import { TIPO_CARGO_REINS, confirmarPagoReinscripcionTx } from '../../lib/reinscripcion';
+import { descuentoLinea, descuentosAplicables, prontoDePlan, type ModoDescuento, type ProntoPlan } from '../../lib/descuentos';
 import { anularRecibo, FILA_SELECT, notaFila, reembolsosEnRango } from '../../lib/notas';
 import { responderNotaError, rutasNotas } from './notas';
 import { resolverRnc, soloDigitos, longitudRncOk } from '../../lib/rnc-lookup';
-import { FiscalError, TIPOS_COBRO, asignarNcf, contextoFiscal, disponibilidad, esTipoLogico, refrescarEstados, enSerie, transaccionFiscal, validarComprador } from '../../lib/fiscal';
+import { FiscalError, TIPOS_COBRO, alertaSecuencia, asignarNcf, contextoFiscal, disponibilidad, esTipoLogico, refrescarEstados, enSerie, transaccionFiscal, validarComprador } from '../../lib/fiscal';
 
 /** Medios de pago ACTIVOS (tabla MetodoPago; «Efectivo» siempre existe: lib/catalogos-tipados.asegurarCatalogosBase). */
 const metodos = async (): Promise<CobroMetodo[]> => {
@@ -49,7 +53,7 @@ const plugin: FastifyPluginAsync = async app => {
   const auth = { onRequest: [app.authenticate] };
 
   // Busca por cédula/RNC, carnet (matrícula), nombre del tutor o nombre del alumno contra Tutor/Alumno reales (tutor responsable).
-  app.get<{ Querystring: { q?: string } }>('/cuenta', auth, async (req, reply) => {
+  app.get<{ Querystring: { q?: string; ahora?: string } }>('/cuenta', auth, async (req, reply) => {
     const q = norm(req.query.q ?? '').trim(), qd = digits(q), qa = q.replace(/[^a-z0-9]/g, '');
     if (q.length < 2) return reply.code(404).send({ error: 'Escribe una cédula, carnet o nombre para buscar' });
     const [tutores, alumnos] = await Promise.all([
@@ -84,25 +88,44 @@ const plugin: FastifyPluginAsync = async app => {
       hijosDb = hijosDb.filter(h => porAl.has(h.id)).map(h => ({ ...h, seccionId: porAl.get(h.id)!.seccionId, seccion: porAl.get(h.id)!.seccion }));
     }
     const hijos: CobroHijo[] = hijosDb.map(a => ({ id: a.id, kid: a.id, nombre: `${a.nombres.split(' ')[0]} ${a.apellidos.split(' ')[0]}`, corto: a.nombres.split(' ')[0], grado: gst(a).grado, sec: gst(a).sec, code: a.code }));
-    const tz = await zonaHoraria(), hoy = hoyISO(tz);
+    const tz = await zonaHoraria(), hoy = hoyISO(tz, ahoraDe(req.query.ahora)); // `ahora` (solo desarrollo) simula la fecha para probar reglas por fecha
     const cicloId = ciclo.id;
     const duenos = { OR: [{ tutorId: tut.id }, { alumnoId: { in: hijos.map(h => h.id) } }] };
-    const [items, recibos, becas, anteriores] = await Promise.all([
+    if (act) await generarMorasSeguro({ tutorId: tut.id }, req.log); // recargos por mora de cuotas vencidas (idempotente, solo ciclo activo)
+    const [items, recibos, becas, anteriores, contratos, planes, adelantados] = await Promise.all([
       prisma.finCobroItem.findMany({ where: { paid: false, cicloId, ...duenos }, orderBy: { orden: 'asc' } }),
       prisma.finRecibo.findMany({ where: { tutorId: tut.id, cicloId }, include: RECIBO_INC, orderBy: { createdAt: 'desc' }, take: RECIBOS_CUENTA }).then(l => l.reverse()),
       prisma.finBeca.findMany({ where: { estado: 'Aprobada', cicloId, alumnoId: { in: hijosDb.map(a => a.id) } }, include: { tipoBeca: true, conceptos: { include: { concepto: true } } } }),
       // Deuda anterior: cargos sin pagar de ciclos CERRADOS (solo se muestra y se cobra desde el ciclo activo).
       act ? prisma.finCobroItem.findMany({ where: { paid: false, ciclo: { estado: 'Cerrado' }, OR: [{ tutorId: tut.id }, { alumnoId: { in: hijos.map(h => h.id) } }] }, orderBy: [{ cicloId: 'asc' }, { orden: 'asc' }], include: { ciclo: { select: { nombre: true } } } }) : Promise.resolve([]),
+      prisma.contrato.findMany({ where: { cicloId, alumnoId: { in: hijosDb.map(a => a.id) } }, select: { alumnoId: true, planId: true } }),
+      planesPago(),
+      // Pre-inscripcion: cargos pendientes de ciclos PLANIFICADOS (inscripcion anticipada) de esta cuenta; se ven y se cobran desde el ciclo activo con su ciclo como etiqueta.
+      act ? prisma.finCobroItem.findMany({ where: { paid: false, ciclo: { estado: 'Planificado' }, ...duenos }, orderBy: [{ cicloId: 'asc' }, { orden: 'asc' }], include: { ciclo: { select: { nombre: true } } } }) : Promise.resolve([]),
     ]);
+    // Descuentos YA incluidos en el monto de la colegiatura (beca aprobada que cubre colegiatura; descuento del plan de pago del contrato): solo informativos, no se restan otra vez.
+    const incluidos = new Map<string, string[]>();
+    for (const b of becas) if (b.conceptos.some(c => c.concepto.nombre.toLowerCase().includes('colegiatura'))) incluidos.set(b.alumnoId, [...(incluidos.get(b.alumnoId) ?? []), `${/^beca( |$)/i.test(b.tipoBeca.nombre) ? '' : 'Beca '}${b.tipoBeca.nombre} ${reglaBeca(b).replace('%', ' %')}`]);
+    for (const c of contratos) { const pl = c.planId ? resolverPlan(planes, c.planId) : null; if (pl && pl.desc > 0) incluidos.set(c.alumnoId, [...(incluidos.get(c.alumnoId) ?? []), `Plan de pago «${pl.name}» −${pl.desc} %`]); }
+    // Pronto pago POR PLAN: el del contrato del alumno en el ciclo mostrado (la deuda de ciclos cerrados no tiene pronto pago: ya esta vencida).
+    const prontoAl = new Map<string, ProntoPlan | null>(contratos.map(c => [c.alumnoId, prontoDePlan(c.planId ? resolverPlan(planes, c.planId) : null)]));
+    // Desglose «Monto real − Descuento por beca = Total» (solo presentacion; ver lib/beca-desglose.ts): cargos de colegiatura del ciclo mostrado cuyo monto cuadra con la beca aprobada aplicada a la cuota base del plan.
+    const tandaDe = new Map(hijosDb.map(h => [h.id, gst(h).tanda]));
+    const ctxBeca = contextosBeca(becas, contratos, planes, id => tandaDe.get(id) ?? '');
+    const conDescuento = (i: (typeof items)[number], ciclo?: string): CobroItem => {
+      const base = toItem(i, hoy, ciclo), aplicable = descuentosAplicables(i, ciclo ? null : prontoAl.get(i.alumnoId) ?? null, hoy), inc = i.tipo === 'col' ? incluidos.get(i.alumnoId) : undefined;
+      const beca = !ciclo && i.tipo === 'col' && !i.abono ? desgloseBeca(ctxBeca.get(i.alumnoId), i.monto) : null;
+      return Object.keys(aplicable).length || inc?.length || beca ? { ...base, descuento: { ...(Object.keys(aplicable).length ? { aplicable } : {}), ...(inc?.length ? { incluidos: inc } : {}), ...(beca ? { beca } : {}) } } : base;
+    };
     const becasTxt = becas.filter(b => b.conceptos.some(c => c.concepto.nombre.toLowerCase().includes('colegiatura'))).map(b => {
       const h = hijos.find(x => x.id === b.alumnoId), tipo = b.tipoBeca.nombre;
       return `${/^beca\b/i.test(tipo) ? '' : 'Beca '}${tipo} −${reglaBeca(b)} ya aplicada a la colegiatura de ${h?.corto ?? b.est}.`;
     });
-    const res: CobroCuenta = { tutor: tut.nombre, cedula: fmtCed(tut.cedula), email: tut.email ?? undefined, hijos, becas: becasTxt, items: items.map(i => toItem(i, hoy)), recibos: recibos.map(r => reciboDto(r, tz)), ciclo: ciclo.nombre,
+    const res: CobroCuenta = { tutor: tut.nombre, cedula: fmtCed(tut.cedula), email: tut.email ?? undefined, hijos, becas: becasTxt, items: items.map(i => conDescuento(i)), recibos: recibos.map(r => reciboDto(r, tz)), ciclo: ciclo.nombre,
       comprobanteHabitual: esTipoLogico(tut.comprobanteHabitual) && TIPOS_COBRO.includes(tut.comprobanteHabitual) ? tut.comprobanteHabitual : null,
       datosFiscales: { rnc: digits(tut.rnc ?? '') || digits(tut.cedula), nombre: tut.nombre },
       fiscal: identificacionFiscal(tut),
-      ...(act ? { deudaAnterior: anteriores.map(i => toItem(i, hoy, i.ciclo.nombre)) } : {}) };
+      ...(act ? { deudaAnterior: anteriores.map(i => conDescuento(i, i.ciclo.nombre)), ...(adelantados.length ? { anticipados: adelantados.map(i => conDescuento(i, i.ciclo.nombre)) } : {}) } : {}) };
     return res;
   });
 
@@ -119,48 +142,72 @@ const plugin: FastifyPluginAsync = async app => {
   });
 
   /**
-   * Turno del cajero autenticado: sus recibos (cajeroId = User.id, aunque sea Super Admin) del DIA DE HOY (zona horaria del perfil) dentro de la franja del
-   * turno ACTUAL, anulados incluidos. createdAt es un instante UTC: la ventana se calcula como instantes UTC desde la medianoche local (inicioDia).
-   * No depende del ciclo (los recibos siempre se emiten en el activo). Solo desarrollo: `?ahora=<ISO>` simula la hora actual (ignorado en produccion).
+   * Turno del cajero autenticado = TODO lo que cobro desde su ULTIMO CUADRE (CierreTurno.hasta) o, si no hay cuadre hoy, desde la medianoche local de HOY
+   * (zona horaria del perfil, nunca la del navegador): recibos (anulados incluidos), ventas rapidas, notas y devoluciones. NO se reinicia por hora/franja:
+   * persiste (recarga, relogin, reinicio de la API) hasta POST /cobros/turno/cierre. Solo desarrollo: `?ahora=<ISO>` simula la hora actual (ignorado en produccion).
    */
-  app.get<{ Querystring: { ahora?: string } }>('/turno', { onRequest: [app.authenticate, app.requireRole(...POS_ROLES)] }, async (req) => {
-    const tz = await zonaHoraria();
-    const sim = process.env.NODE_ENV !== 'production' && req.query.ahora ? new Date(req.query.ahora) : null;
-    const ahora = sim && !isNaN(sim.getTime()) ? sim : new Date();
-    const hoy = hoyISO(tz, ahora);
+  const calcularTurno = async (userSub: string, user: Parameters<typeof cajaDe>[0], ahora: Date) => {
+    const tz = await zonaHoraria(), hoy = hoyISO(tz, ahora);
     const hora = Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', hour: 'numeric' }).format(ahora));
     const t = TURNOS.find(x => hora >= x.h0 && hora < x.h1)!;
-    const ini = inicioDia(hoy, tz).getTime(), sig = new Date(Date.UTC(+hoy.slice(0, 4), +hoy.slice(5, 7) - 1, +hoy.slice(8, 10) + 1));
-    const fin = t.h1 === 24 ? inicioDia(sig.toISOString().slice(0, 10), tz).getTime() : ini + t.h1 * 3600_000;
-    const rows = await prisma.finRecibo.findMany({
-      where: { cajeroId: req.user.sub, createdAt: { gte: new Date(ini + t.h0 * 3600_000), lt: new Date(fin) } },
-      include: RECIBO_INC, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    });
+    const inicio = inicioDia(hoy, tz);
+    const ult = await prisma.cierreTurno.findFirst({ where: { cajeroId: userSub, hasta: { lte: ahora } }, orderBy: { hasta: 'desc' }, select: { id: true, hasta: true } });
+    const desde = ult && ult.hasta.getTime() > inicio.getTime() ? ult.hasta : inicio, hasta = ahora;
+    const rango = { gte: desde, lt: hasta };
+    const rows = await prisma.finRecibo.findMany({ where: { cajeroId: userSub, createdAt: rango }, include: RECIBO_INC, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
     // Cuadre: COBRADO BRUTO = recibos del turno (los anulados despues tambien: el dinero entro a la caja en este turno); DEVOLUCIONES = reembolsos de las notas de credito que ESTE cajero emitio
-    // en la franja (el dinero sale de la caja cuando se devuelve, aunque el recibo sea de otro turno); NETO = bruto − devoluciones, por medio de pago.
+    // en el turno (el dinero sale de la caja cuando se devuelve, aunque el recibo sea de otro turno); NETO = bruto − devoluciones, por medio de pago.
     const recibos = rows.map(r => reciboDto(r, tz)), porMetodo: Record<string, number> = {};
     for (const r of rows) for (const p of r.pagos) { const m = p.metodoPago.nombre.startsWith('Tarjeta') ? 'Tarjeta' : p.metodoPago.nombre; porMetodo[m] = round2((porMetodo[m] ?? 0) + p.monto); }
-    const bruto = round2(recibos.reduce((a, r) => a + r.monto, 0)), devPorMetodo: Record<string, number> = {};
-    for (const d of await reembolsosEnRango(new Date(ini + t.h0 * 3600_000), new Date(fin), { cajeroId: req.user.sub })) { const m = d.metodo.startsWith('Tarjeta') ? 'Tarjeta' : d.metodo; devPorMetodo[m] = round2((devPorMetodo[m] ?? 0) + d.monto); }
+    // Ventas rapidas (kiosko) de este cajero: entran al cuadre con su medio de pago (FinVenta no tiene anulacion: sus devoluciones llegan como notas de credito, ya restadas abajo).
+    const hmFmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' });
+    const ventas: VentaTurnoFila[] = (await prisma.finVenta.findMany({ where: { cajeroId: userSub, createdAt: rango }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] }))
+      .map(v => ({ id: v.id, ncf: v.ncf, monto: v.total, metodo: v.metodo, hora: hmFmt.format(v.createdAt) }));
+    for (const v of ventas) { const m = v.metodo.startsWith('Tarjeta') ? 'Tarjeta' : v.metodo; porMetodo[m] = round2((porMetodo[m] ?? 0) + v.monto); }
+    const bruto = round2(recibos.reduce((a, r) => a + r.monto, 0) + ventas.reduce((a, v) => a + v.monto, 0)), devPorMetodo: Record<string, number> = {};
+    for (const d of await reembolsosEnRango(desde, hasta, { cajeroId: userSub })) { const m = d.metodo.startsWith('Tarjeta') ? 'Tarjeta' : d.metodo; devPorMetodo[m] = round2((devPorMetodo[m] ?? 0) + d.monto); }
     for (const [m, v] of Object.entries(devPorMetodo)) porMetodo[m] = round2((porMetodo[m] ?? 0) - v);
     const devoluciones = round2(Object.values(devPorMetodo).reduce((a, v) => a + v, 0));
-    const notasTurno = await prisma.notaFiscal.findMany({ where: { cajeroId: req.user.sub, createdAt: { gte: new Date(ini + t.h0 * 3600_000), lt: new Date(fin) } }, select: FILA_SELECT, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
-    const cajaId = await cajaDe(req.user), caja = cajaId ? (await prisma.caja.findUnique({ where: { id: cajaId }, select: { codigo: true } }))?.codigo ?? '' : '';
+    const notasTurno = await prisma.notaFiscal.findMany({ where: { cajeroId: userSub, createdAt: rango }, select: FILA_SELECT, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+    const cajaId = await cajaDe(user), caja = cajaId ? (await prisma.caja.findUnique({ where: { id: cajaId }, select: { codigo: true } }))?.codigo ?? '' : '';
     const res: CobroTurno = {
-      turno: t.n, caja, sucursal: SUCURSAL, desde: `${hh(t.h0)}:00`, hasta: `${hh(t.h1 - 1)}:59`, recibos,
+      turno: t.n, caja, sucursal: SUCURSAL, desde: hmFmt.format(desde), hasta: hmFmt.format(hasta), recibos,
       resumen: { emitidos: recibos.length, anulados: recibos.filter(r => r.est === 'Anulado').length, netoActivo: round2(bruto - devoluciones), porMetodo, bruto, devoluciones, devolucionesPorMetodo: devPorMetodo },
-      notas: notasTurno.map(n => notaFila(n, tz)),
+      notas: notasTurno.map(n => notaFila(n, tz)), ventas, desdeISO: desde.toISOString(), ultimoCierre: ult ? { id: ult.id, hasta: ult.hasta.toISOString() } : null,
     };
-    return res;
-  });
+    return { res, desde, hasta, hoy };
+  };
+  const ahoraDe = (q?: string) => { const sim = process.env.NODE_ENV !== 'production' && q ? new Date(q) : null; return sim && !isNaN(sim.getTime()) ? sim : new Date(); };
+
+  app.get<{ Querystring: { ahora?: string } }>('/turno', { onRequest: [app.authenticate, app.requireRole(...POS_ROLES)] }, async (req) => (await calcularTurno(req.user.sub, req.user, ahoraDe(req.query.ahora))).res);
+
+  /**
+   * Cuadre: CIERRA el turno del cajero. Guarda (CierreTurno) lo cobrado entre desde y hasta (= ahora) con totales por medio de pago; el turno siguiente empieza vacio en `hasta`.
+   * Opcional `efectivoContado`: se guarda con la diferencia contra el efectivo neto esperado. Un turno sin movimientos no se puede cuadrar.
+   */
+  app.post<{ Body: { efectivoContado?: number } | undefined; Querystring: { ahora?: string } }>('/turno/cierre', { onRequest: [app.authenticate, app.requireRole(...POS_ROLES)] }, (req, reply) => enSerie(async () => {
+    const { res, desde, hasta, hoy } = await calcularTurno(req.user.sub, req.user, ahoraDe(req.query.ahora));
+    const r = res.resumen, nV = res.ventas?.length ?? 0, nN = res.notas?.length ?? 0;
+    if (!r.emitidos && !nV && !nN) return reply.code(400).send({ error: 'No hay movimientos que cuadrar en este turno' });
+    const cont = req.body?.efectivoContado;
+    if (cont !== undefined && cont !== null && (typeof cont !== 'number' || !isFinite(cont) || cont < 0)) return reply.code(400).send({ error: 'El efectivo contado debe ser un número mayor o igual a 0' });
+    const esperado = r.porMetodo['Efectivo'] ?? 0;
+    const c = await prisma.cierreTurno.create({ data: { cajeroId: req.user.sub, fecha: hoy, desde, hasta, caja: res.caja || null, recibos: r.emitidos, anulados: r.anulados, ventas: nV, notas: nN,
+      bruto: r.bruto ?? 0, devoluciones: r.devoluciones ?? 0, neto: r.netoActivo, porMetodo: JSON.stringify(r.porMetodo), efectivoContado: typeof cont === 'number' ? round2(cont) : null, diferencia: typeof cont === 'number' ? round2(cont - esperado) : null } });
+    return { id: c.id, fecha: c.fecha, desde: c.desde.toISOString(), hasta: c.hasta.toISOString(), neto: c.neto, efectivoContado: c.efectivoContado, diferencia: c.diferencia };
+  }));
 
   app.post<{ Body: CobroProcesarReq }>('/procesar', auth, (req, reply) => enSerie(async () => {
     const { ids, discount, pays: rawPays, pin, cedula, intencionId } = req.body;
     const logico = req.body.tipoComprobante ?? 'CONSUMO';
     if (!esTipoLogico(logico) || !TIPOS_COBRO.includes(logico)) return reply.code(400).send({ error: 'Tipo de comprobante inválido (usa Crédito fiscal, Consumo, Gubernamental o Régimen especial)' });
     const cicloId = await cicloIdActivo();
-    // Cargos del ciclo ACTIVO y deuda anterior (ciclos CERRADOS): el recibo SIEMPRE se emite en el ciclo activo; el cargo conserva su ciclo y solo pasa a pagado.
-    const sel = await prisma.finCobroItem.findMany({ where: { id: { in: ids }, paid: false, ciclo: { estado: { in: ['Activo', 'Cerrado'] } } }, orderBy: [{ cicloId: 'asc' }, { orden: 'asc' }] });
+    if (Array.isArray(ids) && ids.length) { // mora al dia para los alumnos de las lineas seleccionadas (las moras nuevas no estaban en `ids`: se ven al recargar la cuenta)
+      const al = await prisma.finCobroItem.findMany({ where: { id: { in: ids }, paid: false }, select: { alumnoId: true } });
+      if (al.length) await generarMorasSeguro({ alumnoIds: [...new Set(al.map(x => x.alumnoId))] }, req.log);
+    }
+    // Cargos del ciclo ACTIVO, deuda anterior (ciclos CERRADOS) y cargos anticipados (ciclos PLANIFICADOS, pre-inscripcion): el recibo SIEMPRE se emite en el ciclo activo; el cargo conserva su ciclo y solo pasa a pagado.
+    const sel = await prisma.finCobroItem.findMany({ where: { id: { in: ids }, paid: false, ciclo: { estado: { in: ['Activo', 'Cerrado', 'Planificado'] } } }, orderBy: [{ cicloId: 'asc' }, { orden: 'asc' }] });
     if (!sel.length) return reply.code(400).send({ error: 'Selecciona al menos un ítem' });
     if (discount === 'exo' && !(await supervisorOk(req, pin, 'cobro.exonerar'))) return reply.code(403).send({ error: 'Clave de supervisor inválida' });
     // Tutor del comprobante: el de la cédula de la cuenta cargada; si no se indicó, el del primer ítem; si tampoco, el tutor responsable del alumno.
@@ -172,12 +219,31 @@ const plugin: FastifyPluginAsync = async app => {
         : (await prisma.alumno.findUnique({ where: { id: sel[0].alumnoId }, include: { tutor: true } }))?.tutor ?? null;
     const tutorNombre = tutor?.nombre ?? 'Consumidor final';
     const sub = sel.reduce((a, i) => a + i.monto, 0);
-    const prontoPct = (await cfgGet('finanzas')).descuentoProntoPct;
-    if (discount === 'pronto' && !(prontoPct > 0)) return reply.code(400).send({ error: 'El descuento por pronto pago no está configurado' });
-    let desc = 0;
     const hoyP = hoyISO(await zonaHoraria());
-    if (discount === 'pronto') desc = sel.filter(i => i.tipo === 'col' && estadoCuota(i, hoyP) === 'Pendiente').reduce((a, i) => a + i.monto * (prontoPct / 100), 0);
-    if (discount === 'exo') desc = sel.filter(i => i.tipo === 'mora').reduce((a, i) => a + i.monto, 0);
+    // Pronto pago POR PLAN: solo las lineas que califican (plan del contrato del alumno en el ciclo activo, dia limite del mes de la cuota) llevan descuento; las demas se cobran completas, sin error.
+    const cicloAct = await cicloIdActivo(), prontoAl = new Map<string, ProntoPlan | null>();
+    if (discount === 'pronto') {
+      const [cts, pls] = await Promise.all([prisma.contrato.findMany({ where: { cicloId: cicloAct, alumnoId: { in: [...new Set(sel.map(x => x.alumnoId))] } }, select: { alumnoId: true, planId: true } }), planesPago()]);
+      for (const c of cts) prontoAl.set(c.alumnoId, prontoDePlan(c.planId ? resolverPlan(pls, c.planId) : null));
+    }
+    // Descuento por LINEA (lib/descuentos.ts: la misma regla que muestra GET /cobros/cuenta); el total es la suma de las lineas.
+    const descPor = new Map<string, { monto: number; motivo: string }>();
+    if (discount === 'pronto' || discount === 'exo') for (const i of sel) { const d = descuentoLinea(i, discount as ModoDescuento, i.cicloId === cicloAct ? prontoAl.get(i.alumnoId) ?? null : null, hoyP); if (d && d.monto > 0) descPor.set(i.id, d); }
+    // Desglose de beca (monto real / descuento / motivo) por linea para el RECIBO: solo informativo, el cobro sigue siendo el `monto` del cargo (la beca ya esta incluida en el).
+    const becaPor = new Map<string, BecaDesglose>();
+    const selCol = sel.filter(i => i.tipo === 'col' && !i.abono && i.cicloId === cicloAct);
+    if (selCol.length) {
+      const alIds = [...new Set(selCol.map(i => i.alumnoId))];
+      const [bs, cts, pls, als] = await Promise.all([
+        prisma.finBeca.findMany({ where: { estado: 'Aprobada', cicloId: cicloAct, alumnoId: { in: alIds } }, include: { tipoBeca: true, conceptos: { include: { concepto: true } } } }),
+        prisma.contrato.findMany({ where: { cicloId: cicloAct, alumnoId: { in: alIds } }, select: { alumnoId: true, planId: true } }),
+        planesPago(),
+        prisma.alumno.findMany({ where: { id: { in: alIds } }, include: SEC_INC }),
+      ]);
+      const tandaDe = new Map(als.map(a => [a.id, gst(a).tanda])), ctxs = contextosBeca(bs, cts, pls, id => tandaDe.get(id) ?? '');
+      for (const i of selCol) { const d = desgloseBeca(ctxs.get(i.alumnoId), i.monto); if (d) becaPor.set(i.id, d); }
+    }
+    const desc = round2([...descPor.values()].reduce((a, d) => a + d.monto, 0));
     const total = round2(sub - desc);
     const pays = rawPays.map(p => ({ m: p.m, r: p.r ?? '', amt: rawPays.length === 1 && p.a === '' ? total : parseFloat(p.a) || 0 }));
     const paid = pays.reduce((a, p) => a + p.amt, 0);
@@ -216,20 +282,25 @@ const plugin: FastifyPluginAsync = async app => {
       // PRIMER paso: el NCF/e-NCF (serializa las peticiones del mismo tipo en la fila de la secuencia antes de tocar cartera o recibos; se revierte si el cobro falla).
       fiscal = await asignarNcf(tx, logico, ctxFiscal);
       applied.length = 0;
+      const saldados = new Set<string>(); // cargos pagados por completo en este cobro (gancho de la reinscripcion)
       if (abono) {
         let left = paid;
         for (const i of sel) {
           if (left <= 0.001) break;
           const take = Math.min(left, i.monto);
-          applied.push({ con: i.con + (take < i.monto - 0.001 ? ' (abono)' : ''), monto: take, cobroItemId: i.id });
-          if (take >= i.monto - 0.001) await tx.finCobroItem.update({ where: { id: i.id }, data: { paid: true } });
+          const dl = descPor.get(i.id), bd = becaPor.get(i.id), bp = bd ? desglosePorcion(bd, take) : null;
+          applied.push({ con: i.con + (take < i.monto - 0.001 ? ' (abono)' : ''), monto: take, cobroItemId: i.id, ...(dl ? { descuento: round2(dl.monto * Math.min(1, take / i.monto)), descuentoMotivo: dl.motivo } : {}), ...(bp ? { montoBruto: bp.bruto, descuentoBeca: bp.descuento, becaMotivo: bp.motivo } : {}) });
+          if (take >= i.monto - 0.001) { await tx.finCobroItem.update({ where: { id: i.id }, data: { paid: true } }); saldados.add(i.id); }
           else await tx.finCobroItem.update({ where: { id: i.id }, data: { monto: round2(i.monto - take), abono: true } });
           left -= take;
         }
       } else {
         await tx.finCobroItem.updateMany({ where: { id: { in: sel.map(i => i.id) } }, data: { paid: true } });
+        for (const i of sel) saldados.add(i.id);
       }
-      const lineas: LineaRecibo[] = abono ? applied : sel.map(i => ({ con: i.con, monto: i.monto, cobroItemId: i.id }));
+      // Reinscripcion (Etapa B): pagar por completo la «Cuota de reinscripcion» CONFIRMA la reserva (matricula Activo + contrato/cuotas del ciclo destino), en esta misma transaccion.
+      await confirmarPagoReinscripcionTx(tx, sel.filter(i => i.tipo === TIPO_CARGO_REINS && saldados.has(i.id)).map(i => ({ alumnoId: i.alumnoId, cicloId: i.cicloId })), req.user.usuario);
+      const lineas: LineaRecibo[] = abono ? applied : sel.map(i => { const dl = descPor.get(i.id), bd = becaPor.get(i.id); return { con: i.con, monto: i.monto, cobroItemId: i.id, ...(dl ? { descuento: dl.monto, descuentoMotivo: dl.motivo } : {}), ...(bd ? { montoBruto: bd.bruto, descuentoBeca: bd.descuento, becaMotivo: bd.motivo } : {}) }; });
       await tx.finRecibo.create({
         data: {
           id, ncf: fiscal.ncf, tipoComprobanteId: fiscal.codigo, secuenciaFiscalId: fiscal.secuenciaFiscalId, modalidad: fiscal.modalidad, estadoDgii: fiscal.estadoDgii,
@@ -250,7 +321,8 @@ const plugin: FastifyPluginAsync = async app => {
       const ok = await prisma.mobPagoIntencion.updateMany({ where: { id: intencionId, estado: 'pendiente', tipo: 'cargos' }, data: { estado: 'confirmada', resuelto: new Date(), resueltoPorId: req.user.sub, reciboId: id } });
       if (ok.count) await audit(req.user, 'Update', { tabla: 'MobPagoIntencion', id: intencionId, prev: 'pendiente', next: 'confirmada · ' + id, ip: req.ip });
     }
-    return reciboDto(row, await zonaHoraria());
+    const alerta = await alertaSecuencia(fiscal.secuenciaFiscalId);
+    return { ...reciboDto(row, await zonaHoraria()), ...(alerta ? { alertaSecuencia: alerta } : {}) };
   }));
 
   // Historial de recibos del POS: ciclo elegido (X-Ciclo), mas reciente primero, paginado; respuesta minima por fila.
@@ -313,7 +385,7 @@ const plugin: FastifyPluginAsync = async app => {
     const prov = correoListo((await canalesGet()).email) ? await proveedorDe('Correo') : null;
     if (!prov) return { ok: false, estado: 'Canal no configurado', destino };
     const m = (n: number) => 'RD$ ' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const cuerpo = [`Comprobante ${rec.id} · ${rec.tipoComprobante?.nombre ?? ''} · ${rec.tipoComprobante?.modalidad === 'ELECTRONICA' ? 'e-NCF' : 'NCF'} ${rec.ncf}${rec.est === 'Anulado' ? ' · ANULADO' : ''}`, `Fecha: ${rec.fecha} ${rec.hora}`, `Cliente: ${rec.tutor}`, '', ...rec.items.map(i => `- ${i.con}: ${m(i.monto)}`), '', `${rec.abono ? 'Abono' : 'Total'}: ${m(rec.monto)}`, ...rec.pays.map(p => `${p.m}${p.r ? ' ' + p.r : ''}: ${m(p.amt)}`), '', 'Gracias por su pago.'].join('\n');
+    const cuerpo = [`Comprobante ${rec.id} · ${rec.tipoComprobante?.nombre ?? ''} · ${rec.tipoComprobante?.modalidad === 'ELECTRONICA' ? 'e-NCF' : 'NCF'} ${rec.ncf}${rec.est === 'Anulado' ? ' · ANULADO' : ''}`, `Fecha: ${rec.fecha} ${rec.hora}`, `Cliente: ${rec.tutor}`, '', ...rec.items.map(i => `- ${i.con}: ${i.montoBruto && i.descuentoBeca ? `monto real ${m(i.montoBruto)} − descuento por beca${i.becaMotivo ? ' (' + i.becaMotivo + ')' : ''} ${m(i.descuentoBeca)} = total ${m(i.monto)}` : m(i.monto)}${i.descuento ? ` (descuento −${m(i.descuento)}${i.descuentoMotivo ? ' · ' + i.descuentoMotivo : ''})` : ''}`), '', `${rec.abono ? 'Abono' : 'Total'}: ${m(rec.monto)}`, ...rec.pays.map(p => `${p.m}${p.r ? ' ' + p.r : ''}: ${m(p.amt)}`), '', 'Gracias por su pago.'].join('\n');
     try { await prov.enviar({ destino, asunto: 'Recibo ' + rec.id, cuerpo }); } catch { return reply.code(502).send({ error: 'No se pudo enviar el correo. Revisa el canal de correo en Configuración.' }); }
     await audit(req.user, 'Update', { tabla: 'Recibos', id: rec.id, next: `Envío de recibo ${rec.id} por correo a ${destino}`, ip: req.ip });
     return { ok: true, estado: 'Enviado', destino };

@@ -117,8 +117,8 @@ export default function ComprobanteSelector({ tipos, value, onChange, datos, onD
         </button>
         {sel?.modalidad === 'ELECTRONICA' && (
           <span role="img" tabIndex={0} data-testid="comprobante-ecf" className="text-warn-fg"
-            aria-label={`e-NCF: queda pendiente de envío a la DGII (este sistema no firma ni transmite).${ecf ? '' : ' Sin certificado e-CF cargado.'}`}
-            title={`e-NCF: queda pendiente de envío a la DGII (este sistema no firma ni transmite).${ecf ? '' : ' Sin certificado e-CF cargado.'}`}><i className="ph ph-paper-plane-tilt" /></span>
+            aria-label={`e-NCF: queda pendiente de envío a la DGII.${ecf ? '' : ' Sin certificado e-CF cargado.'}`}
+            title={`e-NCF: queda pendiente de envío a la DGII.${ecf ? '' : ' Sin certificado e-CF cargado.'}`}><i className="ph ph-paper-plane-tilt" /></span>
         )}
         <button type="button" onClick={() => setAbierto(a => !a)} disabled={disabled} className="ml-auto text-[11px] font-semibold text-accent hover:underline disabled:opacity-50">{abierto ? 'Cerrar' : 'Cambiar'}</button>
       </div>

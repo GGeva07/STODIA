@@ -44,13 +44,28 @@ model User {
   tutores      Tutor[]
   mensajes     CmnMensaje[]
   recibos      FinRecibo[]
+  ventas       FinVenta[]
   /// Notas de credito / debito emitidas por este usuario.
   notas        NotaFiscal[]
+  /// Cuadres (cierres de turno) hechos por este cajero.
+  cierresTurno CierreTurno[]
   // Docente / Empleado con esta cuenta (a lo sumo uno de cada tipo: indices unicos filtrados UX_Docente_userId / UX_Empleado_userId).
   docentes     Docente[]
   empleados    Empleado[]
   /// Pagos del portal que esta cuenta resolvio (confirmar / rechazar).
   intencionesResueltas MobPagoIntencion[]
+  /// Imagen de firma para documentos (cajero / director / docente). A lo sumo una por usuario.
+  firma        UserFirma?
+}
+
+/// Firma manuscrita escaneada de un usuario firmante. Se guarda en la BD (no en disco). `data` = bytes de un PNG/JPG/WebP (max ~300 KB).
+model UserFirma {
+  userId    String   @id @db.NVarChar(100)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  mime      String   @db.NVarChar(40)
+  data      Bytes
+  updatedAt DateTime @updatedAt
+  updatedBy String   @db.NVarChar(100)
 }
 
 model Tutor {
@@ -123,6 +138,11 @@ model Alumno {
   becas         FinBeca[]
   /// Alergias del alumno (N:M con el catalogo Alergia): reemplaza el texto CSV Alumno.alg, que el DTO sigue mostrando como «Maní, Lactosa».
   alergias      AlumnoAlergia[]
+  /// Resultado del alumno en cada proceso de promocion de curso aplicado (PromocionDetalle).
+  promociones   PromocionDetalle[]
+  /// Historial de reinscripcion del alumno.
+  reinscripciones ReinscripcionEvento[]
+  reservas ReinscripcionReserva[]
 
   @@index([tutorId])
   @@index([tutorLegalId])
@@ -369,7 +389,7 @@ model FinRecibo {
   clienteNombre       String?
   /// Numero / certificacion del regimen especial (opcional, A VALIDAR).
   regimenEspecial     String?
-  /// Envio a la DGII del e-NCF: NoAplica | PendienteEnvio | Aceptado | Rechazado | Contingencia. Este sistema NO transmite a la DGII: un e-NCF queda PendienteEnvio.
+  /// Envio a la DGII del e-NCF: NoAplica | PendienteEnvio | Aceptado | Rechazado | Contingencia. Un e-NCF electrónico queda en PendienteEnvio hasta que se integre el envío (fase final, docs/integracion-ecf.md).
   estadoDgii          String @default("NoAplica")
   /// Instantanea del nombre del tutor en el comprobante emitido ("Consumidor final" si no hay tutor).
   tutor     String
@@ -423,6 +443,13 @@ model FinReciboItem {
   monto       Float
   cobroItemId String?       @db.NVarChar(100)
   cobroItem   FinCobroItem? @relation(fields: [cobroItemId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Descuento aplicado a ESTA linea al cobrar (RD$; `monto` sigue siendo el bruto del cargo) y su motivo (p. ej. «Pronto pago 5 %», «Exoneración de mora»). 0 / NULL = sin descuento.
+  descuento       Float   @default(0)
+  descuentoMotivo String? @db.NVarChar(200)
+  /// Beca / Plan Hermano ya INCLUIDA en `monto` (que sigue siendo lo cobrado): monto real (bruto del plan), descuento por beca (RD$) y motivo («Plan Hermano 10 %»). NULL / 0 = linea sin beca (recibos anteriores).
+  montoBruto      Float?
+  descuentoBeca   Float   @default(0)
+  becaMotivo      String? @db.NVarChar(200)
   notaLineas  NotaFiscalLinea[]
 
   @@unique([reciboId, orden])
@@ -532,7 +559,7 @@ model NotaFiscal {
   ncf        String @unique @db.NVarChar(100)
   /// FISICA | ELECTRONICA (la del comprobante modificado).
   modalidad  String @default("FISICA")
-  /// NoAplica | PendienteEnvio | Aceptado | Rechazado | Contingencia. Este sistema NO transmite a la DGII: un e-NCF queda PendienteEnvio.
+  /// NoAplica | PendienteEnvio | Aceptado | Rechazado | Contingencia. Un e-NCF electrónico queda en PendienteEnvio hasta que se integre el envío (fase final, docs/integracion-ecf.md).
   estadoDgii String @default("NoAplica")
   /// Documento afectado: un recibo o una venta del kiosko (exactamente uno).
   reciboId   String? @db.NVarChar(100)
@@ -728,6 +755,9 @@ model FinVenta {
   metodoPagoId String @db.NVarChar(100)
   metodoPago   MetodoPago @relation(fields: [metodoPagoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   doc       String
+  /// Cajero que hizo la venta rapida (NULL = ventas anteriores a este campo); entra al cuadre de su turno (GET /cobros/turno).
+  cajeroId  String? @db.NVarChar(100)
+  cajero    User?   @relation(fields: [cajeroId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   createdAt DateTime @default(now())
   movimientos FinMovimiento[]
   lineas      FinVentaItem[]
@@ -735,6 +765,7 @@ model FinVenta {
   notas       NotaFiscal[]
 
   @@index([metodoPagoId])
+  @@index([cajeroId, createdAt])
 }
 
 // Lineas de una venta del kiosko (producto, cantidad y precio al momento de vender).
@@ -805,6 +836,14 @@ model Ciclo {
   notas         NotaFiscal[]
   asignaciones  AcadAsignacion[]
   horarios      AcadHorario[]
+  /// Cierre contable/administrativo del ciclo (0..1) y procesos de promocion de curso que lo usan como origen / destino (docs/cierre-y-promocion.md).
+  cierre            CierreCiclo?
+  promocionesOrigen PromocionCiclo[] @relation("PromocionOrigen")
+  promocionesDestino PromocionCiclo[] @relation("PromocionDestino")
+  /// Historial de reinscripcion (reservas, confirmaciones, liberaciones) de este ciclo destino y su fecha limite (0..1).
+  reinscripciones ReinscripcionEvento[]
+  reinscripcionCfg CicloReinscripcion?
+  reservas ReinscripcionReserva[]
 }
 
 /// Periodo de calificacion dentro de un ciclo (por defecto 4: Ago–Oct, Nov–Ene, Feb–Abr, May–Jul). `orden` 1..4 es la clave '1'..'4' que usa la API.
@@ -836,6 +875,8 @@ model Matricula {
   fechaIngreso String  @db.NVarChar(10)
   fechaRetiro  String? @db.NVarChar(10)
   asistencias  AsistenciaResumen[]
+  /// Marca de que es una RESERVA por reinscripcion (la promocion no la trata como copia automatica). Tabla aparte: no cambia las columnas de Matricula.
+  reinscripcion ReinscripcionReserva?
 
   @@unique([alumnoId, cicloId])
   @@index([cicloId])
@@ -893,7 +934,7 @@ model Grado {
   nivelId String @db.NVarChar(100)
   nivel   Nivel  @relation(fields: [nivelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   nombre  String @db.NVarChar(100)
-  /// Orden de promoción (único): al cerrar el ciclo el alumno pasa al grado con el orden siguiente.
+  /// Orden de promoción (único): la promoción de curso (lib/promocion.ts) pasa al aprobado al grado con el orden siguiente; el último por orden egresa.
   orden   Int
   estado  String @default("Activo")
   secciones Seccion[]
@@ -1483,4 +1524,158 @@ model AliMenuAlergia {
 
   @@id([menuOrden, alergiaId])
   @@index([alergiaId])
+}
+
+/// Cuadre (cierre) de turno de un cajero: congela lo cobrado entre `desde` y `hasta`. El turno siguiente del cajero arranca en `hasta` (GET /cobros/turno).
+model CierreTurno {
+  id              Int      @id @default(autoincrement())
+  cajeroId        String   @db.NVarChar(100)
+  cajero          User     @relation(fields: [cajeroId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Dia local (zona horaria del perfil) en que se hizo el cuadre, AAAA-MM-DD.
+  fecha           String   @db.NVarChar(10)
+  desde           DateTime
+  hasta           DateTime
+  caja            String?  @db.NVarChar(100)
+  recibos         Int
+  anulados        Int
+  ventas          Int      @default(0)
+  notas           Int      @default(0)
+  bruto           Float
+  devoluciones    Float
+  neto            Float
+  /// JSON {metodo: neto} (misma forma que CobroTurno.resumen.porMetodo).
+  porMetodo       String   @db.NVarChar(Max)
+  /// Efectivo contado fisicamente y diferencia contra el efectivo neto esperado (NULL si el cuadre no lo capturo).
+  efectivoContado Float?
+  diferencia      Float?
+  createdAt       DateTime @default(now())
+
+  @@index([cajeroId, hasta])
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// CIERRE DEL AÑO ESCOLAR Y PROMOCION DE CURSO (aditivo; ver docs/cierre-y-promocion.md)
+//  - El cierre del ciclo es CONTABLE/ADMINISTRATIVO: congela el ciclo (solo lectura) y guarda aqui la foto de sus finanzas. NO promueve alumnos.
+//  - La promocion de curso es un proceso SEPARADO basado en la Matriz de Notas (lib/promocion.ts); cada aplicacion deja su registro y el detalle por alumno.
+// ---------------------------------------------------------------------------------------------------------------------
+model CierreCiclo {
+  id               Int      @id @default(autoincrement())
+  /// Ciclo cerrado (uno solo: un ciclo se cierra una vez).
+  cicloId          String   @unique @db.NVarChar(100)
+  ciclo            Ciclo    @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Ciclo Planificado que quedo Activo con el cierre (NULL si no habia ninguno).
+  cicloSiguiente   String?  @db.NVarChar(100)
+  fecha            DateTime @default(now())
+  /// Usuario (login) y nombre de quien ejecuto el cierre (instantanea).
+  usuario          String   @db.NVarChar(100)
+  usuarioNombre    String   @default("") @db.NVarChar(200)
+  /// Totales RD$ del ciclo (definiciones en lib/ciclo-cierre.ts → resumenFinancieroCiclo).
+  facturado        Float
+  cobrado          Float
+  notasCredito     Float
+  notasDebito      Float
+  cobradoNeto      Float
+  descuentos       Float
+  pendiente        Float
+  vencido          Float
+  mora             Float
+  moraPendiente    Float
+  recibos          Int
+  recibosAnulados  Int
+  cargos           Int
+  cargosPendientes Int
+  alumnosConDeuda  Int
+  matriculas       Int
+  /// JSON: deuda vigente por alumno al cerrar [{ alumnoId, code, nombre, seccion, pendiente, vencido, cargos }] (solo lectura, foto del cierre).
+  deudaAlumnos     String   @db.NVarChar(Max)
+}
+
+model PromocionCiclo {
+  id             Int      @id @default(autoincrement())
+  cicloOrigenId  String   @db.NVarChar(100)
+  cicloOrigen    Ciclo    @relation("PromocionOrigen", fields: [cicloOrigenId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cicloDestinoId String   @db.NVarChar(100)
+  cicloDestino   Ciclo    @relation("PromocionDestino", fields: [cicloDestinoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fecha          DateTime @default(now())
+  usuario        String   @db.NVarChar(100)
+  /// JSON con los parametros usados (CfgPromocion: notaMinima, criterio, maxReprobadas, requiereTodosLosPeriodos).
+  parametros     String   @db.NVarChar(Max)
+  evaluados      Int
+  aprobados      Int
+  reprobados     Int
+  pendientes     Int
+  graduados      Int
+  sinSeccion     Int
+  /// Matriculas creadas / reubicadas en el ciclo destino y alumnos sin cambios (ya estaban donde corresponde o se respeto su matricula).
+  creadas        Int
+  ajustadas      Int
+  sinCambios     Int
+  detalles       PromocionDetalle[]
+
+  @@index([cicloOrigenId, fecha])
+}
+
+model PromocionDetalle {
+  id               Int            @id @default(autoincrement())
+  promocionId      Int
+  promocion        PromocionCiclo @relation(fields: [promocionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  alumnoId         String         @db.NVarChar(100)
+  alumno           Alumno         @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Aprobado | Reprobado | Pendiente de notas
+  resultado        String         @db.NVarChar(30)
+  promedio         Float?
+  reprobadas       Int            @default(0)
+  /// Materias sin nota final completa (cuando el criterio exige todos los periodos).
+  incompletas      Int            @default(0)
+  seccionOrigenId  String         @db.NVarChar(100)
+  /// Seccion asignada en el ciclo destino (NULL = sin seccion: graduado, pendiente de notas o sin cupo).
+  seccionDestinoId String?        @db.NVarChar(100)
+  /// Promovido | Repitente | Graduado | Pendiente | SinCupo | Respetada (matricula destino previa conservada)
+  accion           String         @db.NVarChar(30)
+  /// Creada | Ajustada | SinCambios | Retirada (que se hizo con la matricula del ciclo destino; Retirada = copia automatica de un graduado eliminada)
+  matricula        String         @db.NVarChar(20)
+  nota             String         @default("") @db.NVarChar(400)
+
+  @@index([promocionId])
+  @@index([alumnoId])
+}
+
+/// Historial de la REINSCRIPCION (Etapa B): una fila por hecho (Reserva, Confirmada, Liberada, Reactivada). Sin cascada (NoAction): es evidencia de auditoria.
+model ReinscripcionEvento {
+  id         Int      @id @default(autoincrement())
+  cicloId    String   @db.NVarChar(100)
+  ciclo      Ciclo    @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  alumnoId   String   @db.NVarChar(100)
+  alumno     Alumno   @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Reserva | Confirmada | Liberada | Reactivada
+  tipo       String   @db.NVarChar(20)
+  motivo     String   @default("")
+  usuario    String   @default("sistema") @db.NVarChar(100)
+  fecha      DateTime @default(now())
+  seccionId  String?  @db.NVarChar(100)
+  cargoId    String?  @db.NVarChar(100)
+
+  @@index([cicloId, tipo])
+  @@index([alumnoId])
+}
+
+/// Fecha limite de reinscripcion del ciclo destino (Etapa B): fecha ISO AAAA-MM-DD hasta la cual se paga la cuota de reinscripcion. Tabla aparte (no cambia Ciclo).
+model CicloReinscripcion {
+  cicloId String  @id @db.NVarChar(100)
+  ciclo   Ciclo   @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  limite  String? @db.NVarChar(10)
+}
+
+/// Marca explicita de que una Matricula es una RESERVA creada por «Abrir reinscripcion» (1:1 con Matricula). La promocion la trata como reserva, no como copia automatica.
+model ReinscripcionReserva {
+  matriculaId String    @id @db.NVarChar(100)
+  matricula   Matricula @relation(fields: [matriculaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cicloId     String    @db.NVarChar(100)
+  ciclo       Ciclo     @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  alumnoId    String    @db.NVarChar(100)
+  alumno      Alumno    @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creada      DateTime  @default(now())
+
+  @@unique([alumnoId, cicloId])
+  @@index([cicloId])
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useDraft } from '../../lib/useDraft';
 import { api } from '../../lib/api';
 import { ACCESS } from '../../lib/access';
 import { Modal, useToast } from '../../components/system/UiProvider';
@@ -14,9 +15,10 @@ const th = 'whitespace-nowrap border-b border-slate-200 bg-slate-50 px-3 py-2.5 
 export default function Screen() {
   const toast = useToast();
   const [cat, setCat] = useState<Cat | null>(null);
-  const [k, setK] = useState('secciones');
-  const [q, setQ] = useState('');
-  const [form, setForm] = useState<{ row: Row | null } | null>(null);
+  const [k, setK] = useDraft('catalogos:k', 'secciones', { porCiclo: false });
+  const [q, setQ] = useDraft('catalogos:q', '', { porCiclo: false });
+  // El «Nuevo» abierto se reabre al volver (la edición se restaura al pulsar Editar: su fila no se guarda).
+  const [form, setForm] = useDraft<{ row: Row | null } | null>('catalogos:form', null, { porCiclo: false, transformar: f => (f?.row ? null : f) });
   const [delId, setDelId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [creds, setCreds] = useState<{ items: Acceso[]; omitidos: AccesoLote['omitidos'] } | null>(null);

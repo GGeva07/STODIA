@@ -32,11 +32,12 @@ export const INDICES_FILTRADOS: { nombre: string; tabla: string; columna: string
 
 const una = (...cols: string[]) => `(${cols.map(c => `(CASE WHEN ${c} IS NULL THEN 0 ELSE 1 END)`).join(' + ')}) = 1`;
 /** `expr` es SQL portable que referencia las columnas sin prefijo (en SQLite se evalua sobre NEW.*). */
-export const CHECKS: { nombre: string; tabla: string; columnas: string[]; expr: string; msg: string }[] = [
+/** `marca`: texto que la definicion VIGENTE del CHECK debe contener; si una base ya tiene la version anterior (sin la marca) se reemplaza (DROP + ADD) de forma idempotente. */
+export const CHECKS: { nombre: string; tabla: string; columnas: string[]; expr: string; msg: string; marca?: string }[] = [
   { nombre: 'CK_ServicioAlumno_catalogo', tabla: 'ServicioAlumno', columnas: ['rutaId', 'aliPlanId', 'extraId', 'productoId'], expr: una('rutaId', 'aliPlanId', 'extraId', 'productoId'), msg: 'Un servicio del alumno referencia exactamente UN elemento del catalogo (ruta, plan de alimentacion, actividad o producto)' },
   { nombre: 'CK_Ciclo_estado', tabla: 'Ciclo', columnas: ['estado'], expr: "estado IN ('Planificado', 'Activo', 'Cerrado')", msg: 'Estado de ciclo invalido' },
   { nombre: 'CK_Ciclo_fechas', tabla: 'Ciclo', columnas: ['fechaInicio', 'fechaFin'], expr: 'fechaFin > fechaInicio', msg: 'La fecha fin del ciclo debe ser posterior al inicio' },
-  { nombre: 'CK_Matricula_estado', tabla: 'Matricula', columnas: ['estado'], expr: "estado IN ('Activo', 'Retirado', 'Promovido', 'Repitente', 'Graduado')", msg: 'Estado de matricula invalido' },
+  { nombre: 'CK_Matricula_estado', tabla: 'Matricula', columnas: ['estado'], expr: "estado IN ('Activo', 'Retirado', 'Promovido', 'Repitente', 'Graduado', 'Reservado', 'Liberada')", msg: 'Estado de matricula invalido', marca: 'Liberada' },
   { nombre: 'CK_TutorAlumno_rol', tabla: 'TutorAlumno', columnas: ['rol'], expr: "rol IN ('Financiero', 'Legal', 'Academico')", msg: 'Rol de tutor invalido' },
   { nombre: 'CK_TutorAlumno_vigencia', tabla: 'TutorAlumno', columnas: ['desde', 'hasta'], expr: 'hasta IS NULL OR hasta >= desde', msg: 'La vigencia del vinculo termina antes de empezar' },
   { nombre: 'CK_MonederoMovimiento_tipo', tabla: 'MonederoMovimiento', columnas: ['tipo'], expr: "tipo IN ('Recarga', 'Consumo', 'Ajuste')", msg: 'Tipo de movimiento invalido' },
@@ -72,8 +73,11 @@ export async function asegurarIndices(): Promise<void> {
   for (const ck of CHECKS) {
     try {
       if (sqlserver) {
+        // Version anterior sin la marca (p. ej. CK_Matricula_estado sin 'Reservado' / 'Liberada'): se reemplaza dentro de UN lote (drop + add), idempotente.
+        if (ck.marca) await prisma.$executeRawUnsafe(`IF EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = '${ck.nombre}' AND parent_object_id = OBJECT_ID('dbo.${ck.tabla}') AND definition NOT LIKE '%${ck.marca}%') ALTER TABLE dbo.${ck.tabla} DROP CONSTRAINT ${ck.nombre}`);
         await prisma.$executeRawUnsafe(`IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = '${ck.nombre}' AND parent_object_id = OBJECT_ID('dbo.${ck.tabla}')) ALTER TABLE dbo.${ck.tabla} ADD CONSTRAINT ${ck.nombre} CHECK (${ck.expr})`);
       } else {
+        if (ck.marca) for (const s of ['_i', '_u']) await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${ck.nombre}${s}"`); // SQLite: se recrean con la definicion vigente
         // SQLite no admite ADD CONSTRAINT: dos triggers (insert / update de las columnas implicadas) abortan la fila que no cumple.
         const nueva = ck.expr.replace(new RegExp(`\\b(${ck.columnas.join('|')})\\b`, 'g'), 'NEW.$1');
         const msg = ck.msg.replace(/'/g, "''");

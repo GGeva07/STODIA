@@ -9,12 +9,17 @@ import { TONE, errMsg, fmt } from '../../components/finanzas/fin';
 import { useWide } from '../../components/finanzas/useWide';
 import { useFinCfg } from '../../components/finanzas/finConfig';
 import PagosPorVerificar from './PagosPorVerificar';
-import { turnoAhora, useCaja } from '../../components/finanzas/caja';
+import { useCaja } from '../../components/finanzas/caja';
 import { SL_MSG, useCiclo } from '../../lib/ciclo';
 import { B, hoyDMY, runPrint, usePrintBusy, type PDoc } from '../../components/finanzas/print';
+import ConfirmModal from '../../components/system/ConfirmModal';
 import ReciboModal from './ReciboModal';
+import { useAlertaSecuencia } from '../../components/finanzas/AlertaSecuenciaModal';
 import HistorialRecibos from './HistorialRecibos';
-import ComprobanteSelector, { faltaFiscal, type DatosFiscales } from './ComprobanteSelector';
+import NotasFiscales from './NotasFiscales';
+import type { NotaInicial } from './NuevaNota';
+import { AvisoBorrador, useDraft } from '../../lib/useDraft';
+import ComprobanteSelector, { DATOS_VACIOS, datosEnvio, faltaFiscal, type DatosFiscales } from './ComprobanteSelector';
 
 const METODOS0: CobroMetodo[] = [{ nombre: 'Efectivo', ref: null }];
 /** Solo desarrollo: VITE_DEV_AUTOLOAD=<cédula|carnet|nombre> carga esa cuenta al abrir la terminal (en producción la terminal abre vacía). */
@@ -27,11 +32,16 @@ const Pill = ({ tone, w, children }: { tone: readonly [string, string]; w: numbe
   <span className="inline-flex h-[19px] flex-none items-center justify-center overflow-hidden text-ellipsis whitespace-nowrap rounded px-[5px] text-[10px] font-semibold leading-none" style={{ width: w, background: tone[0], color: tone[1] }}>{children}</span>
 );
 
+/** Descuento de la linea para el modo elegido (viene de la API: CobroItem.descuento.aplicable). */
+const descDe = (i: CobroItem, modo: 'none' | 'pronto' | 'exo') => (modo === 'none' ? undefined : i.descuento?.aplicable?.[modo]);
+
 export default function Screen() {
   const { user } = useSession();
   const { toast, toasts } = useToastStack();
+  const [receipt, setReceipt] = useState<ReciboFin | null>(null);
+  const alertaSec = useAlertaSecuencia(!!receipt);
   const wide = useWide();
-  const { soloLectura: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: un ciclo cerrado es solo lectura (cobrar / anular / descuentos deshabilitados)
+  const { soloLecturaFin: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: un ciclo cerrado es solo lectura (el planificado permite cobrar cargos de pre-inscripcion) (cobrar / anular / descuentos deshabilitados)
   const isSuper = user?.rol === 'Super Admin';
   const searchRef = useRef<HTMLInputElement>(null);
   const cajaInfo = useCaja();
@@ -45,43 +55,54 @@ export default function Screen() {
   const loadIntens = useCallback(() => { api.get<MobPagoIntencionDto[]>('/movil/pagos/intenciones?estado=pendiente').then(setIntens).catch(() => setIntens([])); }, []);
   useEffect(() => { loadIntens(); }, [loadIntens]);
 
-  const [q, setQ] = useState('');
-  const fcfg = useFinCfg(), prontoPct = fcfg.finanzas.descuentoProntoPct;
+  // Borradores (docs/borradores-formularios.md): búsqueda, cuenta cargada (solo su cédula; los datos se piden de nuevo), cargos marcados, método/referencia de pago en edición y datos del comprador.
+  // NUNCA se guardan el PIN de exoneración ni el efectivo ya cobrado (tras procesar todo vuelve al estado inicial = sin borrador).
+  const [q, setQ] = useDraft('pos:q', '');
+  const [ced, setCed, limpCed, metaCed] = useDraft('pos:ced', '');
+  const restaurar = useRef(ced); // cuenta a recargar al volver a la terminal
+  const fcfg = useFinCfg();
   const [cuenta, setCuenta] = useState<CobroCuenta | null>(null);
   const [notFound, setNotFound] = useState(false);
-  const [sel, setSel] = useState<Record<string, boolean>>({});
+  const [sel, setSel] = useDraft<Record<string, boolean>>('pos:sel', {});
   const [focus, setFocus] = useState(0);
-  const [kid, setKid] = useState('all');
-  const [discount, setDiscount] = useState<'none' | 'pronto' | 'exo'>('none');
+  const [kid, setKid] = useDraft('pos:kid', 'all');
+  const [discount, setDiscount] = useDraft<'none' | 'pronto' | 'exo'>('pos:discount', 'none', { transformar: d => (d === 'exo' ? 'none' : d) }); // «exo» exige PIN: no se restaura
   const [exoPin, setExoPin] = useState('');
-  const [pays, setPays] = useState<CobroPagoReq[]>(EMPTY_PAY);
+  const [pays, setPays] = useDraft<CobroPagoReq[]>('pos:pays', EMPTY_PAY);
   // Comprobante fiscal del cobro (tipo LOGICO: el servidor decide B01/E31... segun la modalidad configurada) y datos fiscales del comprador.
   const [comprobantes, setComprobantes] = useState<CobroComprobantes | null>(null);
-  const [comp, setComp] = useState<TipoLogico>('CONSUMO');
-  const [fiscal, setFiscal] = useState<DatosFiscales>({ rnc: '', nombre: '', regimen: '' });
-  const [recordar, setRecordar] = useState(false);
+  const [comp, setComp] = useDraft<TipoLogico>('pos:comp', 'CONSUMO');
+  const [fiscal, setFiscal] = useDraft<DatosFiscales>('pos:fiscal', DATOS_VACIOS);
+  const [recordar, setRecordar] = useDraft('pos:recordar', false);
   const cargarComprobantes = useCallback(() => { api.get<CobroComprobantes>('/cobros/comprobantes').then(setComprobantes).catch(() => undefined); }, []);
   useEffect(() => { cargarComprobantes(); }, [cargarComprobantes]);
   /** Al cambiar de cuenta: el comprobante vuelve al habitual del tutor (si hay secuencia) o a Consumo, y los datos fiscales se precargan del tutor. */
   const reiniciarComprobante = useCallback((cu: CobroCuenta | null) => {
     setRecordar(false);
-    setFiscal({ rnc: cu?.datosFiscales?.rnc ?? '', nombre: cu?.datosFiscales?.nombre ?? '', regimen: '' });
+    setFiscal(DATOS_VACIOS);
     setComp(cu?.comprobanteHabitual ?? 'CONSUMO');
   }, []);
   const [histOpen, setHistOpen] = useState(false);
   const [turnoRecibo, setTurnoRecibo] = useState<ReciboFin | null>(null); // recibo abierto desde el Historial de Turno (mismo modal que tras emitir)
+  const [notasOpen, setNotasOpen] = useState<{ inicial?: NotaInicial } | null>(null); // Notas de Crédito / Débito (listado + asistente); con `inicial` abre el asistente con ese recibo
   const [recHistOpen, setRecHistOpen] = useState(false); // Historial de Recibos (listado de todos los recibos del ciclo)
-  const [receipt, setReceipt] = useState<ReciboFin | null>(null);
   const [guard, setGuard] = useState<GuardCfg | null>(null);
   const [expired, setExpired] = useState(false);
   const [busy, setBusy] = useState(false);
   const lastAct = useRef(Date.now());
 
-  const search = useCallback(async (term: string, quiet = false, link?: MobPagoIntencionDto) => {
+  const search = useCallback(async (term: string, quiet = false, link?: MobPagoIntencionDto, keep = false) => {
     try {
       const t0 = performance.now();
       const c = await api.get<CobroCuenta>('/cobros/cuenta?q=' + encodeURIComponent(term.trim()));
-      setCuenta(c); setNotFound(false); setFocus(0); setKid('all'); setPays(EMPTY_PAY); setDiscount('none'); setExoPin(''); reiniciarComprobante(c);
+      setCuenta(c); setNotFound(false); setFocus(0); setCed(c.cedula); setExoPin('');
+      if (keep) { // restaurando el borrador: se conservan cargos marcados, pagos, descuento y comprobante; solo se descartan los cargos que ya no existen
+        const ids = new Set([...c.items, ...(c.deudaAnterior ?? []), ...(c.anticipados ?? [])].map(i => i.id));
+        setSel(s => Object.fromEntries(Object.entries(s).filter(([id]) => ids.has(id))));
+        setKid(k => (k === 'all' || c.hijos.some(h => h.kid === k) ? k : 'all'));
+        return;
+      }
+      setKid('all'); setPays(EMPTY_PAY); setDiscount('none'); reiniciarComprobante(c);
       setVinc(link ?? null);
       const pre = link?.tipo === 'cargos' ? link.detalle.map(d => d.id).filter(id => c.items.some(i => i.id === id)) : [];
       setSel(Object.fromEntries(pre.length ? pre.map(id => [id, true]) : c.items.filter(i => i.est === 'Vencida').map(i => [i.id, true]))); // arranca con lo vencido marcado (o con los cargos de la intención)
@@ -89,8 +110,9 @@ export default function Screen() {
     } catch {
       setCuenta(null); setNotFound(true);
     }
-  }, [toast, reiniciarComprobante]);
+  }, [toast, reiniciarComprobante]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => { if (restaurar.current) { const c0 = restaurar.current; restaurar.current = ''; void search(c0, true, undefined, true); } }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (DEV_AUTOLOAD) { setQ(DEV_AUTOLOAD); void search(DEV_AUTOLOAD, true); } }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Turno del cajero (GET /cobros/turno): independiente de la cuenta consultada. Se carga al abrir, tras cobrar/anular y al cambiar la franja horaria;
@@ -104,25 +126,28 @@ export default function Screen() {
     catch { if (n === turnoSeq.current) setTurnoErr(true); }
   }, []);
   useEffect(() => { void cargarTurno(); }, [cargarTurno, user?.usuario]);
-  useEffect(() => { // cambio de franja (Matutino/Vespertino/Nocturno): el listado del turno se reinicia
-    let ult = turnoAhora();
-    const t = setInterval(() => { const x = turnoAhora(); if (x !== ult) { ult = x; void cargarTurno(); } }, 60000);
-    return () => clearInterval(t);
-  }, [cargarTurno]);
+  // El turno NO se reinicia por hora/franja: dura hasta el cuadre (POST /cobros/turno/cierre). Al volver a la pestana se refresca por si hubo cambios en otra sesion.
+  useEffect(() => { const f = () => { if (document.visibilityState === 'visible') void cargarTurno(); }; document.addEventListener('visibilitychange', f); return () => document.removeEventListener('visibilitychange', f); }, [cargarTurno]);
 
   const items = cuenta?.items ?? [];
   const deuda = useMemo(() => cuenta?.deudaAnterior ?? [], [cuenta]); // Fase 2D: cargos pendientes de ciclos cerrados (solo desde el ciclo activo), cobrables en una linea aparte
-  const todos = useMemo(() => [...items, ...deuda], [items, deuda]);
+  const adel = useMemo(() => cuenta?.anticipados ?? [], [cuenta]); // pre-inscripcion: cargos de ciclos planificados (solo desde el ciclo activo), tambien cobrables
+  const todos = useMemo(() => [...items, ...deuda, ...adel], [items, deuda, adel]);
   const recibos = useMemo(() => turnoData?.recibos ?? [], [turnoData]); // SOLO el turno (nunca cuenta.recibos)
   const nAct = useMemo(() => items.filter(i => kid === 'all' || i.kid === kid).length, [items, kid]);
+  const nDeu = useMemo(() => deuda.filter(i => kid === 'all' || i.kid === kid).length, [deuda, kid]);
+  const nAdel = useMemo(() => adel.filter(i => kid === 'all' || i.kid === kid).length, [adel, kid]);
   const vis = useMemo(() => todos.filter(i => kid === 'all' || i.kid === kid), [todos, kid]);
+  // Beca / Plan Hermano ya incluida en el monto: columnas «Monto real» y «Desc. beca» (solo si alguna línea visible la tiene); el Total que se cobra es el monto del cargo.
+  const hayBeca = vis.some(i => !!i.descuento?.beca), nCols = hayBeca ? 10 : 8;
+  // Pronto pago POR PLAN: la API marca por linea si califica hoy (aplicable.pronto). El selector se habilita solo si alguna linea SELECCIONADA califica.
+  const hayPronto = todos.some(i => i.descuento?.aplicable?.pronto), selPronto = todos.some(i => sel[i.id] && i.descuento?.aplicable?.pronto);
 
   const c = useMemo(() => {
     const s = todos.filter(i => sel[i.id]);
     const sub = s.reduce((a, i) => a + i.monto, 0);
-    let desc = 0;
-    if (discount === 'pronto') desc = s.filter(i => i.tipo === 'col' && i.est === 'Pendiente').reduce((a, i) => a + i.monto * (prontoPct / 100), 0);
-    if (discount === 'exo') desc = s.filter(i => i.tipo === 'mora').reduce((a, i) => a + i.monto, 0);
+    // Descuento por linea calculado por la API (lib/descuentos.ts, la misma regla de /cobros/procesar): aqui solo se suma el del modo elegido.
+    const desc = Math.round(s.reduce((a, i) => a + (descDe(i, discount)?.monto ?? 0), 0) * 100) / 100;
     const total = Math.round((sub - desc) * 100) / 100;
     const ps = pays.map(p => ({ ...p, amt: pays.length === 1 && p.a === '' ? total : parseFloat(p.a) || 0 }));
     const paid = ps.reduce((a, p) => a + p.amt, 0);
@@ -132,7 +157,7 @@ export default function Screen() {
     const change = paid > total ? paid - total : 0;
     const abono = s.length > 0 && total > 0 && remaining > 0.001 && paid > 0.001;
     const tc = comprobantes?.tipos.find(t => t.logico === comp), umbral = comprobantes?.umbralConsumoIdentificado ?? 250000;
-    const falta = comprobantes ? faltaFiscal(comp, total, umbral, fiscal, !!tc?.disponible, tc?.motivo) : '';
+    const falta = comprobantes ? faltaFiscal(comp, total, umbral, fiscal, !!tc?.disponible, tc?.motivo, cuenta?.fiscal) : '';
     let msg = 'Listo para procesar', tone: 'ok' | 'warn' | 'bad' | 'mute' = 'ok';
     if (!s.length) { msg = 'Selecciona al menos un ítem'; tone = 'mute'; }
     else if (nonCash > total + 0.001) { msg = 'El monto no-efectivo excede el total'; tone = 'bad'; }
@@ -144,7 +169,7 @@ export default function Screen() {
     const canPay = !sl && s.length > 0 && total > 0 && paid > 0.001 && !missingRef && nonCash <= total + 0.001 && !falta;
     if (sl) { msg = SL_MSG; tone = 'mute'; }
     return { sel: s, sub, desc, total, pays: ps, change, remaining, abono, msg, tone, canPay };
-  }, [todos, sel, discount, pays, prontoPct, REFS, sl, comprobantes, comp, fiscal]);
+  }, [todos, sel, discount, pays, REFS, sl, comprobantes, comp, fiscal, cuenta]);
 
   const venc = items.filter(i => i.est === 'Vencida').reduce((a, i) => a + i.monto, 0);
   const mora = items.some(i => i.est === 'Vencida');
@@ -163,14 +188,14 @@ export default function Screen() {
     if (!c.canPay) { toast(c.msg, 'bad'); return; }
     setBusy(true);
     try {
-      const rec = await api.post<ReciboFin>('/cobros/procesar', { ids: c.sel.map(i => i.id), discount, pays, pin: exoPin, cedula: cuenta?.cedula, tipoComprobante: comp, ...(comp !== 'CONSUMO' || fiscal.rnc.trim() ? { clienteRnc: fiscal.rnc, clienteNombre: fiscal.nombre } : {}), ...(comp === 'REGIMEN_ESPECIAL' && fiscal.regimen.trim() ? { regimenEspecial: fiscal.regimen } : {}), ...(recordar ? { habitual: true } : {}), ...(vinc?.tipo === 'cargos' ? { intencionId: vinc.id } : {}) });
+      const rec = await api.post<ReciboFin>('/cobros/procesar', { ids: c.sel.map(i => i.id), discount, pays, pin: exoPin, cedula: cuenta?.cedula, tipoComprobante: comp, ...(() => { const d = datosEnvio(comp, c.total, comprobantes?.umbralConsumoIdentificado ?? 250000, fiscal, cuenta?.fiscal); return d ? { clienteRnc: d.rnc, clienteNombre: d.nombre } : {}; })(), ...(comp === 'REGIMEN_ESPECIAL' && fiscal.regimen.trim() ? { regimenEspecial: fiscal.regimen } : {}), ...(recordar ? { habitual: true } : {}), ...(vinc?.tipo === 'cargos' ? { intencionId: vinc.id } : {}) });
       const fresh = await api.get<CobroCuenta>('/cobros/cuenta?q=' + encodeURIComponent(cuenta!.cedula));
       void cargarTurno();
-      setCuenta(fresh); setSel({}); setPays(EMPTY_PAY); setDiscount('none'); setExoPin(''); setFocus(0); setReceipt(rec); reiniciarComprobante(fresh); cargarComprobantes();
+      setCuenta(fresh); setSel({}); setPays(EMPTY_PAY); setDiscount('none'); setExoPin(''); setFocus(0); setReceipt(rec); alertaSec.encolar(rec.alertaSecuencia); reiniciarComprobante(fresh); cargarComprobantes();
       if (vinc?.tipo === 'cargos' && !rec.abono) { setVinc(null); loadIntens(); }
       toast(rec.abono ? `${rec.id} · Abono ${fmt(rec.monto)} aplicado · saldo pendiente ${fmt(rec.saldo)}` : `${rec.id} procesado · ${fmt(rec.monto)}`, rec.abono ? 'warn' : 'ok');
     } catch (e) { toast(errMsg(e), 'bad'); } finally { setBusy(false); }
-  }, [c, discount, pays, exoPin, expired, busy, toast, cuenta, vinc, loadIntens, sl, cargarTurno, comp, fiscal, recordar, reiniciarComprobante, cargarComprobantes]);
+  }, [c, discount, pays, exoPin, expired, busy, toast, cuenta, vinc, loadIntens, sl, cargarTurno, comp, fiscal, recordar, reiniciarComprobante, cargarComprobantes, comprobantes]);
 
   // Atajos de teclado del prototipo + bloqueo por inactividad (15 min).
   const toggle = (id: string, idx: number) => { setSel(s => ({ ...s, [id]: !s[id] })); setFocus(idx); };
@@ -196,7 +221,7 @@ export default function Screen() {
   }, []);
 
   const newCobro = () => {
-    setQ(''); setCuenta(null); setVinc(null); setNotFound(false); setPays(EMPTY_PAY); setDiscount('none'); setKid('all'); reiniciarComprobante(null);
+    setQ(''); limpCed(); setSel({}); setFiscal(DATOS_VACIOS); setCuenta(null); setVinc(null); setNotFound(false); setPays(EMPTY_PAY); setDiscount('none'); setKid('all'); reiniciarComprobante(null);
     setTimeout(() => searchRef.current?.focus(), 0);
   };
 
@@ -214,13 +239,33 @@ export default function Screen() {
   const pb = usePrintBusy();
   const pbc = pb('cuadre', 'Imprimir Cuadre', 'ph ph-printer');
   const docCuadre = (): PDoc => {
-    const act = recibos.filter(r => r.est !== 'Anulado'), by: Record<string, number> = {};
-    act.forEach(r => { by[r.metodo] = (by[r.metodo] || 0) + r.monto; });
-    const tot: [string, string, boolean?][] = [...Object.entries(by).map(([k, v]) => ['Total ' + k, fmt(v)] as [string, string]), ['TOTAL NETO COBRADO', fmt(act.reduce((a, r) => a + r.monto, 0)), true]];
+    const act = recibos.filter(r => r.est !== 'Anulado'), res = turnoData?.resumen, by: Record<string, number> = res?.porMetodo ? { ...res.porMetodo } : {};
+    if (!res?.porMetodo) act.forEach(r => { by[r.metodo] = (by[r.metodo] || 0) + r.monto; });
+    const notasT = turnoData?.notas ?? [];
+    // Cuadre NETO: cobrado de los recibos del turno − devoluciones (reembolsos de las notas de crédito que emitió este cajero en el turno), por medio de pago.
+    const tot: [string, string, boolean?][] = [...Object.entries(by).map(([k, v]) => ['Neto ' + k, fmt(v)] as [string, string]), ...(res?.devoluciones ? [['Cobrado bruto', fmt(res.bruto ?? 0)] as [string, string], ['Devoluciones (notas de crédito)', '−' + fmt(res.devoluciones)] as [string, string]] : []), ['TOTAL NETO COBRADO', fmt(res?.netoActivo ?? act.reduce((a, r) => a + r.monto, 0)), true]];
     return { kind: 'carta', name: 'Cuadre de caja', format: 'Carta 8.5 × 11 in', sign: ['Firma del cajero', 'Firma de dirección'], pages: [{ title: 'Cuadre de caja', sub: (turnoData?.caja || cajaInfo.caja ? (turnoData?.caja || cajaInfo.caja) + ' · ' : '') + 'Turno ' + (turnoData?.turno ?? cajaInfo.turno) + (turnoData ? ' (' + turnoData.desde + '–' + turnoData.hasta + ')' : '') + ' · ' + hoyDMY(), blocks: [
       B.kv([['Cajero', user?.nombre ?? ''], ['Sucursal', turnoData?.sucursal ?? cajaInfo.sucursal], ['Turno', (turnoData?.turno ?? cajaInfo.turno) + (turnoData ? ' · ' + turnoData.desde + ' a ' + turnoData.hasta : '')], ['Recibos emitidos', String(recibos.length)], ['Anulados', String(recibos.length - act.length)]]),
       B.table(['Recibo', 'Comprobante', 'NCF / e-NCF', 'Tutor', 'Método', 'Hora', 'Monto', 'Estado'], recibos.map(r => [r.id, r.tipoComprobante?.nombre ?? '', r.ncf, r.tutor, r.metodo, r.hora, fmt(r.monto), r.est === 'Anulado' ? 'Anulado' : (r.abono ? 'Abono' : 'Activo')]), ['62px', '92px', '104px', '1fr', '66px', '40px', '88px', '52px'], ['left', 'left', 'left', 'left', 'left', 'left', 'right', 'left']),
+      ...(notasT.length ? [B.text('Devoluciones / Notas de crédito y débito del turno', true), B.table(['Nota', 'Tipo', 'NCF / e-NCF', 'Documento', 'Motivo', 'Monto'], notasT.map(nt => [nt.id, nt.clase === 'CREDITO' ? 'Crédito' : 'Débito', nt.ncf, nt.documento.id, nt.motivo.nombre, (nt.clase === 'CREDITO' ? '−' : '+') + fmt(nt.monto)]), ['62px', '52px', '104px', '84px', '1fr', '88px'], ['left', 'left', 'left', 'left', 'left', 'right'])] : []),
       B.total(tot)] }] };
+  };
+
+  /** Cuadrar: cierra el turno (queda guardado en BD), imprime el cuadre y el turno siguiente empieza vacio. */
+  const [cuadrando, setCuadrando] = useState(false);
+  const [cuadreOpen, setCuadreOpen] = useState(false);
+  const [cuadreErr, setCuadreErr] = useState('');
+  const cuadrar = async () => {
+    if (cuadrando || !turnoData) return;
+    const doc = docCuadre(); setCuadrando(true); setCuadreErr('');
+    try { await api.post('/cobros/turno/cierre', {}); setCuadreOpen(false); toast('Turno cuadrado y cerrado', 'ok'); void cargarTurno(); runPrint('cuadre', doc); }
+    catch (e) { setCuadreErr(errMsg(e)); } finally { setCuadrando(false); }
+  };
+
+  /** «Emitir nota de crédito / débito» desde el modal de un recibo: cierra los listados y abre el asistente con ese recibo precargado. */
+  const emitirNotaDe = (rc: ReciboFin, clase: 'credito' | 'debito') => {
+    setRecHistOpen(false); setHistOpen(false); setTurnoRecibo(null);
+    setNotasOpen({ inicial: { tipo: 'recibo', id: rc.id, intencion: clase === 'debito' ? 'debito' : 'parcial' } });
   };
 
   const anular = (rc: ReciboFin) =>
@@ -263,6 +308,7 @@ export default function Screen() {
       <div className="grid min-h-0 flex-1 gap-3" style={{ gridTemplateColumns: wide ? 'minmax(0,68fr) minmax(300px,32fr)' : 'minmax(0,1fr)' }}>
         <div className="flex min-h-0 min-w-0 flex-col gap-3">
           <section className="flex-none rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+            {metaCed.restaurado && <AvisoBorrador meta={{ ...metaCed, descartar: () => newCobro() }} className="mb-2 w-fit" />}
             <div className="flex items-center gap-2.5">
               <div className="relative min-w-0 flex-1">
                 <i className="ph ph-magnifying-glass pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[15px] text-slate-400" />
@@ -278,6 +324,9 @@ export default function Screen() {
               </button>
               <button onClick={() => setRecHistOpen(true)} className="flex h-[34px] items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-300 bg-slate-100 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-200">
                 <i className="ph ph-receipt" />Historial de Recibos
+              </button>
+              <button onClick={() => setNotasOpen({})} data-notas-btn className="flex h-[34px] items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-300 bg-slate-100 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-200">
+                <i className="ph ph-receipt-x" />Notas de Crédito / Débito
               </button>
             </div>
             {cuenta && (
@@ -295,6 +344,7 @@ export default function Screen() {
                   <span>Total vencido: <b className="font-mono" style={{ color: venc > 0 ? '#DC2626' : '#16A34A' }}>{fmt(venc)}</b></span>
                   <span className="text-slate-300">|</span>
                   <span>Deuda total: <b className="font-mono text-ink">{fmt(items.reduce((a, i) => a + i.monto, 0))}</b></span>
+                  {adel.length > 0 && <><span className="text-slate-300">|</span><span title="Cargos de inscripción anticipada (ciclo planificado): no cuentan como deuda vencida">Anticipados: <b className="font-mono" style={{ color: '#0369A1' }}>{fmt(adel.reduce((a, i) => a + i.monto, 0))}</b></span></>}
                   {deuda.length > 0 && <><span className="text-slate-300">|</span><span title="Cargos pendientes de ciclos cerrados: se cobran aquí mismo, en el recibo del ciclo activo">Deuda anterior: <b className="font-mono" style={{ color: '#B45309' }}>{fmt(deuda.reduce((a, i) => a + i.monto, 0))}</b></span></>}
                 </div>
               </div>
@@ -319,7 +369,7 @@ export default function Screen() {
                   <span className="text-[11px] text-slate-500">Marcar/desmarcar con la barra espaciadora</span>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
-                  <table className="w-full min-w-[760px] border-collapse text-left text-xs">
+                  <table className={'w-full border-collapse text-left text-xs ' + (hayBeca ? 'min-w-[1260px]' : 'min-w-[1000px]')}>
                     <thead className="sticky top-0 z-[1]">
                       <tr className="bg-slate-100 text-slate-600">
                         <th className="w-10 border-b border-slate-200 p-[9px_10px] text-center">
@@ -330,7 +380,11 @@ export default function Screen() {
                         <th className="w-[150px] border-b border-slate-200 p-[9px_10px] font-semibold">Estudiante</th>
                         <th className="w-[104px] border-b border-slate-200 p-[9px_10px] text-center font-semibold">Vencimiento</th>
                         <th className="w-24 border-b border-slate-200 p-[9px_10px] text-center font-semibold">Estado</th>
-                        <th className="w-[124px] border-b border-slate-200 p-[9px_10px] text-right font-semibold">Monto</th>
+                        {hayBeca && <th className="w-[116px] border-b border-slate-200 p-[9px_10px] text-right font-semibold" title="Monto bruto de la cuota según el plan, antes de la beca o el Plan Hermano.">Monto real</th>}
+                        {hayBeca && <th className="w-[150px] border-b border-slate-200 p-[9px_10px] text-right font-semibold" title="Descuento por beca / Plan Hermano (RD$ y %). Ya está descontado del Total.">Desc. beca</th>}
+                        <th className="w-[124px] border-b border-slate-200 p-[9px_10px] text-right font-semibold" title={hayBeca ? 'Total de la cuota: lo que realmente se cobra (Monto real − Descuento por beca).' : undefined}>{hayBeca ? 'Total' : 'Monto'}</th>
+                        <th className="w-[190px] border-b border-slate-200 p-[9px_10px] text-right font-semibold" title="Descuento aplicado a esa línea según el descuento elegido abajo. Beca y plan de pago ya vienen incluidos en el monto.">Descuento</th>
+                        <th className="w-[124px] border-b border-slate-200 p-[9px_10px] text-right font-semibold" title="Monto − descuento">Neto</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -339,17 +393,32 @@ export default function Screen() {
                         const tn = i.est === 'Vencida' ? TONE.bad : i.est === 'Por vencer' ? TONE.warn : TONE.mute;
                         return (
                           <Fragment key={i.id}>
-                          {idx === nAct && deuda.length > 0 && (
-                            <tr className="bg-amber-50"><td colSpan={6} className="border-y border-amber-200 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800"><i className="ph-fill ph-clock-counter-clockwise mr-1.5" />Deuda de ciclos anteriores · {[...new Set(deuda.map(d => d.ciclo))].join(', ')} <span className="font-normal normal-case tracking-normal">(se cobra aquí; el recibo se emite en el ciclo activo)</span></td></tr>
+                          {idx === nAct && nDeu > 0 && (
+                            <tr className="bg-amber-50"><td colSpan={nCols} className="border-y border-amber-200 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800"><i className="ph-fill ph-clock-counter-clockwise mr-1.5" />Deuda de ciclos anteriores · {[...new Set(deuda.map(d => d.ciclo))].join(', ')} <span className="font-normal normal-case tracking-normal">(se cobra aquí; el recibo se emite en el ciclo activo)</span></td></tr>
+                          )}
+                          {idx === nAct + nDeu && nAdel > 0 && (
+                            <tr className="bg-sky-50"><td colSpan={nCols} className="border-y border-sky-200 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-sky-800"><i className="ph-fill ph-calendar-dots mr-1.5" />Inscripción anticipada · {[...new Set(adel.map(d => d.ciclo))].join(', ')} <span className="font-normal normal-case tracking-normal">(cargos de un ciclo planificado; se cobran aquí y el recibo se emite en el ciclo activo)</span></td></tr>
                           )}
                           <tr onClick={() => toggle(i.id, idx)} className="h-9 cursor-pointer hover:bg-slate-50"
                             style={{ background: on ? '#EFF6FF' : '#FFFFFF', boxShadow: focus === idx ? 'inset 3px 0 0 #2563EB, inset 0 0 0 1px #BFDBFE' : 'none' }}>
                             <td className="border-b border-slate-100 px-2.5 text-center"><input type="checkbox" readOnly checked={on} className="pointer-events-none h-3.5 w-3.5 accent-accent" /></td>
-                            <td className="whitespace-nowrap border-b border-slate-100 px-2.5 font-medium" style={{ color: on ? '#0F172A' : '#334155' }}>{i.con + (i.abono ? ' · saldo tras abono' : '') + (i.ciclo ? ' · ' + i.ciclo : '')}</td>
+                            <td className="whitespace-nowrap border-b border-slate-100 px-2.5 font-medium" style={{ color: on ? '#0F172A' : '#334155' }}>{i.con + (i.abono ? ' · saldo tras abono' : '') + (i.ciclo ? ' · ' + i.ciclo : '')}{i.nd && <span className="ml-1.5 rounded border border-amber-300 bg-warn-bg px-1 py-px align-[1px] text-[9px] font-bold text-warn-fg" title={'Cargo creado por la nota de débito ' + i.nd} data-nd-tag>ND</span>}</td>
                             <td className="whitespace-nowrap border-b border-slate-100 px-2.5 text-slate-600">{i.al.replace(' · ', ' • ')} Primaria</td>
                             <td className="border-b border-slate-100 px-2.5 text-center font-mono text-[11px] text-slate-500">{i.vence}</td>
                             <td className="border-b border-slate-100 px-2.5 text-center"><Pill tone={tn} w={81}>{i.est}</Pill></td>
+                            {hayBeca && <td className="whitespace-nowrap border-b border-slate-100 px-2.5 text-right font-mono text-xs text-slate-600" data-testid="col-monto-real">{i.descuento?.beca ? fmt(i.descuento.beca.bruto) : <span className="text-slate-400">—</span>}</td>}
+                            {hayBeca && <td className="whitespace-nowrap border-b border-slate-100 px-2.5 text-right font-mono text-xs" data-testid="col-desc-beca">{i.descuento?.beca ? <span title={'Descuento por beca: ' + i.descuento.beca.motivo} className="font-semibold" style={{ color: '#16A34A' }}>− {fmt(i.descuento.beca.descuento)} <span className="text-[10px] font-normal">({+i.descuento.beca.pct.toFixed(2)}%)</span></span> : <span className="text-slate-400">—</span>}</td>}
                             <td className="border-b border-slate-100 px-2.5 text-right font-mono text-xs text-ink" style={{ fontWeight: on ? 600 : 400 }}>{fmt(i.monto)}</td>
+                            <td className="whitespace-nowrap border-b border-slate-100 px-2.5 text-right" data-testid="col-descuento">
+                              {(() => {
+                                // Solo el porcentaje (el monto va en el total del resumen; el motivo queda en el tooltip).
+                                const d = descDe(i, discount);
+                                return d && i.monto > 0
+                                  ? <span title={d.detalle ? `${d.motivo}: ${d.detalle}` : d.motivo} className="font-mono text-xs font-semibold" style={{ color: '#16A34A' }}>{+(d.monto / i.monto * 100).toFixed(2)}%</span>
+                                  : <span className="text-slate-400">—</span>;
+                              })()}
+                            </td>
+                            <td className="border-b border-slate-100 px-2.5 text-right font-mono text-xs text-ink" style={{ fontWeight: on ? 600 : 400 }}>{fmt(i.monto - (descDe(i, discount)?.monto ?? 0))}</td>
                           </tr>
                           </Fragment>
                         );
@@ -367,10 +436,11 @@ export default function Screen() {
                   <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600">Descuento
                     <select value={discount} onChange={e => onDiscount(e.target.value)} disabled={sl} title={sl ? SL_MSG : undefined} className="h-7 rounded-[5px] border border-slate-300 bg-white px-1.5 text-xs text-ink disabled:opacity-50">
                       <option value="none">Ninguno</option>
-                      {prontoPct > 0 && <option value="pronto">Pronto pago −{prontoPct}% (cuotas futuras)</option>}
+                      {(hayPronto || discount === 'pronto') && <option value="pronto" disabled={!selPronto && discount !== 'pronto'}>Pronto pago (según plan)</option>}
                       <option value="exo">Exonerar mora (supervisor)</option>
                     </select>
                   </label>
+                  {(hayPronto || discount === 'pronto') && !selPronto && <span className="text-[11px] text-slate-500" data-testid="pronto-sin-lineas">Pronto pago: ninguna línea seleccionada califica</span>}
                   {(cuenta.becas ?? []).map(b => <span key={b} className="text-[11px] text-slate-500">{b}</span>)}
                 </div>
               </>
@@ -399,7 +469,7 @@ export default function Screen() {
               {c.sel.map(i => (
                 <div key={i.id} className="flex justify-between gap-2.5 text-slate-600">
                   <span className="overflow-hidden text-ellipsis whitespace-nowrap">{i.con} ({kidName(i.kid)})</span>
-                  <span className="whitespace-nowrap font-mono text-xs font-medium text-ink">{fmt(i.monto)}</span>
+                  <span className="whitespace-nowrap font-mono text-xs font-medium text-ink" title={descDe(i, discount) ? `${fmt(i.monto)} − ${fmt(descDe(i, discount)!.monto)} (${descDe(i, discount)!.motivo})` : undefined}>{fmt(i.monto - (descDe(i, discount)?.monto ?? 0))}</span>
                 </div>
               ))}
               {c.sel.length === 0 && <div className="text-slate-400">Marca conceptos en la tabla para cobrarlos.</div>}
@@ -415,7 +485,7 @@ export default function Screen() {
           </div>
 
           <div className="flex flex-none flex-col gap-2.5">
-          {comprobantes && <ComprobanteSelector tipos={comprobantes.tipos} value={comp} onChange={setComp} datos={fiscal} onDatos={setFiscal} total={c.total} umbral={comprobantes.umbralConsumoIdentificado}
+          {comprobantes && <ComprobanteSelector tipos={comprobantes.tipos} value={comp} onChange={setComp} datos={fiscal} onDatos={setFiscal} registrada={cuenta?.fiscal} total={c.total} umbral={comprobantes.umbralConsumoIdentificado}
             habitual={cuenta?.comprobanteHabitual ?? null} recordar={recordar} onRecordar={setRecordar} disabled={sl} ecf={comprobantes.ecf} />}
           <div className="flex flex-col gap-2.5 border-t border-slate-200 pt-3.5">
             <div className="flex items-center justify-between">
@@ -509,12 +579,14 @@ export default function Screen() {
             </div>
             <div className="flex items-center gap-2">
               <button onClick={() => runPrint('cuadre', docCuadre())} className="flex h-[34px] items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-[13px] font-medium hover:bg-slate-100"><i className={pbc.icon} style={{ animation: pbc.spin }} />{pbc.label}</button>
+              <button onClick={() => { setCuadreErr(''); setCuadreOpen(true); }} disabled={cuadrando || !turnoData || (!recibos.length && !(turnoData.ventas?.length) && !(turnoData.notas?.length))} data-testid="turno-cuadrar" className="flex h-[34px] items-center gap-1.5 rounded-md bg-slate-900 px-3 text-[13px] font-medium text-white hover:bg-slate-800 disabled:opacity-40"><i className="ph ph-lock-key" />Cuadrar turno</button>
               <button onClick={() => setHistOpen(false)} aria-label="Cerrar" className="h-[34px] w-[34px] rounded-md border border-slate-300 bg-white"><i className="ph ph-x" /></button>
             </div>
           </div>
           <div className="flex gap-6 border-b border-slate-200 px-[18px] py-2.5 text-xs text-slate-600">
             <span>Recibos: <b className="font-mono text-ink">{recibos.length}</b></span>
-            <span>Cobrado neto: <b className="font-mono text-ink">{fmt(recibos.filter(r => r.est !== 'Anulado').reduce((a, r) => a + r.monto, 0))}</b></span>
+            <span>Cobrado neto: <b className="font-mono text-ink" data-testid="turno-neto">{fmt(turnoData?.resumen.netoActivo ?? recibos.filter(r => r.est !== 'Anulado').reduce((a, r) => a + r.monto, 0))}</b></span>
+            {(turnoData?.resumen.devoluciones ?? 0) > 0 && <span>Devoluciones: <b className="font-mono text-info-fg" data-testid="turno-devoluciones">−{fmt(turnoData!.resumen.devoluciones!)}</b></span>}
           </div>
           <div className="flex-1 overflow-auto">
             {histRecs.map(rc => {
@@ -527,21 +599,55 @@ export default function Screen() {
                   <div className="flex flex-col gap-0.5"><span className="font-mono text-xs font-semibold">{rc.id}</span><span className="font-mono text-[11px] text-slate-500">{rc.hora}</span></div>
                   <div className="flex min-w-0 flex-col gap-0.5"><span className="overflow-hidden text-ellipsis whitespace-nowrap font-medium">{rc.tutor}</span><span className="font-mono text-[11px] text-slate-500">{rc.tipoComprobante ? rc.tipoComprobante.nombre + ' · ' : ''}{rc.ncf} · {rc.metodo}</span></div>
                   <span className="text-right font-mono text-xs font-semibold" style={{ textDecoration: an ? 'line-through' : 'none' }}>{fmt(rc.monto)}</span>
-                  <span><Pill tone={t} w={148}>{an ? 'Anulado · ' + rc.nc : rc.abono ? 'Abono · saldo ' + fmt(rc.saldo) : 'Activo'}</Pill></span>
+                  <span><Pill tone={t} w={148}>{an ? 'Anulado · ' + rc.nc : (rc.acreditado ?? 0) > 0 ? 'Con NC · neto ' + fmt(rc.neto ?? 0) : rc.abono ? 'Abono · saldo ' + fmt(rc.saldo) : 'Activo'}</Pill></span>
                   <button disabled={an || sl} title={sl ? SL_MSG : undefined} onClick={e => { e.stopPropagation(); anular(rc); }} className="h-7 rounded-[5px] border border-red-300 bg-white text-xs font-medium text-red-600 hover:bg-bad-bg" style={{ opacity: an ? 0.4 : 1 }}>Anular</button>
                 </div>
               );
             })}
+            {(turnoData?.ventas?.length ?? 0) > 0 && <div data-turno-ventas>
+              <div className="border-b border-t border-slate-200 bg-slate-50 px-[18px] py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Ventas rápidas del turno</div>
+              {turnoData!.ventas!.map(v => (
+                <div key={v.id} className="grid grid-cols-[84px_minmax(0,1fr)_120px_140px] items-center gap-2.5 border-b border-slate-100 px-[18px] py-2 text-xs">
+                  <div className="flex flex-col gap-0.5"><span className="font-mono font-semibold">{v.id}</span><span className="font-mono text-[11px] text-slate-500">{v.hora}</span></div>
+                  <span className="min-w-0 truncate font-medium">Venta rápida<span className="ml-2 font-mono text-[11px] text-slate-500">{v.ncf} · {v.metodo}</span></span>
+                  <span className="text-right font-mono font-semibold">{fmt(v.monto)}</span><span><Pill tone={TONE.ok} w={148}>Venta rápida</Pill></span>
+                </div>
+              ))}
+            </div>}
+            {(turnoData?.notas?.length ?? 0) > 0 && <div data-turno-notas>
+              <div className="border-b border-t border-slate-200 bg-slate-50 px-[18px] py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Devoluciones / Notas del turno</div>
+              {turnoData!.notas!.map(nt => (
+                <button key={nt.id} onClick={() => setNotasOpen({})} title={'Ver en Notas de Crédito / Débito'} className="grid w-full grid-cols-[84px_minmax(0,1fr)_120px_140px] items-center gap-2.5 border-b border-slate-100 px-[18px] py-2 text-left text-xs hover:bg-slate-50">
+                  <span className="font-mono font-semibold">{nt.id}</span><span className="min-w-0 truncate">{nt.tutor}<span className="ml-2 font-mono text-[11px] text-slate-500">{nt.ncf} · {nt.documento.id}</span></span>
+                  <span className="text-right font-mono font-semibold" style={{ color: nt.clase === 'CREDITO' ? '#1D4ED8' : '#B45309' }}>{nt.clase === 'CREDITO' ? '−' : '+'}{fmt(nt.monto)}</span><span className="truncate text-slate-600">{nt.motivo.nombre}</span>
+                </button>
+              ))}
+            </div>}
           </div>
         </SideDrawer>
       )}
 
-      {turnoRecibo && <ReciboModal recibo={turnoRecibo} toast={toast} origen="historial" z={80} onClose={() => setTurnoRecibo(null)} />}
+      {turnoRecibo && <ReciboModal recibo={turnoRecibo} toast={toast} origen="historial" z={80} onClose={() => setTurnoRecibo(null)} onNota={sl ? undefined : c => emitirNotaDe(turnoRecibo, c)} />}
       {receipt && <ReciboModal recibo={receipt} toast={toast} onClose={() => setReceipt(null)} />}
-      {recHistOpen && <HistorialRecibos toast={toast} initialQ={q} onClose={() => setRecHistOpen(false)} />}
+      {recHistOpen && <HistorialRecibos toast={toast} initialQ={q} onClose={() => setRecHistOpen(false)} onNota={sl ? undefined : emitirNotaDe} />}
+      {notasOpen && <NotasFiscales toast={toast} inicial={notasOpen.inicial} onClose={() => setNotasOpen(null)} onCambio={() => { void cargarTurno(); if (cuenta) void search(cuenta.cedula, true); }} />}
 
       {guard && <SupervisorGuardModal cfg={guard} onClose={() => setGuard(null)} />}
+      {cuadreOpen && turnoData && (
+        <ConfirmModal title="¿Cuadrar y cerrar el turno?" icon="ph ph-lock-key" confirmLabel="Cuadrar turno" busyLabel="Cuadrando…" busy={cuadrando} error={cuadreErr} onConfirm={() => void cuadrar()} onClose={() => setCuadreOpen(false)}>
+          <p>Se guarda el cuadre y el historial de turno empezará vacío.</p>
+          <dl data-testid="cuadre-resumen" className="mt-2.5 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 rounded-lg bg-slate-50 p-3 text-[13px]">
+            <dt>Turno {turnoData.turno} · desde</dt><dd className="text-right font-medium text-ink">{turnoData.desdeISO ? new Date(turnoData.desdeISO).toLocaleString('es-DO', { dateStyle: 'short', timeStyle: 'short' }) : turnoData.desde}</dd>
+            <dt>Recibos (emitidos / anulados)</dt><dd className="text-right font-medium text-ink">{turnoData.resumen.emitidos} / {turnoData.resumen.anulados}</dd>
+            <dt>Ventas rápidas</dt><dd className="text-right font-medium text-ink">{turnoData.ventas?.length ?? 0}</dd>
+            <dt>Notas de crédito/débito</dt><dd className="text-right font-medium text-ink">{turnoData.notas?.length ?? 0}</dd>
+            {Object.entries(turnoData.resumen.porMetodo ?? {}).map(([k, v]) => <Fragment key={k}><dt>Neto {k}</dt><dd className="text-right font-medium text-ink">{fmt(v)}</dd></Fragment>)}
+            <dt className="border-t border-slate-200 pt-1 font-semibold text-ink">Total neto</dt><dd className="border-t border-slate-200 pt-1 text-right font-semibold text-ink">{fmt(turnoData.resumen.netoActivo)}</dd>
+          </dl>
+        </ConfirmModal>
+      )}
       {toasts}
+      {alertaSec.modal}
     </div>
   );
 }

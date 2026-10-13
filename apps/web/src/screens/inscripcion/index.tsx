@@ -1,11 +1,19 @@
 import { usePerfil } from '../../components/finanzas/perfil';
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { InsConfigResp, InsPlan, InsReq, InsResp, InsTutorBusq, InsTutoresResp, InsTutorDatos, InsTutorLookup } from '@stodia/shared';
 import { api } from '../../lib/api';
 import { useToast } from '../../components/system/UiProvider';
 import { pillBase } from '../../components/system/styles';
 import { errMsg, fmt } from '../../components/finanzas/fin';
 import { SL_MSG, useCiclo } from '../../lib/ciclo';
+import { AvisoBorrador, limpiarPrefijo, useDraft } from '../../lib/useDraft';
+import { descargarPdf, runPrint, usePrintBusy } from '../../components/finanzas/print';
+import { docContratoInscripcion, introContrato } from '../../components/personas/printContrato';
+
+/** Borrador del asistente: se conserva al navegar/recargar; se borra al emitir con éxito y al pulsar «Nueva inscripción». Sin contraseñas/PIN/archivos: solo datos del formulario. */
+const DRAFT = 'inscripcion:';
+// Los documentos marcados por defecto (el primero) no cuentan como cambio del usuario.
+const sinDocsPorDefecto = (v: InsReq): InsReq => ({ ...v, docs: v.docs.every((d, i) => d === (i === 0)) ? [] : v.docs });
 
 const STEPS = ['Datos del alumno', 'Tutores', 'Curso y tanda', 'Plan de pago', 'Cierre y factura'];
 const inp = 'h-[38px] rounded-md border border-slate-300 px-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-[3px] focus:ring-accent-soft';
@@ -73,9 +81,10 @@ const estadoCuenta = (v: number) => (v > 0
   : <span className="rounded-full bg-ok-bg px-2 py-0.5 text-[11px] font-semibold text-green-800">Al día</span>);
 
 /** Buscador con autocompletado de tutores ya registrados (combobox accesible, resultados de 10 en 10). */
-function TutorBuscador({ excluirId, excluirMsg, onPick, onMeta }: { excluirId?: string; excluirMsg?: string; onPick: (t: InsTutorBusq) => void; onMeta: (b: BecaH) => void }) {
+function TutorBuscador({ draftKey, excluirId, excluirMsg, onPick, onMeta }: { draftKey: string; excluirId?: string; excluirMsg?: string; onPick: (t: InsTutorBusq) => void; onMeta: (b: BecaH) => void }) {
   const uid = useId();
-  const [q, setQ] = useState(''), [page, setPage] = useState(1), [res, setRes] = useState<InsTutoresResp | null>(null);
+  const [q, setQ] = useDraft(DRAFT + 'q:' + draftKey, ''); // solo el texto buscado; los resultados se piden de nuevo al servidor
+  const [page, setPage] = useState(1), [res, setRes] = useState<InsTutoresResp | null>(null);
   const [loading, setLoading] = useState(false), [err, setErr] = useState(''), [act, setAct] = useState(0);
   const t = q.trim();
   useEffect(() => {
@@ -114,7 +123,7 @@ function TutorBuscador({ excluirId, excluirMsg, onPick, onMeta }: { excluirId?: 
       {err && <div role="alert" className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-800"><i className="ph ph-warning-circle" />{err}</div>}
       {res && !err && res.total === 0 && !loading && <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-[13px] text-slate-600">No hay tutores con ese criterio: elige <b>Nuevo tutor</b>.</div>}
       {rows.length > 0 && (
-        <ul id={`${uid}-lb`} role="listbox" aria-label="Tutores encontrados" className={`m-0 flex list-none flex-col gap-1.5 p-0 ${loading ? 'opacity-60' : ''}`}>
+        <ul id={`${uid}-lb`} role="listbox" aria-label="Tutores encontrados" className={`m-0 flex max-h-[280px] list-none flex-col gap-1.5 overflow-y-auto p-0 pr-1 ${loading ? 'opacity-60' : ''}`}>
           {rows.map((r, i) => {
             const bloq = !r.disponible || r.id === excluirId;
             return (
@@ -175,19 +184,24 @@ function FamiliaCard({ t, datos, onDatos, onCambiar, resp }: { t: InsTutorBusq; 
 export default function Screen() {
   const perfil = usePerfil();
   const toast = useToast();
-  const { soloLectura: sl, cicloSeleccionado, cicloActivo, volverAlActivo } = useCiclo(); // Fase 2D: la inscripción solo opera en el ciclo ACTIVO
+  const { soloLecturaFin: sl, cicloSeleccionado, cicloActivo, volverAlActivo, ciclos: ciclosApp } = useCiclo(); // un ciclo CERRADO es solo lectura; el activo y el planificado (inscripción anticipada) admiten inscribir
+  const [destino, setDestino] = useDraft<string>(DRAFT + 'destino', () => (ciclosApp.find(c => c.n === cicloSeleccionado)?.estado === 'Planificado' ? cicloSeleccionado : '')); // '' = ciclo activo
   const [cfg, setCfg] = useState<InsConfigResp | null>(null);
-  const [step, setStep] = useState(1);
-  const [w, setW] = useState<InsReq>(blank);
   const [done, setDone] = useState<InsResp | null>(null);
+  const act = !done; // inscripción emitida: ya no hay borrador que conservar
+  const [step, setStep] = useDraft(DRAFT + 'step', 1, { activo: act });
+  const [servQ, setServQ] = useDraft(DRAFT + 'servQ', '', { activo: act }); // buscador de servicios recurrentes (paso Plan de pago)
+  const [w, setW, , metaW] = useDraft<InsReq>(DRAFT + 'w', blank, { activo: act, transformar: sinDocsPorDefecto });
   const [busy, setBusy] = useState(false);
+  const pbtn = usePrintBusy();
   const set = (p: Partial<InsReq>) => setW(s => ({ ...s, ...p }));
   // Tutor existente (buscador) o nuevo (cédula), por tutor. En modo existente el id elegido viaja en tutorLegalId / tutorFinancieroId.
-  const [legalMode, setLegalMode] = useState<Modo>('nuevo'), [finMode, setFinMode] = useState<Modo>('nuevo');
-  const [legalSel, setLegalSel] = useState<InsTutorBusq | null>(null), [finSel, setFinSel] = useState<InsTutorBusq | null>(null);
-  const [becaH, setBecaH] = useState<BecaH>(null), [aplicarBeca, setAplicarBeca] = useState(false);
+  const dopt = { activo: act };
+  const [legalMode, setLegalMode] = useDraft<Modo>(DRAFT + 'legalMode', 'nuevo', dopt), [finMode, setFinMode] = useDraft<Modo>(DRAFT + 'finMode', 'nuevo', dopt);
+  const [legalSel, setLegalSel] = useDraft<InsTutorBusq | null>(DRAFT + 'legalSel', null, dopt), [finSel, setFinSel] = useDraft<InsTutorBusq | null>(DRAFT + 'finSel', null, dopt);
+  const [becaH, setBecaH] = useDraft<BecaH>(DRAFT + 'becaH', null, dopt), [aplicarBeca, setAplicarBeca] = useDraft(DRAFT + 'aplicarBeca', false, dopt);
 
-  const loadCfg = () => api.get<InsConfigResp>('/inscripcion/config').then(c => { setCfg(c); setW(s => (s.docs.length ? s : { ...s, docs: c.docs.map((_, i) => i === 0) })); }).catch(e => toast(errMsg(e), 'bad'));
+  const loadCfg = (d = destino) => api.get<InsConfigResp>('/inscripcion/config' + (d ? '?ciclo=' + encodeURIComponent(d) : '')).then(c => { setCfg(c); setW(s => (s.docs.length ? s : { ...s, docs: c.docs.map((_, i) => i === 0) })); }).catch(e => toast(errMsg(e), 'bad'));
   useEffect(() => { void loadCfg(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const L = useLookup(legalMode === 'nuevo' ? w.legalCed : '');
@@ -195,8 +209,9 @@ export default function Screen() {
   const F = w.finSame ? L : Fl;
   // Tutor existente: se precargan sus datos guardados (editables). Al cambiar a un tutor nuevo se limpian.
   const keyL = L.found ? L.id : '', keyF = Fl.found ? Fl.id : '';
-  useEffect(() => { setW(s => ({ ...s, legalDatos: L.found && L.datos ? { ...L.datos } : datosVacios() })); }, [keyL]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setW(s => ({ ...s, finDatos: Fl.found && Fl.datos ? { ...Fl.datos } : datosVacios() })); }, [keyF]); // eslint-disable-line react-hooks/exhaustive-deps
+  const prevKeys = useRef({ l: keyL, f: keyF }); // en el primer render no se pisan los datos de contacto restaurados del borrador
+  useEffect(() => { if (prevKeys.current.l === keyL) return; prevKeys.current.l = keyL; setW(s => ({ ...s, legalDatos: L.found && L.datos ? { ...L.datos } : datosVacios() })); }, [keyL]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (prevKeys.current.f === keyF) return; prevKeys.current.f = keyF; setW(s => ({ ...s, finDatos: Fl.found && Fl.datos ? { ...Fl.datos } : datosVacios() })); }, [keyF]); // eslint-disable-line react-hooks/exhaustive-deps
   const legalName = legalMode === 'existente' ? legalSel?.nombre ?? '' : L.found ? L.nombre! : w.legalName.trim();
   const finName = w.finSame ? legalName : finMode === 'existente' ? finSel?.nombre ?? '' : F.found ? F.nombre! : w.finName.trim();
   const legalId = legalMode === 'existente' ? legalSel?.id ?? '' : L.found ? L.id ?? '' : '';
@@ -204,11 +219,12 @@ export default function Screen() {
   // Familia: hijos de los tutores existentes elegidos (sin repetir). Con hijos y tipo de beca de hermanos en el catálogo se ofrece «Aplicar beca Plan Hermano».
   const familia = [...new Map([legalSel, w.finSame ? null : finSel].flatMap(t => t?.hijos ?? []).map(h => [h.nombre + h.seccion, h])).values()];
   const hermanoOk = familia.length > 0 && !!becaH;
-  const reset = () => { setLegalMode('nuevo'); setFinMode('nuevo'); setLegalSel(null); setFinSel(null); setAplicarBeca(false); };
+  const reset = () => { setLegalMode('nuevo'); setFinMode('nuevo'); setLegalSel(null); setFinSel(null); setAplicarBeca(false); setBecaH(null); setServQ(''); limpiarPrefijo(DRAFT); };
   const tanda = w.tanda || cfg?.tandas[0] || '';
   const gradoId = w.grado || cfg?.grados[0]?.id || '';
   const gradoLbl = cfg?.grados.find(g => g.id === gradoId)?.label ?? '';
-  const INS = cfg?.inscripcion ?? 0;
+  const sinTildes = (t: string) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const serviciosVis = (cfg?.servicios ?? []).filter(s => !servQ.trim() || sinTildes(s.n).includes(sinTildes(servQ.trim())));
   const servM = (cfg?.servicios ?? []).reduce((a, s) => a + (w.serv.includes(s.k) ? s.price : 0), 0);
   const money = (n: number) => Math.round(n * 100) / 100;
   const totalDe = (p: InsPlan) => money((p.anual[tanda] ?? p.anual['*'] ?? 0) * (1 - p.desc / 100));
@@ -217,6 +233,9 @@ export default function Screen() {
   const plan = planes.find(p => p.id === w.plan) ?? planes[0];
   const planOk = !!plan && totalDe(plan) > 0;
   const cuotaPer = !plan ? 0 : plan.freq === 1 ? cuotaDe(plan) + servM : plan.n === 1 ? servM : cuotaDe(plan);
+  // Cuota de inscripcion segun la modalidad (el servidor la resuelve por plan) y cuota de materiales del plan (cargo aparte, no va en la factura inicial).
+  const INS = plan?.inscripcion ?? cfg?.inscripcion ?? 0, MAT = plan?.materiales ?? 0;
+  const insOrigen = !plan ? '' : plan.inscripcionOrigen === 'plan' ? `definida por el plan «${plan.name}»` : plan.inscripcionOrigen === 'respaldo' ? `el plan «${plan.name}» no tiene cuota propia: se usa la fija` : 'cuota fija para todos';
   const factura = INS + (plan && plan.n === 1 ? totalDe(plan) : 0);
   const ok: (string | null)[] = [null,
     w.nombre.trim() && w.apellido.trim() && w.fnac ? null : 'Completa nombres, apellidos y fecha de nacimiento',
@@ -229,13 +248,32 @@ export default function Screen() {
   const secs = (cfg?.cupos ?? []).filter(c => c.tanda === tanda && c.grado === gradoId);
   const blocked = step < 5 && !!ok[step];
 
+  /** Documento oficial del contrato con lo que devolvió el servidor (tutores, calendario real, regla del plan) y lo capturado en el asistente. */
+  const contratoDe = (r: InsResp) => {
+    const c = r.contrato;
+    if (!c) return null;
+    return docContratoInscripcion({
+      ciclo: c.ciclo, ctr: c.ctr, fecha: c.fecha,
+      alumno: { nombre: fullName, code: r.code, fnac: w.fnac, grado, sec: w.sec, tanda, docs: (cfg?.docs ?? []).map((n, i) => ({ n, ok: !!w.docs[i] })) },
+      legal: c.tutorLegal, financiero: w.finSame || c.tutorLegal.cedula === c.tutorFinanciero.cedula ? null : c.tutorFinanciero,
+      plan: c.plan, calendario: c.calendario, servicios: c.servicios,
+      pago: { inscripcion: r.inscripcion ?? INS, inscripcionOrigen: insOrigen, materiales: r.materiales, beca: r.becaId && becaH ? `${becaH.nombre} (${becaH.pct}%)` : undefined, factura: r.factura, ncf: r.ncf, metodo: 'Factura emitida · el cobro se registra en Caja' },
+    });
+  };
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const bajarContrato = async (r: InsResp) => { const d = contratoDe(r); if (!d) return; setPdfBusy(true); try { toast('Descargado · ' + await descargarPdf(d), 'ok'); } catch (e) { toast(errMsg(e), 'bad'); } finally { setPdfBusy(false); } };
+  const abrirContrato = (r: InsResp) => { const d = contratoDe(r); if (d) runPrint('ins-contrato', d); else toast('El servidor no devolvió los datos del contrato', 'warn'); };
+
   const next = async () => {
     if (step < 5) { if (ok[step]) { toast(ok[step]!, 'warn'); return; } setStep(step + 1); return; }
-    if (done) { setW(blank()); reset(); setStep(1); setDone(null); void loadCfg(); return; }
+    if (done) { setW(blank()); reset(); setStep(1); setDone(null); void loadCfg(); return; } // «Nueva inscripción»: empieza de cero
     setBusy(true);
     try {
-      setDone(await api.post<InsResp>('/inscripcion', { ...w, tutorLegalId: legalMode === 'existente' ? legalSel?.id : undefined, tutorFinancieroId: !w.finSame && finMode === 'existente' ? finSel?.id : undefined, becaHermano: aplicarBeca && hermanoOk ? true : undefined, tanda, grado: gradoId, plan: plan?.id ?? '' }));
+      const res = await api.post<InsResp>('/inscripcion', { ...w, ciclo: destino || undefined, tutorLegalId: legalMode === 'existente' ? legalSel?.id : undefined, tutorFinancieroId: !w.finSame && finMode === 'existente' ? finSel?.id : undefined, becaHermano: aplicarBeca && hermanoOk ? true : undefined, tanda, grado: gradoId, plan: plan?.id ?? '' });
+      setDone(res);
+      limpiarPrefijo(DRAFT); // emitida con éxito: el borrador se descarta (act=false impide que se reescriba)
       toast('Contrato firmado y factura de inscripción emitida', 'ok');
+      abrirContrato(res); // el documento se abre una sola vez al emitir; después se reabre con «Imprimir contrato»
     } catch (e) { toast(errMsg(e), 'bad'); } finally { setBusy(false); }
   };
 
@@ -251,7 +289,7 @@ export default function Screen() {
       </div>
       {mode === 'existente' && (sel
         ? <FamiliaCard key={sel.id} t={sel} datos={datos} onDatos={onDatos} onCambiar={() => onSel(null)} resp={resp} />
-        : <TutorBuscador excluirId={excluirId} excluirMsg={excluirMsg} onPick={onSel} onMeta={setBecaH} />)}
+        : <TutorBuscador draftKey={role} excluirId={excluirId} excluirMsg={excluirMsg} onPick={onSel} onMeta={setBecaH} />)}
       {mode === 'nuevo' && <>
         <label className="flex max-w-[280px] flex-col gap-1 text-xs font-medium text-slate-600">Cédula / Pasaporte
           <input value={ced} onChange={e => onCed(fmtCed(e.target.value))} placeholder="000-0000000-0" className={`${inp} font-mono`} />
@@ -285,12 +323,24 @@ export default function Screen() {
     <div className="flex max-w-[1100px] flex-col gap-4">
       <div>
         <h1 className="m-0 text-xl font-semibold tracking-tight">Inscripción y Prematrícula</h1>
-        <p className="mb-0 mt-1 text-[13px] text-slate-600">Nuevo ingreso{cfg?.ciclo ? ` · Ciclo ${cfg.ciclo}` : ''}</p>
+        <AvisoBorrador meta={{ ...metaW, descartar: () => { setW(blank()); reset(); setStep(1); setDestino(''); void loadCfg(''); } }} className="mt-2 w-fit" />
+        <p className="mb-0 mt-1 text-[13px] text-slate-600">Nuevo ingreso{cfg?.ciclo ? ` · Ciclo ${cfg.ciclo}${cfg.anticipada ? ' (planificado)' : ''}` : ''}</p>
+        {cfg && (cfg.ciclosDestino?.length ?? 0) > 1 && (
+          <label className="mt-2 flex items-center gap-2 text-[13px] text-slate-700">
+            <span className="font-medium">Ciclo destino</span>
+            <select value={destino || cicloActivo} disabled={step > 1 || !!done || busy} title={step > 1 ? 'Vuelve al primer paso para cambiar el ciclo destino' : undefined}
+              onChange={e => { const n = e.target.value, d = n === cicloActivo ? '' : n; setDestino(d); void loadCfg(d); }}
+              className="h-8 rounded-md border border-slate-300 bg-white px-2 text-[13px]">
+              {cfg.ciclosDestino!.map(c => <option key={c.n} value={c.n}>{c.estado === 'Activo' ? `${c.n} (activo)` : `Inscripción anticipada ${c.n}`}</option>)}
+            </select>
+          </label>
+        )}
+        {cfg?.anticipada && <p className="mb-0 mt-1.5 text-xs text-sky-700"><i className="ph ph-calendar-dots" /> Pre-inscripción: el alumno se matricula en el ciclo planificado y sus cargos se generan allí; el ciclo activo no cambia.</p>}
       </div>
 
       {sl && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-800">
-          <i className="ph ph-lock-simple" /><span className="min-w-0 flex-1">La inscripción solo se realiza en el ciclo activo ({cicloActivo}). Estás consultando {cicloSeleccionado} (solo lectura).</span>
+          <i className="ph ph-lock-simple" /><span className="min-w-0 flex-1">El ciclo {cicloSeleccionado} está cerrado: no admite inscripciones (solo lectura). La inscripción se realiza en el ciclo activo ({cicloActivo}) o en un ciclo planificado.</span>
           <button onClick={volverAlActivo} className="h-8 rounded-md border border-amber-400 bg-white px-3 text-xs font-semibold text-amber-900 hover:bg-amber-100">Ir al ciclo activo</button>
         </div>
       )}
@@ -392,9 +442,17 @@ export default function Screen() {
                 ))}
                 {cfg && planes.length === 0 && <div className="text-[13px] text-amber-700">Configura planes y precios (Finanzas → Planes de Pago) para poder inscribir.</div>}
               </div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">Servicios recurrentes opcionales</div>
-              <div className="flex flex-col gap-2">
-                {(cfg?.servicios ?? []).map(s => (
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">Servicios recurrentes opcionales</div>
+                {w.serv.length > 0 && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">{w.serv.length} {w.serv.length === 1 ? 'seleccionado' : 'seleccionados'}</span>}
+              </div>
+              <div className="relative">
+                <i className="ph ph-magnifying-glass pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input value={servQ} onChange={e => setServQ(e.target.value)} placeholder="Buscar servicio (transporte, ruta, comedor…)" aria-label="Buscar servicio" className="h-9 w-full rounded-md border border-slate-300 bg-white pl-8 pr-2.5 text-[13px] outline-none focus:border-accent" />
+              </div>
+              {serviciosVis.length === 0 && (cfg?.servicios ?? []).length > 0 && <div className="text-xs text-slate-500">Ningún servicio coincide con «{servQ}».</div>}
+              <div className="flex max-h-[320px] flex-col gap-2 overflow-y-auto pr-1">
+                {serviciosVis.map(s => (
                   <label key={s.k} className={`flex cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2.5 text-[13px] ${w.serv.includes(s.k) ? 'border-blue-200 bg-blue-50' : 'border-slate-200 bg-white'}`}>
                     <input type="checkbox" checked={w.serv.includes(s.k)} onChange={() => set({ serv: w.serv.includes(s.k) ? w.serv.filter(k => k !== s.k) : [...w.serv, s.k] })} className="h-4 w-4 accent-accent" />
                     <span className="flex-1">{s.n}</span><span className="font-mono text-[13px] font-medium">{fmt(s.price)}/mes</span>
@@ -409,7 +467,7 @@ export default function Screen() {
               <div className="text-[15px] font-semibold">Cierre: contrato y factura</div>
               <div className="rounded-md border border-slate-200 bg-slate-50 px-5 py-[18px] text-[13px] leading-[1.6] text-slate-700">
                 <div className="text-xs font-bold tracking-[0.06em] text-ink">CONTRATO DE SERVICIOS EDUCATIVOS{cfg?.ciclo ? ` · ${cfg.ciclo}` : ''}</div>
-                Entre <b>{perfil?.nombre ?? ''}</b> (RNC <span className="font-mono">{perfil?.rnc ?? ''}</span>) y <b>{finName || '—'}</b>, en calidad de tutor financiero de <b>{fullName}</b>, inscrito en <b>{grado} {w.sec || '?'} · {tanda}</b>, bajo el plan <b>{plan?.name ?? '—'}</b>.{plan?.mora ? ` Las cuotas vencidas generan recargo ${plan.mora}${plan.gracia ? ` tras ${plan.gracia} días de gracia` : ''}.` : ''}
+                {introContrato({ colegio: perfil?.nombre ?? '', rnc: perfil?.rnc ?? '', tutor: finName, alumno: fullName, curso: `${grado} ${w.sec || '?'} · ${tanda}`, plan: plan?.name ?? '', mora: plan?.mora, gracia: plan?.gracia })}
               </div>
               <div className="flex flex-wrap gap-2">
                 {([['digital', 'Firma digitalizada', 'ph-signature'], ['fisica', 'Imprimir para firma física', 'ph-printer']] as const).map(([k, l, ic]) => (
@@ -419,13 +477,23 @@ export default function Screen() {
               {done && (
                 <div className="flex items-center gap-3 rounded-lg bg-ok-bg p-3.5 text-green-900">
                   <i className="ph-fill ph-check-circle text-[28px] text-green-600" />
-                  <div className="text-[13px] leading-normal"><b>Inscripción completada.</b> Matrícula <span className="font-mono">{done.code}</span> · Factura de inscripción NCF <span className="font-mono">{done.ncf}</span> por <b className="font-mono">{fmt(done.factura)}</b>. Cartera de {done.cuotas} cuotas generada (las que ya cumplieron su fecha de vencimiento se muestran como Vencidas).{done.becaId && <> Solicitud de beca Plan Hermano registrada como <b>Pendiente</b>: se aprueba en Becas.</>}</div>
+                  <div className="text-[13px] leading-normal"><b>Inscripción completada.</b> Matrícula <span className="font-mono">{done.code}</span> · Factura de inscripción NCF <span className="font-mono">{done.ncf}</span> por <b className="font-mono">{fmt(done.factura)}</b>. Cartera de {done.cuotas} cuotas generada{done.materiales ? <> más la <b>cuota de materiales</b> de <span className="font-mono">{fmt(done.materiales)}</span> como cargo aparte</> : null} (las que ya cumplieron su fecha de vencimiento se muestran como Vencidas).{done.becaId && <> Solicitud de beca Plan Hermano registrada como <b>Pendiente</b>: se aprueba en Becas.</>}</div>
                 </div>
               )}
+              {done?.contrato && (() => { const pb = pbtn('ins-contrato', 'Imprimir contrato', 'ph ph-printer'); return (
+                <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-3.5">
+                  <div className="text-[13px] text-slate-700"><b>Contrato de servicios educativos e inscripción</b> generado ({done.contrato.ctr}). Incluye datos del estudiante, tutores con cédula, plan y calendario de cuotas, servicios, información de pago, cláusulas y firmas. Ya se abrió en la vista previa; desde aquí puedes reabrirlo, imprimirlo o descargar el PDF (con folio de verificación).</div>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={() => abrirContrato(done)} className="flex h-9 items-center gap-1.5 rounded-md border border-accent bg-blue-50 px-3.5 text-[13px] font-medium text-info-fg"><i className={pb.icon} style={{ animation: pb.spin }} />{pb.label}</button>
+                    <button onClick={() => void bajarContrato(done)} disabled={pdfBusy} className="flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium text-ink disabled:opacity-60"><i className={pdfBusy ? 'ph ph-circle-notch' : 'ph ph-file-pdf'} style={{ animation: pdfBusy ? 'spin 0.8s linear infinite' : 'none' }} />{pdfBusy ? 'Generando…' : 'Descargar PDF'}</button>
+                  </div>
+                </div>
+              ); })()}
             </div>
           )}
 
-          <div className="flex items-center justify-between gap-2.5 border-t border-slate-200 pt-3">
+          {/* Pegada al borde inferior de la vista: Atrás / Continuar siempre a mano sin bajar hasta el final del paso. */}
+          <div className="sticky bottom-0 z-10 flex items-center justify-between gap-2.5 border-t border-slate-200 bg-white pb-1 pt-3">
             <button onClick={() => step > 1 && !done && setStep(step - 1)} className={`h-[38px] rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium hover:bg-slate-100 ${step > 1 && !done ? 'visible' : 'invisible'}`}>Atrás</button>
             <span className="text-xs text-amber-700">{step < 5 ? ok[step] ?? '' : ''}</span>
             <button onClick={next} disabled={busy || sl} title={sl ? SL_MSG : undefined} className={`h-[38px] rounded-md px-[18px] text-[13px] font-semibold text-white hover:brightness-95 ${blocked ? 'cursor-not-allowed bg-blue-300' : 'cursor-pointer bg-accent'}`}>{step < 5 ? 'Continuar' : done ? 'Nueva inscripción' : 'Emitir contrato y factura'}</button>
@@ -437,6 +505,9 @@ export default function Screen() {
           {summary.map(([k, v]) => <div key={k} className="flex justify-between gap-2.5 text-[13px]"><span className="text-slate-500">{k}</span><span className="text-right font-medium">{v}</span></div>)}
           <div className="flex flex-col gap-1.5 border-t border-dashed border-slate-200 pt-2.5">
             <div className="flex justify-between text-[13px]"><span className="text-slate-500">Cuota periódica</span><span className="font-mono text-[13px] font-semibold">{fmt(cuotaPer)}</span></div>
+            <div className="flex justify-between text-[13px]"><span className="text-slate-500">Inscripción</span><span className="font-mono text-[13px] font-semibold" data-testid="ins-monto">{fmt(INS)}</span></div>
+            {insOrigen && <div className="text-right text-[11px] text-slate-500" data-testid="ins-origen">{insOrigen}</div>}
+            {MAT > 0 && <div className="flex justify-between text-[13px]"><span className="text-slate-500">Cuota de materiales (aparte)</span><span className="font-mono text-[13px] font-semibold" data-testid="ins-materiales">{fmt(MAT)}</span></div>}
             <div className="flex justify-between text-[13px]"><span className="text-slate-500">Factura inicial</span><span className="font-mono text-[15px] font-semibold">{fmt(factura)}</span></div>
           </div>
         </aside>

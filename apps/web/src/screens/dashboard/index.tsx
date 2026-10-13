@@ -44,7 +44,7 @@ export default function Screen() {
   for (const t of d.ncfSinSecuencia ?? []) alerts.push({ icon: 'ph-fill ph-warning-octagon', c: '#DC2626', t: `Sin secuencia de comprobante: ${t}`, d: 'No se puede cobrar con este comprobante. Registra una autorización DGII en Configuración › Fiscal.', btn: 'Configurar', go: 'config?tab=fiscal' });
   if (d.becasPendientes) alerts.push({ icon: 'ph-fill ph-clock', c: '#D97706', t: d.becasPendientes + (d.becasPendientes === 1 ? ' beca pendiente' : ' becas pendientes') + ' de aprobación', d: 'Requieren la firma del Director Financiero antes de impactar la cartera.', btn: 'Revisar', go: 'becas' });
   if (!hist && d.alumnosEnMora) alerts.push({ icon: 'ph-fill ph-user-minus', c: '#DC2626', t: d.alumnosEnMora + (d.alumnosEnMora === 1 ? ' alumno con tutor en mora' : ' alumnos con tutor en mora'), d: 'Envía un aviso masivo o imprime las notificaciones de cobro.', btn: 'Avisar', go: 'comunica' });
-  if (!hist && !d.ecfCargado) alerts.push({ icon: 'ph-fill ph-certificate', c: '#D97706', t: 'Certificado e-CF no cargado', d: 'La facturación electrónica no podrá firmarse.', btn: 'Cargar', go: 'config?tab=fiscal' });
+  if (!hist && !d.ecfCargado) alerts.push({ icon: 'ph-fill ph-certificate', c: '#D97706', t: 'Certificado e-CF no cargado', d: 'Cárgalo para la facturación electrónica.', btn: 'Cargar', go: 'config?tab=fiscal' });
   if (d.stockBajo) alerts.push({ icon: 'ph-fill ph-package', c: '#D97706', t: d.stockBajo + ' artículos con stock bajo en inventario', d: 'Registra una entrada de mercancía para reponerlos.', btn: 'Inventario', go: 'inventario' });
 
   const maxBar = Math.max(1, ...d.barras.map(b => b.v));

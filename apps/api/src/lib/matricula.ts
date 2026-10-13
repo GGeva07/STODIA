@@ -3,8 +3,10 @@
  *   - `Matricula` es la FUENTE de verdad del historial (alumno, ciclo, seccion, estado).
  *   - `Alumno.seccionId` es la seccion del ciclo ACTIVO: toda escritura que la cambie (inscripcion, Directorio, cierre de ciclo, seeds) llama a
  *     `sincronizarMatricula` para que la Matricula del ciclo activo diga lo mismo. La auditoria (docs/db-auditoria.sql, seccion D) verifica 0 divergencias.
- *   - Estado de la matricula del ciclo activo = estado del alumno (Activo/Inactivo -> Activo, Retirado -> Retirado). Al CERRAR un ciclo la matricula
- *     pasa a Promovido / Repitente / Graduado y se crea la del ciclo siguiente: el historial nunca se pierde.
+ *   - Estado de la matricula del ciclo activo = estado del alumno (Activo/Inactivo -> Activo, Retirado -> Retirado). El CIERRE del ciclo (contable,
+ *     lib/ciclo-cierre.ts) NO cambia matriculas; la PROMOCION de curso (lib/promocion.ts) pasa la del ciclo de origen a Promovido / Repitente / Graduado
+ *     y crea/ajusta la del ciclo siguiente: el historial nunca se pierde. Un estado final puesto por la promocion no se revierte al sincronizar
+ *     (salvo que el alumno pase a Retirado).
  */
 import type { Prisma } from '@prisma/client';
 import type { ExpFicha } from '@stodia/shared';
@@ -13,13 +15,13 @@ import { cicloActivoRow } from './ciclo';
 import { hoyISO, zonaHoraria } from './cxc';
 
 type Db = typeof prisma | Prisma.TransactionClient;
-export const ESTADOS_MATRICULA = ['Activo', 'Retirado', 'Promovido', 'Repitente', 'Graduado'] as const;
+export const ESTADOS_MATRICULA = ['Activo', 'Retirado', 'Promovido', 'Repitente', 'Graduado', 'Reservado', 'Liberada'] as const;
 export const idMatricula = (alumnoId: string, cicloId: string) => `mat-${cicloId.slice(4)}-${alumnoId}`;
 
 /** Estado de la matricula del ciclo ACTIVO segun el estado del alumno (null = el alumno no se matricula: Egresado). */
 export function estadoMatriculaDe(estadoAlumno: string): 'Activo' | 'Retirado' | null {
   if (estadoAlumno === 'Retirado') return 'Retirado';
-  if (estadoAlumno === 'Egresado') return null;
+  if (estadoAlumno === 'Egresado' || estadoAlumno === 'Preinscrito') return null; // Preinscrito = alumno nuevo de un ciclo PLANIFICADO: su matricula es la de ese ciclo, no la del activo
   return 'Activo';
 }
 
@@ -39,8 +41,11 @@ export async function sincronizarMatricula(alumnoId: string, db: Db = prisma): P
     return;
   }
   const fechaRetiro = estado === 'Retirado' ? cur.fechaRetiro ?? hoy : null;
-  if (cur.seccionId !== a.seccionId || cur.estado !== estado || cur.fechaRetiro !== fechaRetiro) {
-    await db.matricula.update({ where: { id: cur.id }, data: { seccionId: a.seccionId, estado, fechaRetiro } });
+  // Promovido / Repitente / Graduado (promocion aplicada antes del cierre) se conservan mientras el alumno siga vigente.
+  // Reservado / Liberada (reinscripcion, Etapa B) tambien se conservan: solo el pago o el Director los cambian.
+  const final = estado === 'Activo' && ['Promovido', 'Repitente', 'Graduado', 'Reservado', 'Liberada'].includes(cur.estado) ? cur.estado : estado;
+  if (cur.seccionId !== a.seccionId || cur.estado !== final || cur.fechaRetiro !== fechaRetiro) {
+    await db.matricula.update({ where: { id: cur.id }, data: { seccionId: a.seccionId, estado: final, fechaRetiro } });
   }
 }
 
@@ -50,7 +55,7 @@ export async function reconciliarMatriculas(db: Db = prisma): Promise<number> {
   if (!c) return 0;
   const hoy = hoyISO(await zonaHoraria());
   const [alumnos, tienen, insc] = await Promise.all([
-    db.alumno.findMany({ where: { estado: { not: 'Egresado' } }, select: { id: true, seccionId: true, estado: true } }),
+    db.alumno.findMany({ where: { estado: { notIn: ['Egresado', 'Preinscrito'] } }, select: { id: true, seccionId: true, estado: true } }),
     db.matricula.findMany({ where: { cicloId: c.id }, select: { alumnoId: true } }),
     db.persInscripcion.findMany({ where: { cicloId: c.id }, select: { alumnoId: true, createdAt: true } }),
   ]);

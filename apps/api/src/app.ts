@@ -5,7 +5,7 @@ import authPlugin from './plugins/auth';
 import licensePlugin from './plugins/license';
 import { registerModules } from './plugins/modules';
 import { mensajeIntegridad } from './lib/errores';
-import { CicloError, cicloPedido, cicloReq, errorCicloCerrado, escrituraPorCiclo } from './lib/ciclo';
+import { CicloError, cicloAdmiteEscritura, cicloPedido, cicloReq, errorCicloCerrado, escrituraPorCiclo } from './lib/ciclo';
 
 export async function buildApp() {
   // TRUST_PROXY: 'true' (confiar en X-Forwarded-*; solo si la API va tras el proxy nginx de la web, /api) o N saltos. Por defecto false.
@@ -44,7 +44,7 @@ export async function buildApp() {
     if (!escrituraPorCiclo(req.method, req.url) || !cicloPedido(req)) return;
     try {
       const c = await cicloReq(req);
-      if (c.estado !== 'Activo') return reply.code(409).send(errorCicloCerrado(c.nombre, c.estado));
+      if (!cicloAdmiteEscritura(c, req.url)) return reply.code(409).send(errorCicloCerrado(c.nombre, c.estado));
     } catch (e) {
       if (e instanceof CicloError) return reply.code(e.status).send({ error: e.message });
       throw e;

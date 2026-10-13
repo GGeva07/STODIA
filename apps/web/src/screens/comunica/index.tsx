@@ -1,4 +1,5 @@
 import { SL_MSG, useSoloLectura } from '../../lib/ciclo';
+import { AvisoBorrador, useDraft } from '../../lib/useDraft';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CmnCanal, CmnDestinatarios, CmnEnviarRes, CmnMensajeDto } from '@stodia/shared';
 import { api } from '../../lib/api';
@@ -18,10 +19,11 @@ interface Bandeja { rows: CmnMensajeDto[]; conteos: Record<string, number> }
 export default function Screen() {
   const { toast, toasts } = useToastStack();
   const sl = useSoloLectura(); // Fase 2D: en otro ciclo los destinatarios se consultan pero no se envía nada
-  const [tab, setTab] = useState<'write' | 'out'>('write');
-  const [f, setF] = useState({ grado: '', tanda: '', cuenta: 'mora', canales: [true, true, false, false], asunto: '', msg: '' });
+  // Mensaje en redacción: se conserva al navegar; al enviarlo con éxito se vacían asunto y mensaje.
+  const [tab, setTab] = useDraft<'write' | 'out'>('comunica:tab', 'write');
+  const [f, setF, , metaF] = useDraft('comunica:form', { grado: '', tanda: '', cuenta: 'mora', canales: [true, true, false, false], asunto: '', msg: '' });
   const [dest, setDest] = useState<CmnDestinatarios>({ tutores: [], muestra: null });
-  const [filtro, setFiltro] = useState('');
+  const [filtro, setFiltro] = useDraft('comunica:filtro', '');
   const [band, setBand] = useState<Bandeja>({ rows: [], conteos: {} });
   const [batch, setBatch] = useState<string | null>(null);
   const [progress, setProgress] = useState({ hechos: 0, total: 0 });
@@ -73,6 +75,7 @@ export default function Screen() {
     if (!n) { toast('El filtro no tiene destinatarios', 'warn'); return; }
     try {
       const r = await api.post<CmnEnviarRes>('/comunica/enviar', { grado: f.grado, tanda: f.tanda, cuenta: f.cuenta, canales: CN.filter((_, i) => f.canales[i]), asunto: f.asunto, mensaje: f.msg });
+      setF(x => ({ ...x, asunto: '', msg: '' }));
       setBatch(r.batch); setProgress({ hechos: 0, total: r.total }); setPolling(r.enCola > 0); void loadBandeja();
       if (r.sinCanal) toast(`${r.sinCanal} mensajes quedaron como «Canal no configurado» (no se enviaron)${r.enCola ? ` · ${r.enCola} en cola` : ''}`, 'warn');
       else toast(`${r.total} mensajes en cola · puedes seguir trabajando`, 'info');
@@ -105,6 +108,7 @@ export default function Screen() {
       {tab === 'write' && (
         <div className="grid items-start gap-3.5" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(340px,1fr))' }}>
           <section className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4">
+            <AvisoBorrador meta={metaF} className="w-fit" />
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">Destinatarios</div>
             <div className="grid grid-cols-3 gap-2.5">
               <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Grado

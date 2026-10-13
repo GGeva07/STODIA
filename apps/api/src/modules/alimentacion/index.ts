@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { AliData, AliMenuDto, AliPlanDto, AliPlanInput } from '@stodia/shared';
 import { prisma } from '../../db';
 import { norm } from '../../seed-data';
@@ -37,8 +37,16 @@ const uno = async (id: string, insc: number): Promise<AliPlanDto> => toDto((awai
 const plugin: FastifyPluginAsync = async app => {
   const read = { onRequest: [app.authenticate, app.requireRole('Super Admin', 'Cajero', 'Encargado Comedor')] };
   const write = { onRequest: [app.authenticate, app.requireRole('Super Admin', 'Encargado Comedor')] };
+  // Director Académico: lectura y PLANES (no menú) si la matriz de pantallas guardada le da 'alimentacion'.
+  const pantalla = app.requireScreen('alimentacion');
+  const conDirector = (roles: string[]) => ({ onRequest: [app.authenticate, async (req: FastifyRequest, reply: FastifyReply) => {
+    if (roles.includes(req.user.rol)) return;
+    if (req.user.rol === 'Director Académico') return pantalla(req, reply);
+    reply.code(403).send({ error: 'Sin permiso' });
+  }] });
+  const readD = conDirector(['Super Admin', 'Cajero', 'Encargado Comedor']), writeD = conDirector(['Super Admin', 'Encargado Comedor']);
 
-  app.get('/', read, async (): Promise<AliData> => {
+  app.get('/', readD, async (): Promise<AliData> => {
     await ensureMenuSemanal();
     const [planes, insc, menu, porAlergia, cat, tz] = await Promise.all([
       prisma.aliPlan.findMany({ orderBy: { id: 'asc' }, include: INC }), inscritosPorPlan(), prisma.aliMenu.findMany({ orderBy: { orden: 'asc' }, include: { alergias: { include: { alergia: true }, orderBy: { alergiaId: 'asc' } } } }),
@@ -59,7 +67,7 @@ const plugin: FastifyPluginAsync = async app => {
     return { planes: planes.map(p => toDto(p, insc.get(p.id) ?? 0, cat)), menu: m, alumnosConAlergia: conAlergia, semana: { desde: sem.desde, hasta: sem.hasta, label: sem.label }, catalogos };
   });
 
-  app.post<{ Body: AliPlanInput }>('/planes', write, async (req, reply) => {
+  app.post<{ Body: AliPlanInput }>('/planes', writeD, async (req, reply) => {
     const err = validate(req.body, await prisma.aliPlan.findMany());
     if (err) return reply.code(400).send({ error: err });
     const last = (await prisma.aliPlan.findMany({ select: { id: true } })).map(p => Number(p.id.replace('ALI-', '')) || 0);
@@ -69,7 +77,7 @@ const plugin: FastifyPluginAsync = async app => {
     return uno(id, 0);
   });
 
-  app.put<{ Params: { id: string }; Body: AliPlanInput }>('/planes/:id', write, async (req, reply) => {
+  app.put<{ Params: { id: string }; Body: AliPlanInput }>('/planes/:id', writeD, async (req, reply) => {
     const { id } = req.params;
     if (!(await prisma.aliPlan.findUnique({ where: { id } }))) return reply.code(404).send({ error: 'Plan no encontrado' });
     const err = validate(req.body, await prisma.aliPlan.findMany({ where: { id: { not: id } } }));
@@ -79,7 +87,7 @@ const plugin: FastifyPluginAsync = async app => {
     return uno(id, (await inscritosPorPlan()).get(id) ?? 0);
   });
 
-  app.delete<{ Params: { id: string } }>('/planes/:id', write, async (req, reply) => {
+  app.delete<{ Params: { id: string } }>('/planes/:id', writeD, async (req, reply) => {
     const p = await prisma.aliPlan.findUnique({ where: { id: req.params.id } });
     if (!p) return reply.code(404).send({ error: 'Plan no encontrado' });
     const insc = await prisma.comCarnet.count({ where: { aliPlanId: p.id } });

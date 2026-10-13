@@ -15,6 +15,7 @@ import { api, getConfig } from '../../lib/api';
 import { loadPerfil, perfilSync } from './perfil';
 import { Paper, type PDoc } from './print';
 import { sha256Hex } from './sha256';
+import { conFirmas } from './firmas';
 
 const PX_IN = 96;
 const SCALE = 2;
@@ -34,7 +35,10 @@ async function montar(doc: PDoc, idx: number[]) {
   await document.fonts.ready;
   await Promise.all(['400 12px Inter', '600 12px Inter', '700 12px Inter', '400 11px "JetBrains Mono"', '600 11px "JetBrains Mono"'].map(f => document.fonts.load(f, 'Aá1').catch(() => [])));
   await Promise.all(Array.from(host.querySelectorAll('img')).map(i => i.decode().catch(() => undefined)));
+  // flushSync no siempre confirma el render de un root recién creado (p. ej. con dos copias de react-dom en dev): se espera el commit en vez de asumirlo.
+  for (let t = 0; t < 40 && host.querySelectorAll('[data-pdf-page]').length < idx.length; t++) await new Promise(r => setTimeout(r, 25));
   const nodes = Array.from(host.querySelectorAll<HTMLElement>('[data-pdf-page]'));
+  if (!nodes.length) { root.unmount(); host.remove(); throw new Error('No se pudo preparar el documento para el PDF'); }
   return { nodes, limpiar: () => { root.unmount(); host.remove(); } };
 }
 
@@ -139,7 +143,8 @@ async function agregarHoja(pdf: jsPDF | null, doc: PDoc, pi: number, folio: Foli
 }
 
 /** PDF completo del documento (todas las páginas en un solo archivo). Se monta y captura una hoja a la vez (coste lineal). */
-export async function generarPdf(doc: PDoc): Promise<Blob> {
+export async function generarPdf(docIn: PDoc): Promise<Blob> {
+  const doc = await conFirmas(docIn);
   const idx = doc.pages.map((_, i) => i);
   const folios = doc.folioTipo ? await pedirFolios(doc, idx) : null;
   let pdf: jsPDF | null = null;
@@ -151,7 +156,8 @@ export async function generarPdf(doc: PDoc): Promise<Blob> {
 const safe = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
 
 /** Un PDF por página (p. ej. un boletín por alumno), empaquetados en un ZIP; cada uno con su propio folio. */
-export async function generarZipPorPagina(doc: PDoc): Promise<Blob> {
+export async function generarZipPorPagina(docIn: PDoc): Promise<Blob> {
+  const doc = await conFirmas(docIn);
   const files: Record<string, Uint8Array> = {};
   const idx = doc.pages.map((_, i) => i);
   const folios = doc.folioTipo ? await pedirFolios(doc, idx) : null; // un solo viaje al servidor

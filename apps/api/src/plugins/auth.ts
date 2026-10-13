@@ -1,8 +1,9 @@
 import fp from 'fastify-plugin';
 import jwt from '@fastify/jwt';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { Rol } from '@stodia/shared';
+import type { Rol, ScreenId } from '@stodia/shared';
 import { config } from '../config';
+import { cfgGet } from '../lib/sisconfig';
 
 /** Rutas permitidas al rol Tutor. */
 const TUTOR_OK = /^\/(auth\/|movil\/tutor(\/|$)|config$|licencia$)/;
@@ -24,5 +25,13 @@ export default fp(async app => {
 
   app.decorate('requireRole', (...roles: Rol[]) => async (req: FastifyRequest, reply: FastifyReply) => {
     if (!roles.includes(req.user.rol)) reply.code(403).send({ error: 'Sin permiso' });
+  });
+
+  // Permiso por pantalla: lo que el Super Admin asigna en Configuración › Roles y permisos (matriz guardada en el servidor) manda también en la API.
+  // Sin fila para el rol en la matriz solo entra el Super Admin.
+  app.decorate('requireScreen', (screen: ScreenId) => async (req: FastifyRequest, reply: FastifyReply) => {
+    if (req.user.rol === 'Super Admin') return;
+    const m = (await cfgGet('access')) as Record<string, ScreenId[]>;
+    if (!m[req.user.rol]?.includes(screen)) reply.code(403).send({ error: 'Sin permiso' });
   });
 });

@@ -35,5 +35,5 @@ export const moraLbl = (f: PlanForm) =>
 
 export const emptyPlan = (moraPct = 0): PlanForm => ({
   porTanda: false, tm: {}, name: '', freq: '1', n: '10',
-  anual: '', desc: '0', start: '8', dia: '1', gracia: '5', moraTipo: 'pct', moraVal: String(moraPct), pronto: '0', prontoDia: '3', estado: 'Activo',
+  anual: '', desc: '0', start: '8', dia: '1', gracia: '5', moraTipo: 'pct', moraVal: String(moraPct), pronto: '0', prontoDias: '10', estado: 'Activo', inscripcion: '', materiales: '', materialesOn: false,
 });

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { LoginRequest, LoginResponse, SessionUser } from '@stodia/shared';
+import { limpiarBorradores } from './draftStore';
 import { api, setCicloHeader, tokenStore, UNAUTHORIZED_EVENT } from './api';
 
 const USER_KEY = 'stodia.user';
@@ -30,11 +31,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     tokenStore.clear();
     setCicloHeader(''); // el ciclo consultado (Fase 2D) no sobrevive a la sesión: la API vuelve a no recibir X-Ciclo
     localStorage.removeItem(USER_KEY);
+    limpiarBorradores(); // los borradores de formularios (sessionStorage) no sobreviven a la sesión
     setUser(null);
   }, []);
 
   const setSession = useCallback((res: LoginResponse) => {
     tokenStore.set(res.token);
+    limpiarBorradores(res.user.usuario); // otro usuario: descarta los borradores ajenos
     localStorage.setItem(USER_KEY, JSON.stringify(res.user));
     setUser(res.user);
   }, []);

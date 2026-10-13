@@ -7,9 +7,10 @@ import SupervisorGuardModal, { type GuardCfg } from '../../components/finanzas/S
 import { TONE, errMsg } from '../../components/finanzas/fin';
 import { useFinCfg } from '../../components/finanzas/finConfig';
 import { SL_MSG, useCiclo } from '../../lib/ciclo';
+import { AvisoBorrador, useDraft } from '../../lib/useDraft';
 
 const GRID = 'grid grid-cols-[minmax(0,1.4fr)_130px_120px_minmax(0,1fr)_120px_170px_190px] gap-2';
-const TAG: Record<string, readonly [string, string]> = { Aprobada: TONE.ok, Pendiente: TONE.warn, Revocada: TONE.mute };
+const TAG: Record<string, readonly [string, string]> = { Aprobada: TONE.ok, Pendiente: TONE.warn, Revocada: TONE.mute, Rechazada: TONE.bad };
 const sel = 'h-9 rounded-md border border-slate-300 bg-white px-2 text-[13px] text-ink';
 const lbl = 'flex flex-col gap-1 text-xs font-medium text-slate-600';
 
@@ -22,16 +23,19 @@ export default function Screen() {
   const isSuper = user?.rol === 'Super Admin';
   const canApprove = isSuper || user?.rol === 'Director Académico';
   const cfg = useFinCfg();
-  const { soloLectura: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: las becas son las del ciclo elegido en el selector global; en otro ciclo, solo lectura
+  const { soloLecturaFin: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: las becas son las del ciclo elegido en el selector global; en otro ciclo, solo lectura
   const [periodo, setPeriodo] = useState('');
   const [tipos, setTipos] = useState<string[]>([]);
   const [BC, setBC] = useState<string[]>([]);
   const [ests, setEsts] = useState<Estudiante[]>([]);
-  const [qEst, setQEst] = useState('');
+  const [qEst, setQEst] = useDraft('becas:qEst', ''); // solo el texto de búsqueda
   const per = periodo || cicloSeleccionado || cfg.ciclo;
   const [rows, setRows] = useState<BecaFin[]>([]);
-  const [bf, setBf] = useState<BecaForm | null>(null);
+  // El formulario «Registrar beca» (y su apertura) se conserva al navegar; solo «Cancelar» o registrar con éxito lo descartan (setBf(null)).
+  const [bf, setBf, , metaBf] = useDraft<BecaForm | null>('becas:form', null);
   const [guard, setGuard] = useState<GuardCfg | null>(null);
+  const [fil, setFil] = useDraft<'todas' | 'pend'>('becas:fil', 'todas');
+  const [dec, setDec] = useDraft<{ b: BecaFin; accion: 'aprobar' | 'rechazar'; motivo: string; busy: boolean } | null>('becas:dec', null, { transformar: d => d && { ...d, busy: false } }); // motivo de aprobar/rechazar en edición
 
   const load = useCallback(() => api.get<BecaFin[]>('/becas?periodo=' + encodeURIComponent(per)).then(setRows).catch(e => toast(errMsg(e), 'bad')), [per, toast]);
   useEffect(() => { void load(); }, [load]);
@@ -49,10 +53,21 @@ export default function Screen() {
   const openForm = () => { setQEst(''); setBf({ est: '', tipo: tipos[0] ?? '', modo: 'pct', valor: '25', conc: BC.map((_, i) => i === 0), exp: '' }); };
   const replace = (b: BecaFin) => setRows(r => r.map(x => (x.id === b.id ? b : x)));
 
-  const approve = (b: BecaFin) => {
-    const fin = async (pin?: string) => { replace(await api.post<BecaFin>(`/becas/${b.id}/aprobar`, { pin })); toast(`Beca ${b.exp} aprobada · impacta estado de cuenta`, 'ok'); };
-    if (canApprove) void fin().catch(e => toast(errMsg(e), 'bad'));
-    else setGuard({ title: 'Aprobación del Director Financiero', desc: 'Tu rol puede registrar becas pero no aprobarlas. El Director Financiero debe autorizar con su clave en esta pantalla.', pin: true, label: 'Aprobar beca', onOk: fin });
+  /** Aprobar / Rechazar una solicitud Pendiente. Director/Super Admin: modal propio con motivo opcional; otros roles: clave de supervisor. */
+  const decidir = (b: BecaFin, accion: 'aprobar' | 'rechazar') => {
+    const ok = accion === 'aprobar' ? `Beca ${b.exp} aprobada · ya impacta el contrato y el estado de cuenta` : `Solicitud ${b.exp} rechazada · no se aplica ningún descuento`;
+    if (canApprove) { setDec({ b, accion, motivo: '', busy: false }); return; }
+    setGuard({ title: accion === 'aprobar' ? 'Aprobación de la Dirección' : 'Rechazo de la Dirección', desc: 'Tu rol puede registrar becas pero no resolverlas. Un supervisor debe autorizar con su clave en esta pantalla.', pin: true, label: accion === 'aprobar' ? 'Aprobar beca' : 'Rechazar solicitud',
+      onOk: async pin => { replace(await api.post<BecaFin>(`/becas/${b.id}/${accion}`, { pin })); toast(ok, accion === 'aprobar' ? 'ok' : 'warn'); } });
+  };
+  const confirmarDec = async () => {
+    if (!dec || dec.busy) return;
+    setDec({ ...dec, busy: true });
+    try {
+      replace(await api.post<BecaFin>(`/becas/${dec.b.id}/${dec.accion}`, { motivo: dec.motivo.trim() || undefined }));
+      toast(dec.accion === 'aprobar' ? `Beca ${dec.b.exp} aprobada · ya impacta el contrato y el estado de cuenta` : `Solicitud ${dec.b.exp} rechazada · no se aplica ningún descuento`, dec.accion === 'aprobar' ? 'ok' : 'warn');
+      setDec(null);
+    } catch (e) { toast(errMsg(e), 'bad'); setDec({ ...dec, busy: false }); }
   };
   const revoke = (b: BecaFin) =>
     setGuard({
@@ -75,6 +90,9 @@ export default function Screen() {
     } catch (e) { toast(errMsg(e), 'bad'); }
   };
 
+  const pendN = rows.filter(r => r.estado === 'Pendiente').length;
+  const vista = fil === 'pend' ? rows.filter(r => r.estado === 'Pendiente') : rows;
+
   const addBtn = (
     <button onClick={openForm} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-dark disabled:opacity-50"><i className="ph ph-plus" />Registrar Beca</button>
   );
@@ -92,13 +110,21 @@ export default function Screen() {
         </div>
       </div>
 
+      {pendN > 0 || fil === 'pend' ? (
+        <div className="flex items-center gap-2">
+          <button onClick={() => setFil('todas')} className={`h-8 rounded-full border px-3 text-xs font-medium ${fil === 'todas' ? 'border-blue-200 bg-blue-50 text-accent' : 'border-slate-300 bg-white text-slate-600'}`}>Todas ({rows.length})</button>
+          <button onClick={() => setFil('pend')} className={`h-8 rounded-full border px-3 text-xs font-medium ${fil === 'pend' ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-300 bg-white text-slate-600'}`}>Pendientes de aprobación ({pendN})</button>
+        </div>
+      ) : null}
+
       {rows.length > 0 ? (
         <section className="overflow-auto rounded-lg border border-slate-200 bg-white">
           <div className="min-w-[960px]">
             <div className={`${GRID} border-b border-slate-200 bg-slate-50 px-3.5 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-600`}>
               <span>Estudiante</span><span>Tipo</span><span>Regla</span><span>Aplica a</span><span>Expediente</span><span>Estado</span><span />
             </div>
-            {rows.map(b => {
+            {vista.length === 0 && <div className="px-3.5 py-6 text-[13px] text-slate-500">No hay solicitudes pendientes de aprobación.</div>}
+            {vista.map(b => {
               const t = TAG[b.estado];
               return (
                 <div key={b.id} className={`${GRID} min-h-9 items-center border-b border-slate-100 px-3.5 py-1.5 text-[13px]`}>
@@ -112,7 +138,8 @@ export default function Screen() {
                     <span className="text-[11px] text-slate-500">{b.aprob}</span>
                   </span>
                   <span className="flex justify-end gap-1.5">
-                    {b.estado === 'Pendiente' && <button onClick={() => approve(b)} disabled={sl} title={sl ? SL_MSG : undefined} className="h-7 rounded-md border border-blue-200 bg-white px-2.5 text-xs font-medium text-accent hover:bg-blue-50 disabled:opacity-50">{canApprove ? 'Aprobar' : 'Solicitar aprobación'}</button>}
+                    {b.estado === 'Pendiente' && <button onClick={() => decidir(b, 'rechazar')} disabled={sl} title={sl ? SL_MSG : undefined} className="h-7 rounded-md border border-red-300 bg-white px-2.5 text-xs font-medium text-red-600 hover:bg-bad-bg disabled:opacity-50">Rechazar</button>}
+                    {b.estado === 'Pendiente' && <button onClick={() => decidir(b, 'aprobar')} disabled={sl} title={sl ? SL_MSG : undefined} className="h-7 rounded-md border border-blue-200 bg-white px-2.5 text-xs font-medium text-accent hover:bg-blue-50 disabled:opacity-50">{canApprove ? 'Aprobar' : 'Solicitar aprobación'}</button>}
                     {b.estado === 'Aprobada' && <button onClick={() => revoke(b)} disabled={sl} title={sl ? SL_MSG : undefined} className="h-7 rounded-md border border-red-300 bg-white px-2.5 text-xs font-medium text-red-600 hover:bg-bad-bg disabled:opacity-50">Revocar</button>}
                   </span>
                 </div>
@@ -134,6 +161,7 @@ export default function Screen() {
           <div className="w-[520px] max-w-full overflow-hidden rounded-[10px] bg-white shadow-2xl">
             <div className="border-b border-slate-200 px-5 py-4 text-base font-semibold">Registrar beca</div>
             <div className="flex flex-col gap-3 px-5 py-4">
+              <AvisoBorrador meta={metaBf} />
               <label className={lbl}>Estudiante
                 <input value={qEst} onChange={e => setQEst(e.target.value)} placeholder="Buscar por nombre o carnet…" className="h-9 rounded-md border border-slate-300 px-2 text-[13px] font-normal" />
                 <select value={bf.est} onChange={e => setBf({ ...bf, est: e.target.value })} className={sel}>{(ests.some(s => s.label === bf.est) ? ests : [...(bf.est ? [{ id: '', label: bf.est }] : []), ...ests]).map(s => <option key={s.id + s.label} value={s.label}>{s.label}</option>)}{ests.length === 0 && <option value="">Sin resultados</option>}</select>
@@ -165,6 +193,24 @@ export default function Screen() {
             <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
               <button onClick={() => setBf(null)} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">Cancelar</button>
               <button onClick={() => void save()} className="h-9 rounded-md bg-accent px-3.5 text-[13px] font-semibold text-white">Enviar a aprobación</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {dec && (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-900/50 p-5">
+          <div className="w-[460px] max-w-full overflow-hidden rounded-[10px] bg-white shadow-2xl">
+            <div className="border-b border-slate-200 px-5 py-4 text-base font-semibold">{dec.accion === 'aprobar' ? 'Aprobar solicitud de beca' : 'Rechazar solicitud de beca'}</div>
+            <div className="flex flex-col gap-3 px-5 py-4 text-[13px]">
+              <div><b>{dec.b.est}</b> <span className="text-xs text-slate-500">· {dec.b.grado}</span><div className="mt-0.5 text-slate-600">{dec.b.tipo} · <span className="font-mono">{dec.b.regla}</span> · {dec.b.conceptos}</div><div className="mt-0.5 text-[11px] text-slate-500">{dec.b.aprob}</div></div>
+              <div className="rounded-md bg-slate-100 px-2.5 py-2 text-xs text-slate-600">{dec.accion === 'aprobar' ? 'Al aprobarla pasa a vigente y se aplica al contrato y al estado de cuenta del alumno.' : 'Quedará registrada como Rechazada y no se aplicará ningún descuento.'}</div>
+              <label className={lbl}>Motivo (opcional)
+                <textarea value={dec.motivo} maxLength={300} onChange={e => setDec({ ...dec, motivo: e.target.value })} rows={3} className="rounded-md border border-slate-300 p-2 text-[13px] font-normal" />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
+              <button onClick={() => setDec(null)} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">Cancelar</button>
+              <button onClick={() => void confirmarDec()} disabled={dec.busy} className={`h-9 rounded-md px-3.5 text-[13px] font-semibold text-white disabled:opacity-50 ${dec.accion === 'aprobar' ? 'bg-accent' : 'bg-red-600'}`}>{dec.accion === 'aprobar' ? 'Aprobar beca' : 'Rechazar solicitud'}</button>
             </div>
           </div>
         </div>

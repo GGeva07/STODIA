@@ -108,7 +108,7 @@ export interface Alumno {
 }
 
 // ---------- Finanzas (ERP / CxC) ----------
-export type CargoTipo = 'col' | 'mora' | 'com' | 'srv' | 'mat' | 'tra';
+export type CargoTipo = 'col' | 'mora' | 'com' | 'srv' | 'mat' | 'tra' | 'reins';
 export type CargoEstado = 'Pendiente' | 'Por vencer' | 'Vencida' | 'Pagada';
 
 /** Cargo pendiente en el POS (POS0). */
@@ -137,7 +137,7 @@ export interface PlanPago {
   n: number; anual: number; desc: number;
   start: number; dia: number; gracia: number;
   moraTipo: 'none' | 'pct' | 'fijo'; moraVal: number;
-  pronto: number; prontoDia: number;
+  pronto: number; prontoDias: number;
   porTanda?: boolean; tm?: Record<string, number>;
   estado: Estado; alumnos: number;
 }
@@ -188,3 +188,5 @@ export * from './sistema';
 export * from './operacion';
 export * from './academico';
 export * from './personas';
+export * from './promocion';
+export * from './reinscripcion';

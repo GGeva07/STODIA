@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ReciboFin, ReciboListaRes } from '@stodia/shared';
+import type { ReciboFin, ReciboListaFila, ReciboListaRes } from '@stodia/shared';
+import { runPrint } from '../../components/finanzas/print';
+import { docRecibos } from '../../components/finanzas/printListados';
 import { api } from '../../lib/api';
-import { Modal } from '../../components/system/UiProvider';
+import SideDrawer from '../../components/finanzas/SideDrawer';
 import { TONE, errMsg, fmt } from '../../components/finanzas/fin';
 import { useCiclo } from '../../lib/ciclo';
 import type { ToastTone } from '../../components/useToastStack';
@@ -18,10 +20,10 @@ function fechas(r: Rango, d1: string, d2: string): { desde: string; hasta: strin
   if (r === 'rango') return { desde: d1, hasta: d2 };
   return { desde: '', hasta: '' };
 }
-const COLS = 'grid-cols-[minmax(110px,0.9fr)_minmax(120px,0.9fr)_minmax(110px,0.9fr)_minmax(0,1.6fr)_minmax(0,1.1fr)]';
+const COLS = 'grid-cols-[minmax(104px,0.9fr)_minmax(84px,0.7fr)_minmax(100px,0.9fr)_minmax(0,1.3fr)_minmax(64px,0.6fr)]';
 
 /** Modal «Historial de Recibos» del POS: listado paginado del ciclo elegido; al abrir un recibo se apila encima el MISMO modal que tras emitir (ReciboModal). */
-export default function HistorialRecibos({ onClose, toast, initialQ = '' }: { onClose: () => void; toast: (msg: string, tone?: ToastTone) => void; initialQ?: string }) {
+export default function HistorialRecibos({ onClose, toast, initialQ = '', onNota }: { onClose: () => void; toast: (msg: string, tone?: ToastTone) => void; initialQ?: string; onNota?: (recibo: ReciboFin, clase: 'credito' | 'debito') => void }) {
   const { cicloSeleccionado } = useCiclo();
   // Si el buscador del POS tenía texto al abrir el historial, el listado nace ya filtrado con ese texto (sin parpadeo de «todos»).
   const [q, setQ] = useState(initialQ.trim()), [qd, setQd] = useState(initialQ.trim());
@@ -34,10 +36,12 @@ export default function HistorialRecibos({ onClose, toast, initialQ = '' }: { on
   const [err, setErr] = useState('');
   const [active, setActive] = useState(0);
   const [opening, setOpening] = useState('');
+  const [printing, setPrinting] = useState(false);
   const [recibo, setRecibo] = useState<ReciboFin | null>(null);
   const seq = useRef(0);
   const rowsRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => { if (recibo) return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h); }, [recibo, onClose]);
   useEffect(() => { const t = setTimeout(() => { setQd(q.trim()); setPage(1); }, 300); return () => clearTimeout(t); }, [q]);
 
   const load = useCallback(async () => {
@@ -63,6 +67,28 @@ export default function HistorialRecibos({ onClose, toast, initialQ = '' }: { on
     try { setRecibo(await api.get<ReciboFin>('/cobros/recibos/' + encodeURIComponent(id))); } catch (e) { toast(errMsg(e), 'bad'); } finally { setOpening(''); }
   };
 
+  const imprimir = async () => {
+    if (printing) return;
+    setPrinting(true);
+    try {
+      const { desde, hasta } = fechas(rango, d1, d2);
+      const todas: ReciboListaFila[] = []; let suma = 0;
+      for (let p = 1; ; p++) {
+        const qs = new URLSearchParams({ page: String(p), size: '100' });
+        if (qd) qs.set('q', qd);
+        if (desde) qs.set('desde', desde);
+        if (hasta) qs.set('hasta', hasta);
+        if (mios) qs.set('mios', '1');
+        const r = await api.get<ReciboListaRes>('/cobros/recibos?' + qs.toString());
+        todas.push(...r.rows); suma = r.suma;
+        if (!r.rows.length || todas.length >= r.total || p >= 200) break;
+      }
+      const fr = rango === 'todos' ? 'Todas las fechas' : desde && hasta ? (desde === hasta ? desde : `${desde} a ${hasta}`) : desde ? `Desde ${desde}` : hasta ? `Hasta ${hasta}` : 'Rango sin definir';
+      const filtro = [fr, qd ? `Búsqueda «${qd}»` : '', mios ? 'Solo mis recibos' : ''].filter(Boolean).join(' · ');
+      runPrint('recibos', docRecibos(todas, suma, filtro, cicloSeleccionado || ''));
+    } catch (e) { toast(errMsg(e), 'bad'); } finally { setPrinting(false); }
+  };
+
   const rows = data?.rows ?? [];
   const pages = Math.max(1, Math.ceil((data?.total ?? 0) / SIZE));
   const onKey = (e: React.KeyboardEvent) => {
@@ -77,17 +103,20 @@ export default function HistorialRecibos({ onClose, toast, initialQ = '' }: { on
   const ctl = 'h-8 rounded-md border border-slate-300 bg-white px-2 text-xs outline-none focus:border-accent focus:ring-1 focus:ring-accent';
   return (
     <>
-      <Modal width={1000} z={60} onClose={recibo ? undefined : onClose}>
-        <div onKeyDown={onKey} className="flex max-h-[calc(100vh-40px)] flex-col" role="region" aria-label="Historial de recibos">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5">
+      <SideDrawer width={760} z={65} onClose={recibo ? () => {} : onClose}>
+        <div onKeyDown={onKey} className="flex h-full min-h-0 flex-col" role="region" aria-label="Historial de recibos">
+          <div className="flex items-center justify-between gap-2.5 border-b border-slate-200 px-[18px] py-3.5">
             <div>
               <div className="text-[15px] font-semibold"><i className="ph ph-receipt mr-1.5 align-[-2px]" />Historial de Recibos</div>
               <div className="text-xs text-slate-500">Ciclo {cicloSeleccionado || 'activo'} · Más recientes primero · Clic (o Enter) para ver el recibo</div>
             </div>
-            <button onClick={onClose} aria-label="Cerrar" className="h-[34px] w-[34px] rounded-md border border-slate-300 bg-white"><i className="ph ph-x" /></button>
+            <span className="flex items-center gap-2">
+              <button onClick={() => void imprimir()} disabled={printing || !data?.total} className="flex h-[34px] items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-[13px] font-medium hover:bg-slate-100 disabled:opacity-50"><i className={printing ? 'ph ph-circle-notch' : 'ph ph-printer'} style={printing ? { animation: 'spin 0.8s linear infinite' } : undefined} />{printing ? 'Generando…' : 'Imprimir'}</button>
+              <button onClick={onClose} aria-label="Cerrar" className="h-[34px] w-[34px] rounded-md border border-slate-300 bg-white"><i className="ph ph-x" /></button>
+            </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-5 py-2.5">
-            <div className="relative min-w-[220px] flex-1">
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-[18px] py-2.5">
+            <div className="relative min-w-[180px] flex-1">
               <i className="ph ph-magnifying-glass pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar por recibo, NCF, nombre o cédula…" aria-label="Buscar recibos" className={`${ctl} w-full pl-8`} />
             </div>
@@ -101,8 +130,9 @@ export default function HistorialRecibos({ onClose, toast, initialQ = '' }: { on
             </>}
             <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium text-slate-700"><input type="checkbox" checked={mios} onChange={e => { setMios(e.target.checked); setPage(1); }} />Solo mis recibos</label>
           </div>
-          <div role="table" aria-label="Recibos" aria-rowcount={data?.total ?? 0} className="flex min-h-0 flex-1 flex-col">
-            <div role="row" className={`grid ${COLS} gap-3 border-b border-slate-200 bg-white px-5 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500`}>
+          <div role="table" aria-label="Recibos" aria-rowcount={data?.total ?? 0} className="flex min-h-0 flex-1 flex-col overflow-x-auto">
+            <div className="flex min-h-0 min-w-[680px] flex-1 flex-col">
+            <div role="row" className={`grid ${COLS} gap-2.5 border-b border-slate-200 bg-white px-[18px] py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500`}>
               <span role="columnheader">Recibo</span><span role="columnheader" className="text-right">Monto facturado</span><span role="columnheader">Comprobante / NCF</span><span role="columnheader">A nombre de</span><span role="columnheader">Hecho por</span>
             </div>
             <div ref={rowsRef} className="min-h-[200px] flex-1 overflow-auto" style={{ opacity: loading && data ? 0.55 : 1 }} aria-busy={loading}>
@@ -113,14 +143,16 @@ export default function HistorialRecibos({ onClose, toast, initialQ = '' }: { on
                 const an = r.est === 'Anulado';
                 return (
                   <div key={r.id} role="row" data-active={i === active} data-recibo-id={r.id} aria-selected={i === active} onMouseEnter={() => setActive(i)} onClick={() => void abrir(r.id)}
-                    className={`grid ${COLS} cursor-pointer items-center gap-3 border-b border-slate-100 px-5 py-2 text-xs ${i === active ? 'bg-blue-50' : 'hover:bg-slate-50'}`} style={{ opacity: opening === r.id ? 0.6 : 1 }}>
+                    className={`grid ${COLS} cursor-pointer items-center gap-2.5 border-b border-slate-100 px-[18px] py-2 text-xs ${i === active ? 'bg-blue-50' : 'hover:bg-slate-50'}`} style={{ opacity: opening === r.id ? 0.6 : 1 }}>
                     <div role="cell" className="flex flex-col gap-0.5">
                       <span className="flex items-center gap-1.5"><button type="button" onClick={e => { e.stopPropagation(); void abrir(r.id); }} className="font-mono text-xs font-semibold text-accent underline-offset-2 hover:underline focus:underline focus:outline-none">{r.id}</button>
                         {an && <span className="rounded px-1 py-px text-[10px] font-semibold" style={{ background: TONE.bad[0], color: TONE.bad[1] }}>Anulado</span>}
+                        {!an && (r.acreditado ?? 0) > 0 && <span className="rounded px-1 py-px text-[10px] font-semibold" style={{ background: TONE.info[0], color: TONE.info[1] }} title={'Neto ' + fmt(r.monto - (r.acreditado ?? 0))}>Con nota de crédito {fmt(r.acreditado ?? 0)}</span>}
+                        {!an && !(r.acreditado ?? 0) && (r.notas ?? 0) > 0 && <span className="rounded px-1 py-px text-[10px] font-semibold" style={{ background: TONE.warn[0], color: TONE.warn[1] }}>Con nota de débito</span>}
                         {r.abono && !an && <span className="rounded px-1 py-px text-[10px] font-semibold" style={{ background: TONE.warn[0], color: TONE.warn[1] }}>Abono</span>}</span>
                       <span className="font-mono text-[10px] text-slate-400">{r.fecha} {r.hora}</span>
                     </div>
-                    <span role="cell" className="text-right font-mono text-xs font-semibold" style={{ textDecoration: an ? 'line-through' : 'none', color: an ? '#94A3B8' : undefined }}>{fmt(r.monto)}</span>
+                    <span role="cell" className="flex flex-col items-end gap-0.5 text-right font-mono text-xs font-semibold"><span style={{ textDecoration: an || (r.acreditado ?? 0) > 0 ? 'line-through' : 'none', color: an ? '#94A3B8' : undefined }}>{fmt(r.monto)}</span>{!an && (r.acreditado ?? 0) > 0 && <span className="text-[10px] font-medium text-info-fg" data-testid="neto-fila">Neto {fmt(r.monto - (r.acreditado ?? 0))}</span>}</span>
                     <div role="cell" className="flex min-w-0 flex-col gap-0.5"><span className="font-mono text-[11px] text-slate-600">{r.ncf}</span>{r.tipoComprobante && <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-slate-400" title={r.tipoComprobante.nombre}>{r.tipoComprobante.nombre}{r.estadoDgii === 'PendienteEnvio' ? ' · pend. DGII' : ''}</span>}</div>
                     <div role="cell" className="flex min-w-0 flex-col gap-0.5"><span className="overflow-hidden text-ellipsis whitespace-nowrap font-medium" title={r.tutor}>{r.tutor}</span>{r.cedula && <span className="font-mono text-[10px] text-slate-400">{r.cedula}</span>}</div>
                     <span role="cell" className="overflow-hidden text-ellipsis whitespace-nowrap text-slate-700" title={r.cajero}>{r.cajero}</span>
@@ -128,9 +160,10 @@ export default function HistorialRecibos({ onClose, toast, initialQ = '' }: { on
                 );
               })}
             </div>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-2.5 text-xs text-slate-600">
-            <span data-recibos-total>{data ? <><b className="font-mono text-ink">{data.total.toLocaleString('en-US')}</b> {data.total === 1 ? 'recibo' : 'recibos'} · <b className="font-mono text-ink">{fmt(data.suma)}</b><span className="text-slate-400"> (neto, sin anulados)</span></> : '—'}</span>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-[18px] py-2.5 text-xs text-slate-600">
+            <span data-recibos-total>{data ? <><b className="font-mono text-ink">{data.total.toLocaleString('en-US')}</b> {data.total === 1 ? 'recibo' : 'recibos'} · <b className="font-mono text-ink">{fmt(data.suma)}</b><span className="text-slate-400"> (neto de notas, sin anulados)</span></> : '—'}</span>
             <span className="flex items-center gap-2">
               <button disabled={page <= 1 || loading} onClick={() => setPage(p => p - 1)} className="flex h-7 items-center gap-1 rounded border border-slate-300 bg-white px-2.5 font-medium disabled:opacity-40"><i className="ph ph-caret-left" />Anterior</button>
               <span className="font-mono">Página {page} de {pages}</span>
@@ -138,8 +171,8 @@ export default function HistorialRecibos({ onClose, toast, initialQ = '' }: { on
             </span>
           </div>
         </div>
-      </Modal>
-      {recibo && <ReciboModal recibo={recibo} origen="historial" toast={toast} z={70} onClose={() => setRecibo(null)} />}
+      </SideDrawer>
+      {recibo && <ReciboModal recibo={recibo} origen="historial" toast={toast} z={70} onClose={() => setRecibo(null)} onNota={onNota ? c => onNota(recibo, c) : undefined} />}
     </>
   );
 }

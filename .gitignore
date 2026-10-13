@@ -24,3 +24,6 @@ license-private*
 backups/
 respuestas*.env
 apps/api/prisma/schema.sqlite.prisma
+
+# coordinacion temporal entre agentes (locks y notas); no se versiona
+.agent-sync/

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useDraft } from '../../lib/useDraft';
 import type { AuditoriaList } from '@stodia/shared';
 import { btn, card, pill, pillBase, td, th } from '../../components/system/styles';
 import { useToast } from '../../components/system/UiProvider';
@@ -12,10 +13,10 @@ const sel = 'h-[34px] rounded-md border border-slate-300 bg-white px-2 text-[13p
 
 export default function Screen() {
   const toast = useToast();
-  const [q, setQ] = useState('');
-  const [user, setUser] = useState('');
-  const [act, setAct] = useState('');
-  const [day, setDay] = useState('');
+  const [q, setQ] = useDraft('auditoria:q', '', { porCiclo: false });
+  const [user, setUser] = useDraft('auditoria:user', '', { porCiclo: false });
+  const [act, setAct] = useDraft('auditoria:act', '', { porCiclo: false });
+  const [day, setDay] = useDraft('auditoria:day', '', { porCiclo: false });
   const [data, setData] = useState<AuditoriaList | null>(null);
   const [users, setUsers] = useState<string[]>([]);
 

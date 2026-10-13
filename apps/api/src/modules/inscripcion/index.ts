@@ -1,15 +1,16 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { ExpFicha, InsConfigResp, InsCupo, InsReq, InsResp, InsTutorBusq, InsTutoresResp, InsTutorLookup } from '@stodia/shared';
+import type { ExpFicha, InsConfigResp, InsContratoTutor, InsCupo, InsReq, InsResp, InsTutorBusq, InsTutoresResp, InsTutorLookup } from '@stodia/shared';
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { FiscalError, asignarNcf, contextoFiscal, disponibilidad, refrescarEstados, enSerie, transaccionFiscal } from '../../lib/fiscal';
 import { digits } from '../../lib/personas';
 import { errorTutor, fmtCed, fmtTel, unirTipo, type TutorCampos } from '../../lib/tutor-datos';
 import { cxcResumen, partesEnZona, zonaHoraria } from '../../lib/cxc';
-import { MES_ES, MNAME, anioDeMes, catalogoServicios, cicloActivo, cuotasDe, docsRequeridos, getFinanzas, insPlan, mesesCiclo, mesesDe, planesPago, tiposDocumentoRequeridos, totalDe, vencDMY } from '../../lib/pers-fin';
+import { MES_ES, MNAME, anioDeMes, catalogoServicios, cicloDestino, cuotasDe, docsRequeridos, getFinanzas, inscripcionDe, insPlan, materialesDe, mesesCiclo, mesesDe, moraTxt, planesPago, tiposDocumentoRequeridos, totalDe, vencDMY } from '../../lib/pers-fin';
 import { fkDeCatKey } from '../../lib/servicios';
 import { idMatricula } from '../../lib/matricula';
 import { vinculosDeseados } from '../../lib/tutor-alumno';
+import { ESTADOS_SIN_CUPO, sinLiberarEn } from '../../lib/reinscripcion';
 
 const slug = (n: string) => n.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
 
@@ -37,12 +38,17 @@ const tipoHermano = async () => (await prisma.tipoBeca.findFirst({ where: { esta
 const normTxt = (s: unknown) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 /** Grados, tandas y secciones salen de las tablas tipadas (Catálogos). Inscritos = alumnos reales de la sección (se calcula con Alumno.seccionId). */
-async function cargarCupos() {
+/** Cupos del ciclo DESTINO: en el activo se cuentan los alumnos de cada seccion (sin pre-inscritos ni cupos liberados); en un ciclo planificado, las MATRICULAS de ese ciclo
+ *  (incluye las reservas de reinscripcion 'Reservado'; no cuentan Retirado / Liberada). */
+async function cargarCupos(dest?: { id: string | null; planificado: boolean }) {
+  const activoId = dest?.planificado ? null : (await prisma.ciclo.findFirst({ where: { estado: 'Activo' }, select: { id: true } }))?.id ?? null;
   const [gr, td, secs, cuenta] = await Promise.all([
     prisma.grado.findMany({ include: { nivel: true }, orderBy: { id: 'asc' } }),
     prisma.tanda.findMany({ orderBy: { id: 'asc' } }),
     prisma.seccion.findMany({ where: { estado: 'Activo' }, orderBy: { id: 'asc' } }),
-    prisma.alumno.groupBy({ by: ['seccionId'], where: { estado: { not: 'Retirado' } }, _count: { _all: true } }),
+    dest?.planificado
+      ? prisma.matricula.groupBy({ by: ['seccionId'], where: { cicloId: dest.id!, estado: { notIn: ESTADOS_SIN_CUPO } }, _count: { _all: true } })
+      : prisma.alumno.groupBy({ by: ['seccionId'], where: { estado: { notIn: ['Retirado', 'Preinscrito'] }, ...(activoId ? sinLiberarEn(activoId) : {}) }, _count: { _all: true } }),
   ]);
   const usados = new Map(cuenta.map(c => [c.seccionId, c._count._all]));
   const grados = gr.filter(g => g.estado === 'Activo').sort((a, b) => a.orden - b.orden).map(g => ({ id: g.id, label: `${g.nivel.nombre} · ${g.nombre}` }));
@@ -59,18 +65,28 @@ async function cargarCupos() {
 const plugin: FastifyPluginAsync = async app => {
   const guard = { onRequest: [app.authenticate, app.requireRole('Super Admin', 'Cajero')] };
 
-  app.get('/config', guard, async (): Promise<InsConfigResp> => {
-    const [c, planes, fin, ciclo, cat, docs] = await Promise.all([cargarCupos(), planesPago(), getFinanzas(), cicloActivo(), catalogoServicios(), docsRequeridos()]);
+  /** `?ciclo=` = ciclo destino (activo por defecto; un ciclo PLANIFICADO = inscripcion anticipada). Un ciclo cerrado o inexistente cae al activo. */
+  app.get<{ Querystring: { ciclo?: string } }>('/config', guard, async (req): Promise<InsConfigResp> => {
+    const d0 = await cicloDestino(req.query.ciclo), dest = 'error' in d0 ? await cicloDestino() : d0;
+    if ('error' in dest) throw new Error(dest.error);
+    const anticipada = dest.estado === 'Planificado';
+    const [c, planes, fin, cat, docs, ciclosAll] = await Promise.all([cargarCupos({ id: dest.info.id, planificado: anticipada }), planesPago(), getFinanzas(), catalogoServicios(), docsRequeridos(), prisma.ciclo.findMany({ where: { estado: { in: ['Activo', 'Planificado'] } }, orderBy: { fechaInicio: 'asc' } })]);
+    const ciclo = dest.info;
     const activos = planes.filter(p => p.estado === 'Activo');
     const avisos: string[] = [];
     if (!activos.length) avisos.push('Configura planes y precios: no hay Planes de Pago activos (Finanzas → Planes de Pago).');
     if (!ciclo.configurado) avisos.push('Configura el ciclo lectivo activo en Configuración.');
+    if (anticipada) avisos.push(`Inscripción anticipada: el alumno queda matriculado en el ciclo planificado ${ciclo.nombre} (pre-inscrito) y sus cargos se generan en ese ciclo; el ciclo activo no cambia.`);
+    if (fin.inscripcionModo === 'plan') {
+      const sin = activos.filter(p => inscripcionDe(p, fin).origen === 'respaldo').map(p => p.name);
+      if (sin.length) avisos.push(`Inscripción según el plan: ${sin.length === 1 ? 'el plan' : 'los planes'} «${sin.join('», «')}» no ${sin.length === 1 ? 'tiene' : 'tienen'} cuota de inscripción; se usa la cuota fija (RD$ ${fin.inscripcion.toFixed(2)}) como respaldo.`);
+    }
     if (!c.grados.length || !c.tandas.length) avisos.push('Configura grados y tandas en Catálogos.');
     else if (!c.cupos.length) avisos.push('Configura las secciones (con su capacidad) en Catálogos.');
     return {
-      cupos: c.cupos, docs, ciclo: ciclo.nombre, grados: c.grados, tandas: c.tandas,
+      cupos: c.cupos, docs, ciclo: ciclo.nombre, anticipada, ciclosDestino: ciclosAll.map(x => ({ n: x.nombre, estado: x.estado as 'Activo' | 'Planificado' })), grados: c.grados, tandas: c.tandas,
       planes: activos.map(p => insPlan(p, c.tandas, fin, ciclo.y0)),
-      inscripcion: fin.inscripcion,
+      inscripcion: fin.inscripcion, inscripcionModo: fin.inscripcionModo === 'plan' ? 'plan' : 'fija',
       servicios: cat.filter(s => s.rec).map(s => ({ k: s.k, n: s.l, price: s.price })),
       avisos,
     };
@@ -130,7 +146,10 @@ const plugin: FastifyPluginAsync = async app => {
     const fail = (error: string) => reply.code(400).send({ error });
     if (!b?.nombre?.trim() || !b.apellido?.trim() || !b.fnac) return fail('Completa nombres, apellidos y fecha de nacimiento');
 
-    const [planes, fin, ciclo, cat, DOCS, c] = await Promise.all([planesPago(), getFinanzas(), cicloActivo(), catalogoServicios(), tiposDocumentoRequeridos(), cargarCupos()]);
+    const dest = await cicloDestino(b.ciclo);
+    if ('error' in dest) return reply.code(dest.code).send({ error: dest.error });
+    const ciclo = dest.info, anticipada = dest.estado === 'Planificado';
+    const [planes, fin, cat, DOCS, c] = await Promise.all([planesPago(), getFinanzas(), catalogoServicios(), tiposDocumentoRequeridos(), cargarCupos({ id: ciclo.id, planificado: anticipada })]);
     if (!ciclo.id) return fail('Configura el ciclo lectivo activo en Configuración antes de inscribir');
     const plan = planes.find(p => p.id === b.plan && p.estado === 'Activo');
     if (!plan) return fail(planes.some(p => p.estado === 'Activo') ? 'Plan de pago inválido' : 'Configura planes y precios antes de inscribir (Finanzas → Planes de Pago)');
@@ -224,12 +243,14 @@ const plugin: FastifyPluginAsync = async app => {
     // Cartera: cuotas del plan real (montos por tanda, descuento y meses del plan) + servicios desde el mes actual hasta fin de ciclo.
     const montos = cuotasDe(plan, tanda), vencs = mesesDe(plan, ciclo.y0);
     const unico = plan.n === 1;
-    const factura = fin.inscripcion + (unico ? totalDe(plan, tanda) : 0);
+    const insMonto = inscripcionDe(plan, fin).monto; // fija → global; plan → la del plan (respaldo: global)
+    const materiales = materialesDe(plan);           // 0 si el check del plan esta apagado
+    const factura = insMonto + (unico ? totalDe(plan, tanda) : 0);
     await refrescarEstados();
     const dispNcf = (await disponibilidad(prisma, ['CONSUMO']))[0];
     if (!dispNcf.disponible) throw new FiscalError(409, dispNcf.motivo!);
     const ctxFiscal = await contextoFiscal('CONSUMO');
-    const meses = mesesCiclo(planes), idxHoy = Math.max(0, meses.indexOf(hoyP.m));
+    const meses = mesesCiclo(planes), idxHoy = anticipada ? 0 : Math.max(0, meses.indexOf(hoyP.m)); // ciclo planificado: los servicios cargan desde el primer mes del ciclo
     const dia = fin.diaCorte > 0 ? fin.diaCorte : 1;
     const venc = (m: number) => vencDMY(dia, m, anioDeMes(meses, ciclo.y0, m));
     const al = `${b.nombre.trim().split(' ')[0]} · ${grado} ${sec}`;
@@ -244,7 +265,7 @@ const plugin: FastifyPluginAsync = async app => {
       ncf = (await asignarNcf(tx, 'CONSUMO', ctxFiscal)).ncf;
       for (const op of [
       tx.alumno.create({
-        data: { id, code, nombres: b.nombre.trim(), apellidos: b.apellido.trim(), fnac: b.fnac, seccionId: cupo.id, cuenta: 'ok', estado: 'Activo', tel: finTutor.tel, tutorId: finId, tutorLegalId: legalId },
+        data: { id, code, nombres: b.nombre.trim(), apellidos: b.apellido.trim(), fnac: b.fnac, seccionId: cupo.id, cuenta: 'ok', estado: anticipada ? 'Preinscrito' : 'Activo', tel: finTutor.tel, tutorId: finId, tutorLegalId: legalId },
       }),
       tx.alumnoAlergia.createMany({ data: alergiasIds.map(alergiaId => ({ alumnoId: id, alergiaId })) }),
       tx.persExpediente.create({ data: { alumnoId: id, data: JSON.stringify(ficha) } }),
@@ -257,6 +278,8 @@ const plugin: FastifyPluginAsync = async app => {
       tx.finCobroItem.createMany({
         data: [
           ...vencs.map((v, i) => ({ id: `ins-${id}-c${v.m}`, alumnoId: id, tutorId: finId, cicloId: ciclo.id!, con: `Colegiatura ${MNAME[v.m]} ${v.y}`, al, vence: vencDMY(plan.dia, v.m, v.y), monto: montos[i], est: 'Pendiente', tipo: 'col', orden: base + i })),
+          // Cuota de materiales: UN cargo aparte (tipo 'mat': sin pronto pago ni mora, que solo miran 'col'/'srv') en el primer vencimiento del plan.
+          ...(materiales > 0 ? [{ id: `ins-${id}-mat`, alumnoId: id, tutorId: finId, cicloId: ciclo.id!, con: 'Cuota de materiales', al, vence: vencDMY(plan.dia, vencs[0].m, vencs[0].y), monto: materiales, est: 'Pendiente', tipo: 'mat', orden: base + 50 }] : []),
           ...svc.flatMap((s, j) => meses.slice(idxHoy).map((m, i) => ({ id: `ins-${id}-${s.k.replace(/\W/g, '')}${m}`, alumnoId: id, tutorId: finId, servicioId: svcId(s.k), cicloId: ciclo.id!, con: `${sname(s.l)} · ${MNAME[m]}`, al, vence: venc(m), monto: s.price, est: 'Pendiente', tipo: 'srv', orden: base + 100 + j * 20 + i }))),
         ],
       }),
@@ -265,13 +288,23 @@ const plugin: FastifyPluginAsync = async app => {
       tx.persInscripcion.create({ data: { id: 'ins-' + id, alumnoId: id, cicloId: ciclo.id!, ncf, factura, planId: plan.id, cuotas: vencs.length, firma: b.firma } }),
       // Historial por ciclo (matricula del ciclo activo) y vinculos tutor-alumno con rol y vigencia: Alumno.seccionId / tutorId / tutorLegalId son su copia vigente.
       ...(hermano ? [tx.finBeca.create({ data: { id: becaId, cicloId: ciclo.id!, alumnoId: id, est: `${b.nombre.trim()} ${b.apellido.trim()}`, grado: `${grado} ${sec}`, tipoBecaId: hermano.tipoId, modo: 'pct', valor: hermano.pct, conceptos: { create: [{ conceptoId: hermano.conceptoId, orden: 0 }] }, exp: `Plan Hermano · familia de ${finTutor.nombre} (${hermano.familia} hijo${hermano.familia === 1 ? '' : 's'} inscrito${hermano.familia === 1 ? '' : 's'}) · solicitada en la inscripción ${code}`, estado: 'Pendiente', aprob: 'Esperando Director Financiero' } })] : []),
-      tx.matricula.create({ data: { id: idMatricula(id, ciclo.id!), alumnoId: id, cicloId: ciclo.id!, seccionId: cupo.id, estado: 'Activo', fechaIngreso: hoyIso } }),
+      tx.matricula.create({ data: { id: idMatricula(id, ciclo.id!), alumnoId: id, cicloId: ciclo.id!, seccionId: cupo.id, estado: 'Activo', fechaIngreso: anticipada ? dest.fechaInicio : hoyIso } }),
       tx.tutorAlumno.createMany({ data: vinculosDeseados({ tutorId: finId, tutorLegalId: legalId }, new Map([[finId, finTutor.tipo], [legalId, legalTutor.tipo]])).map(v => ({ alumnoId: id, tutorId: v.tutorId, rol: v.rol, desde: hoyIso })) }),
       ]) await op;
     });
-    await audit(req.user, 'Insert', { tabla: 'Inscripciones', id: code, prev: '—', next: `${ncf} · ${factura}`, ip: req.ip });
+    await audit(req.user, 'Insert', { tabla: 'Inscripciones', id: code, prev: '—', next: `${ncf} · ${factura}${anticipada ? ` · pre-inscripción ${ciclo.nombre}` : ""}`, ip: req.ip });
     if (hermano) await audit(req.user, 'Insert', { tabla: 'Becas', id: becaId, next: `${hermano.nombre} · ${hermano.pct}% · ${b.nombre.trim()} ${b.apellido.trim()} · Pendiente (inscripción ${code})`, ip: req.ip });
-    const res: InsResp = { code, ncf, factura, cuotas: vencs.length, ...(hermano ? { becaId } : {}) };
+    const tut = (t: typeof finTutor): InsContratoTutor => ({ nombre: t.nombre, cedula: fmtCed(t.cedula), parentesco: t.parentesco, tel: t.tel, email: t.email ?? '', rnc: t.rnc ?? '' });
+    const contrato: InsResp['contrato'] = {
+      alumnoId: id, ctr: `CTR-${ciclo.y0}-${id}`, ciclo: ciclo.nombre, fecha: hoy, tutorLegal: tut(legalTutor), tutorFinanciero: tut(finTutor),
+      calendario: [
+        ...vencs.map((v, i) => ({ con: `Colegiatura ${MNAME[v.m]} ${v.y}`, vence: vencDMY(plan.dia, v.m, v.y), monto: montos[i], ...(unico ? { enFactura: true } : {}) })),
+        ...(materiales > 0 ? [{ con: 'Cuota de materiales', vence: vencDMY(plan.dia, vencs[0].m, vencs[0].y), monto: materiales }] : []),
+      ],
+      servicios: svc.map(s => ({ n: sname(s.l), price: s.price })),
+      plan: { name: plan.name, n: plan.n, freq: plan.freq, desc: plan.desc, dia: plan.dia, gracia: plan.gracia, mora: moraTxt(plan, fin), pronto: plan.pronto, prontoDias: plan.prontoDias, total: totalDe(plan, tanda) },
+    };
+    const res: InsResp = { code, ncf, factura, cuotas: vencs.length, contrato, inscripcion: insMonto, ...(materiales > 0 ? { materiales } : {}), ...(hermano ? { becaId } : {}) };
     return res;
   }));
 };

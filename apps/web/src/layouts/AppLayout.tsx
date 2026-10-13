@@ -4,9 +4,10 @@ import { LicenseProvider, useLicense } from '../components/system/License';
 import { UiProvider, useUi } from '../components/system/UiProvider';
 import type { CfgCiclo, ConfigGlobal } from '@stodia/shared';
 import { CicloProvider, POR_CICLO, seleccionable, useCiclo } from '../lib/ciclo';
-import { MENU_OCULTO, NAV, canAccess, setAccessOverride, useAccessVersion } from '../lib/access';
+import { MENU_OCULTO, NAV, canAccess, setAccessOverride, setPapeleriaAbierta, useAccessVersion } from '../lib/access';
 import { api, getConfig } from '../lib/api';
 import { useSession } from '../lib/session';
+import { FirmaModal } from '../screens/config/Firmas';
 import { preloadScreens } from '../screens';
 
 /** Fallback de la zona de contenido: aparece solo si la pantalla tarda más de 250 ms, para que las cargas rápidas no parpadeen. */
@@ -36,7 +37,7 @@ function Sidebar({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?: 
   const { user } = useSession();
   const { screenOn } = useLicense();
   useAccessVersion();
-  const { ciclos, cicloSeleccionado: ciclo, esActivo, cambiar } = useCiclo();
+  const { ciclos, cicloSeleccionado: ciclo, esActivo, estado, cambiar } = useCiclo();
   const { pathname } = useLocation();
   if (!user) return null;
   const groups = NAV.map(g => ({ ...g, items: g.items.filter(i => !MENU_OCULTO.has(i[0]) && canAccess(user.rol, i[0]) && screenOn(i[0])) })).filter(g => g.items.length);
@@ -47,8 +48,8 @@ function Sidebar({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?: 
     <>
       {!collapsed && (
         <div className="px-3 pb-2 pt-3">
-          <label htmlFor="sel-ciclo" className="mb-1 block text-[11px] font-medium text-[#64748B]">{esActivo ? 'Ciclo lectivo activo' : 'Ciclo lectivo (consulta)'}</label>
-          <select id="sel-ciclo" value={ciclo} onChange={e => cambiar(e.target.value)} title={esActivo ? undefined : 'Estás consultando un ciclo que no es el activo (solo lectura)'}
+          <label htmlFor="sel-ciclo" className="mb-1 block text-[11px] font-medium text-[#64748B]">{esActivo ? 'Ciclo lectivo activo' : estado === 'Planificado' ? 'Ciclo lectivo (planificado)' : 'Ciclo lectivo (consulta)'}</label>
+          <select id="sel-ciclo" value={ciclo} onChange={e => cambiar(e.target.value)} title={esActivo ? undefined : estado === 'Planificado' ? 'Ciclo planificado: pre-inscripción y cobros anticipados' : 'Estás consultando un ciclo que no es el activo (solo lectura)'}
             className={`h-8 w-full rounded-md border px-2 text-[13px] text-[#F1F5F9] ${esActivo ? 'border-[#334155] bg-[#1E293B]' : 'border-[#B45309] bg-[#422006]'}`}>
             {ciclos.length === 0 && <option value="">Sin ciclos configurados</option>}
             {[...ciclos].sort((a, b) => ORDEN_CICLO[a.estado] - ORDEN_CICLO[b.estado] || b.n.localeCompare(a.n)).map(c => (
@@ -132,7 +133,7 @@ function CicloBanner() {
   return (
     <div role="status" className={`sticky top-0 z-10 -mx-6 -mt-3.5 mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b px-6 py-2 text-[13px] ${plan ? 'border-[#BFDBFE] bg-[#EFF6FF] text-[#1E3A8A]' : 'border-[#FCD34D] bg-[#FFFBEB] text-[#78350F]'}`}>
       <i className={`ph-fill ${plan ? 'ph-calendar-dots' : 'ph-lock-simple'} text-base`} aria-hidden />
-      <span className="min-w-0 flex-1">Estás viendo el ciclo <b>{cicloSeleccionado}</b> · solo lectura{plan ? ' (planificado)' : ''}</span>
+      <span className="min-w-0 flex-1">{plan ? <>Trabajando en el ciclo planificado <b>{cicloSeleccionado}</b> · pre-inscripción y cobros anticipados; el resto de pantallas es solo lectura hasta que el ciclo se active</> : <>Estás viendo el ciclo <b>{cicloSeleccionado}</b> · solo lectura</>}</span>
       <button onClick={volverAlActivo} className={`h-7 whitespace-nowrap rounded-md border bg-white px-2.5 text-xs font-semibold ${plan ? 'border-[#93C5FD] text-[#1D4ED8] hover:bg-[#DBEAFE]' : 'border-[#F59E0B] text-[#92400E] hover:bg-[#FEF3C7]'}`}>Volver al ciclo activo{cicloActivo ? ` (${cicloActivo})` : ''}</button>
     </div>
   );
@@ -148,11 +149,12 @@ function Shell() {
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [menu, setMenu] = useState<'' | 'notif' | 'role'>('');
+  const [miFirma, setMiFirma] = useState(false);
   const main = useRef<HTMLElement>(null);
   const headerMenus = useRef<HTMLDivElement>(null);
   const institution = getConfig().institutionName || 'Colegio Los Pinos';
 
-  useEffect(() => { if (user) api.get<ConfigGlobal>('/config').then(c => setAccessOverride(c.access)).catch(() => undefined); }, [user]);
+  useEffect(() => { if (user) api.get<ConfigGlobal>('/config').then(c => { setAccessOverride(c.access); setPapeleriaAbierta(c.papeleriaAbierta); }).catch(() => undefined); }, [user]);
   useEffect(() => { setMenu(''); setOpen(false); main.current?.scrollTo(0, 0); }, [loc.pathname]);
   useEffect(() => { preloadScreens(); }, []);
   useEffect(() => {
@@ -205,6 +207,7 @@ function Shell() {
               <div className="absolute right-0 top-[42px] z-40 w-60 rounded-lg border border-slate-200 bg-white p-1.5 text-ink shadow-[0_12px_32px_rgba(15,23,42,0.18)]">
                 <div className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-slate-500">Sesión actual</div>
                 <div className="flex h-8 items-center justify-between rounded-md bg-[#EFF6FF] px-2 text-[13px]">{user?.rol}<i className="ph ph-check text-[#2563EB]" /></div>
+                {user && ['Cajero', 'Director Académico', 'Docente'].includes(user.rol) && <button onClick={() => { setMenu(''); setMiFirma(true); }} className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] hover:bg-slate-100"><i className="ph ph-signature text-slate-500" />Mi firma</button>}
                 <button onClick={() => { setMenu(''); logout(); navigate('/login'); }} className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] hover:bg-slate-100"><i className="ph ph-sign-out text-slate-500" />Cerrar sesión</button>
               </div>
             )}
@@ -251,6 +254,7 @@ function Shell() {
           {info && (info.estado === 'vencida' || info.estado === 'invalida' || info.estado === 'sin_licencia') && loc.pathname !== '/licencia' ? <ExpiredGate /> : <Suspense fallback={<DelayedLoading />}><Outlet key={clave} /></Suspense>}
         </main>
       </div>
+      {miFirma && user && <FirmaModal id="me" nombre={user.nombre} rol={user.rol} onClose={() => setMiFirma(false)} />}
     </div>
   );
 }

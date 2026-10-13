@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AvisoBorrador, useDraft } from '../../lib/useDraft';
 import SideDrawer from '../../components/finanzas/SideDrawer';
 import { errMsg, norm } from '../../components/finanzas/fin';
 import { CAT_DEF, type Cat, type FieldDef, type Lbl, type Row } from './defs';
@@ -9,7 +10,8 @@ interface Props { k: string; row: Row | null; cat: Cat; roles: string[]; L: Lbl;
 /** Formulario lateral de alta/edición (catForm del prototipo). Valida en cliente; la API vuelve a validar. */
 export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }: Props) {
   const def = CAT_DEF[k], estados = def.estados ?? ['Activo', 'Inactivo'];
-  const [v, setV] = useState<V>(() => {
+  // Borrador por catálogo y registro. Las contraseñas (campos «password») NUNCA se guardan. «×»/fondo lo conservan; «Cancelar» y guardar con éxito lo descartan.
+  const [v, setV, limpiar, meta] = useDraft<V>(`catalogo:${k}:${row?.id ?? 'nuevo'}`, () => {
     const x: V = row ? JSON.parse(JSON.stringify(row)) : { estado: estados[0] };
     def.fields.forEach(f => {
       if (x[f.k] == null) x[f.k] = f.t === 'multi' ? [] : f.t === 'info' ? 0 : '';
@@ -17,7 +19,7 @@ export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }:
       if (f.t === 'password') x[f.k] = '';
     });
     return x;
-  });
+  }, { porCiclo: false, omitir: def.fields.filter(f => f.t === 'password').map(f => f.k) });
   const [err, setErr] = useState<Record<string, string>>({});
   const [top, setTop] = useState('');
   const [busy, setBusy] = useState(false);
@@ -57,7 +59,7 @@ export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }:
     if (k === 'tandas' && !e.ini && !e.fin && String(out.fin) <= String(out.ini)) e.fin = 'Debe ser posterior a la hora de entrada';
     if (Object.keys(e).length) { setErr(e); return; }
     setBusy(true);
-    try { await onSave({ ...out, _acceso: temp }, id); } catch (x) { setTop(errMsg(x)); setBusy(false); }
+    try { await onSave({ ...out, _acceso: temp }, id); limpiar(); } catch (x) { setTop(errMsg(x)); setBusy(false); }
   };
 
   const optsFor = (f: FieldDef): { v: string; l: string }[] => {
@@ -77,6 +79,7 @@ export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }:
         <button onClick={onClose} aria-label="Cerrar" className="h-8 w-8 flex-none rounded-md border border-slate-300 bg-white"><i className="ph ph-x" /></button>
       </div>
       <div className="flex flex-1 flex-col gap-3.5 overflow-auto px-5 py-4">
+        <AvisoBorrador meta={meta} />
         {fields.map(f => {
           const e = err[f.k], val = v[f.k], bd = e ? 'border-red-600' : 'border-slate-300';
           return (
@@ -122,7 +125,7 @@ export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }:
         {top && <div className="flex items-center gap-1.5 text-xs font-medium text-red-600"><i className="ph ph-warning-circle" />{top}</div>}
       </div>
       <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
-        <button onClick={onClose} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">Cancelar</button>
+        <button onClick={() => { limpiar(); onClose(); }} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">Cancelar</button>
         <button onClick={save} disabled={busy} className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white hover:bg-accent-dark disabled:opacity-60"><i className="ph ph-floppy-disk" />{id ? 'Guardar cambios' : 'Crear ' + def.one}</button>
       </div>
     </SideDrawer>

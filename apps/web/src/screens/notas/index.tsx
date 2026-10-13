@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDraft } from '../../lib/useDraft';
 import type { AcadNotaGuardada, AcadNotasMatriz } from '@stodia/shared';
 import { api } from '../../lib/api';
 import SegTabs from '../../components/SegTabs';
@@ -34,9 +35,9 @@ export default function Screen() {
   const sl = useSoloLectura(); // Fase 2D: ciclo que no es el activo = celdas solo lectura
   const pb = usePrintBusy();
   const [m, setM] = useState<AcadNotasMatriz | null>(null);
-  const [pick, setPick] = useState<{ asig?: string; periodo?: string }>({});
+  const [pick, setPick] = useDraft<{ asig?: string; periodo?: string }>('notas:pick', {}); // materia/periodo elegidos (las notas se guardan solas celda a celda)
   const [grades, setGrades] = useState<string[][]>([]);
-  const [density, setDensity] = useState('36');
+  const [density, setDensity] = useDraft('notas:density', '36');
   const [fcell, setFcell] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const [audit, setAudit] = useState<(AcadNotaGuardada & { who: string; col: string })[]>([]);

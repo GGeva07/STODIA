@@ -1,4 +1,5 @@
 import { SL_MSG, useSoloLectura } from '../../lib/ciclo';
+import { AvisoBorrador, useDraft } from '../../lib/useDraft';
 import { useState } from 'react';
 import type { AcadExtra, AcadExtraInput } from '@stodia/shared';
 import SideDrawer from '../../components/finanzas/SideDrawer';
@@ -23,7 +24,8 @@ interface Props {
 /** Panel lateral Ver / Editar / Nueva actividad o curso (xd del prototipo). */
 export default function ExtraDrawer({ item, mode, onClose, onEdit, onDelete, onSave }: Props) {
   const sl = useSoloLectura(); // Fase 2D: ciclo que no es el activo
-  const [f, setF] = useState<AcadExtra>(item ?? BLANK);
+  // Borrador por actividad (o «nueva»): «×»/fondo lo conservan; «Cancelar» y guardar con éxito lo descartan. En modo «ver» no se guarda.
+  const [f, setF, limpiar, meta] = useDraft<AcadExtra>('extra:' + (item?.id ?? 'nueva'), item ?? BLANK, { pausado: mode === 'view' });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const ro = mode === 'view', curso = f.kind === 'curso';
@@ -38,7 +40,7 @@ export default function ExtraDrawer({ item, mode, onClose, onEdit, onDelete, onS
   const primary = async () => {
     if (ro) { onEdit(); return; }
     setBusy(true);
-    try { await onSave({ ...f }, mode === 'create' ? null : f.id); } catch (e) { setErr(errMsg(e)); setBusy(false); }
+    try { await onSave({ ...f }, mode === 'create' ? null : f.id); limpiar(); } catch (e) { setErr(errMsg(e)); setBusy(false); }
   };
 
   return (
@@ -51,6 +53,7 @@ export default function ExtraDrawer({ item, mode, onClose, onEdit, onDelete, onS
         <button onClick={onClose} aria-label="Cerrar" className="h-8 w-8 rounded-md border border-slate-300 bg-white"><i className="ph ph-x" /></button>
       </div>
       <div className="flex flex-1 flex-col gap-3.5 overflow-auto px-5 py-[18px]">
+        {!ro && <AvisoBorrador meta={meta} />}
         <label className={lbl}>Nombre *<input value={f.name} onChange={e => set('name', e.target.value)} disabled={ro} className={field} /></label>
         <div className="grid grid-cols-2 gap-2.5">
           <label className={lbl}>Categoría<select value={f.cat} onChange={e => set('cat', e.target.value)} disabled={ro} className={sel}>{CATS.map(c => <option key={c}>{c}</option>)}</select></label>
@@ -77,7 +80,7 @@ export default function ExtraDrawer({ item, mode, onClose, onEdit, onDelete, onS
         {mode !== 'create' && <button onClick={() => onDelete(f)} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-9 items-center gap-1.5 rounded-md border border-red-300 bg-white px-3 text-[13px] font-medium text-red-600 disabled:opacity-50"><i className="ph ph-trash" />Eliminar</button>}
         <span className="flex-1" />
         <div className="flex gap-2">
-          <button onClick={onClose} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">{ro ? 'Cerrar' : 'Cancelar'}</button>
+          <button onClick={() => { if (!ro) limpiar(); onClose(); }} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">{ro ? 'Cerrar' : 'Cancelar'}</button>
           <button onClick={primary} disabled={busy || sl} title={sl ? SL_MSG : undefined} className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white hover:bg-accent-dark disabled:opacity-60"><i className={ro ? 'ph ph-pencil-simple' : 'ph ph-floppy-disk'} />{ro ? 'Editar' : mode === 'create' ? 'Crear actividad' : 'Guardar cambios'}</button>
         </div>
       </div>

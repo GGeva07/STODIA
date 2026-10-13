@@ -8,9 +8,13 @@ import { useToast } from '../../components/system/UiProvider';
 import { btn, card, pill, pillBase, type PillTone } from '../../components/system/styles';
 import { errMsg, fmt } from '../../components/finanzas/fin';
 import { cartaDoc, printCarta } from '../../components/personas/printCarta';
-import { descargarPdf, hoyDMY } from '../../components/finanzas/print';
+import { descargarPdf, hoyDMY, runPrint } from '../../components/finanzas/print';
+import { docContratoInscripcion } from '../../components/personas/printContrato';
 import { usePerfil } from '../../components/finanzas/perfil';
 import Servicios from './Servicios';
+import { useDraft } from '../../lib/useDraft';
+import EditarAlumno from './EditarAlumno';
+import SupervisorGuardModal, { type GuardCfg } from '../../components/finanzas/SupervisorGuardModal';
 import { SL_MSG, useCiclo } from '../../lib/ciclo';
 
 const TABS = [['personal', 'Datos personales'], ['academico', 'Historial académico'], ['cuenta', 'Estado de cuenta'], ['servicios', 'Servicios y Contrato'], ['medico', 'Médico y alimenticio'], ['docs', 'Documentación'], ['familia', 'Red familiar']] as const;
@@ -38,11 +42,14 @@ function Expediente() {
   const [error, setError] = useState('');
   const [tab, setTab] = useState<Tab>('personal');
   const [menu, setMenu] = useState(false);
+  const [editar, setEditar] = useDraft('expediente:' + id + ':editar', false); // el formulario de edición abierto se reabre al volver
+  const [guard, setGuard] = useState<GuardCfg | null>(null);
 
   const reload = useCallback(async () => {
     try { setData(await api.get<ExpedienteResp>(`/expediente/${id}`)); setError(''); } catch (e) { setData(null); setError(errMsg(e)); }
   }, [id]);
   useEffect(() => { setData(null); setTab('personal'); void reload(); }, [reload]);
+  useEffect(() => { if (tab === 'cuenta') void reload(); }, [tab, reload]); // al abrir Estado de cuenta se releen las becas (una aprobación reciente debe verse sin recargar)
 
   if (error) return <div className={`${card} p-6 text-sm text-red-600`}>{error}</div>;
   if (!data) return <p className="text-sm text-slate-500">Cargando expediente…</p>;
@@ -56,7 +63,9 @@ function Expediente() {
   const pendiente = cuenta.filter(i => !i.paid && i.est !== 'Vencida').reduce((t, i) => t + i.monto, 0);
   const mora = vencido > 0 || (cuenta.length === 0 && a.cuenta === 'mora');
   const caja = !!user && canAccess(user.rol, 'pos');
-  const estadoItem = (i: (typeof cuenta)[number]): [string, PillTone] => (i.paid ? ['Pagado', 'ok'] : i.est === 'Vencida' ? ['Vencida', 'bad'] : [i.est, 'mute']);
+  const estadoItem = (i: (typeof cuenta)[number]): [string, PillTone] => (i.nc?.reabierto && !i.paid ? ['Pendiente de cobro', i.est === 'Vencida' ? 'bad' : 'warn'] : i.paid ? (i.nc?.acreditado ? ['Acreditado', 'info'] : ['Pagado', 'ok']) : i.est === 'Vencida' ? ['Vencida', 'bad'] : [i.est, 'mute']);
+  /** Leyenda bajo el concepto cuando una nota fiscal afecta el cargo (recibo original acreditado por NC, pendiente de cobro / devolución definitiva). */
+  const notaItem = (i: (typeof cuenta)[number]) => { const n = i.nc; if (!n) return ''; const rec = n.recibo ? `Recibo ${n.recibo} · ` : ''; return n.clase === 'DEBITO' ? `Nota de débito ${n.nota} (${n.ncf})` : n.reabierto && !i.paid ? `${rec}acreditado por ${n.nota} (${n.ncf}) · pendiente de cobro${i.est === 'Vencida' ? ' · vencido' : ''}` : n.acreditado ? `${rec}acreditado por ${n.nota} (${n.ncf}) · devolución definitiva, no se vuelve a cobrar` : `${rec}acreditado por ${n.nota} y cobrado de nuevo`; };
 
   const ciclo = data.ref.ciclos[0] ?? '';
   const planAct = data.ref.planes[ficha.contrato.plan];
@@ -64,24 +73,26 @@ function Expediente() {
   const docEstado = () => printCarta([{
     title: 'Estado de cuenta', sub: `Corte al ${hoyDMY()}${ciclo ? ` · Ciclo ${ciclo}` : ''}`,
     blocks: [
-      { t: 'kv', rows: [['Estudiante', nombre], ['Matrícula', a.code], ['Curso', `${curso} · ${a.tanda}`], ['Tutor financiero', tutor ? `${tutor.nombre} · ${tutor.cedula}` : '—']] },
-      { t: 'table', head: ['Concepto', 'Vence', 'Estado', 'Monto'], rows: cuenta.map(i => [i.con, i.vence, estadoItem(i)[0], fmt(i.monto)]), widths: ['1fr', '82px', '74px', '100px'], aligns: ['left', 'left', 'left', 'right'] },
+      { t: 'kv', rows: [['Estudiante', nombre], ['Matrícula', a.code], ['Curso', `${curso} · ${a.tanda}`], ['Tutor financiero', tutor ? `${tutor.nombre} · ${tutor.cedula}` : '—'], ['Becas activas', data.becasActivas.join(' · ') || 'Ninguna'], ['Becas pendientes de aprobación', (data.becasPendientes ?? []).join(' · ') || 'Ninguna']] },
+      { t: 'table', head: ['Concepto', 'Vence', 'Estado', 'Monto'], rows: cuenta.map(i => [i.nc ? i.con + ' — ' + notaItem(i) : i.con, i.vence, estadoItem(i)[0], fmt(i.monto)]), widths: ['1fr', '82px', '110px', '100px'], aligns: ['left', 'left', 'left', 'right'] },
       { t: 'total', rows: [['Total vencido', fmt(vencido)], ['Por vencer / pendiente', fmt(pendiente)], ['BALANCE CONSOLIDADO', fmt(vencido + pendiente), true]] },
     ],
   }], ['Firma del cajero', 'Firma de dirección'], `Estado de cuenta · ${a.nombres.split(' ')[0]} ${a.apellidos.split(' ')[0]}`, 'estado', `estado_cuenta_${a.code}.pdf`);
 
+  /** Mismo documento oficial que se genera al inscribir (printContrato); aquí se arma con lo vigente en el expediente. */
   const docContrato = () => {
-    const p = planAct, b = data.ref.becas[ficha.contrato.beca] ?? { pct: 0 };
+    const p = planAct;
     if (!p) { toast('Asigna un plan de pago al contrato antes de imprimirlo (pestaña Servicios y Contrato)', 'warn'); return; }
-    const net = p.gross * (1 - b.pct);
-    printCarta([{
-      title: 'Contrato de servicios educativos', sub: `Ciclo lectivo ${ficha.contrato.ciclo || ciclo} · ${ficha.contrato.ctr || a.code}`,
-      blocks: [
-        { t: 'text', s: `Entre ${colegio}, RNC ${rncP}, en lo adelante EL COLEGIO, y ${(tutor?.nombre ?? '—').toUpperCase()}, cédula ${tutor?.cedula ?? '—'}, en calidad de tutor financiero, en lo adelante EL TUTOR, se acuerda lo siguiente respecto al estudiante ${nombre.toUpperCase()}, matrícula ${a.code}, inscrito en ${curso}, tanda ${a.tanda.toLowerCase()}.` },
-        { t: 'kv', rows: [['Plan de pago', p.name], ['Cuota base', fmt(p.gross)], ['Descuento / beca', b.pct ? `${Math.round(b.pct * 10000) / 100}%` : 'Ninguno'], ['Cuota neta facturable', fmt(net)]] },
-        { t: 'text', s: `PRIMERO: EL TUTOR se obliga a pagar las cuotas el día ${p.dia} de ${p.freq === 1 ? 'cada mes' : 'cada vencimiento'}. SEGUNDO: ${p.mora ? `transcurridos ${p.gracia} días de gracia, las cuotas vencidas generan un recargo ${p.mora}` : 'las cuotas vencidas no generan recargo por mora'}. TERCERO: la inscripción no es reembolsable. CUARTO: EL TUTOR declara conocer el reglamento interno y autoriza el uso de los datos del estudiante para fines académicos y administrativos conforme a la ley.` },
-      ],
-    }], ['Tutor financiero', 'Dirección del colegio'], 'Contrato de inscripción', 'contrato', `contrato_${a.code}.pdf`);
+    const pers = (x: typeof tutor): { nombre: string; cedula: string; parentesco: string; tel: string; dir: string } => ({ nombre: x?.nombre ?? '—', cedula: x?.cedula ?? '', parentesco: x?.parentesco ?? '', tel: x?.tel ?? '', dir: a.dir ?? '' });
+    const fin = pers(tutor), leg = legal ? pers(legal) : fin;
+    runPrint('contrato', docContratoInscripcion({
+      ciclo: ficha.contrato.ciclo || ciclo, ctr: ficha.contrato.ctr || a.code,
+      alumno: { nombre: `${a.nombres} ${a.apellidos}`.trim(), code: a.code, fnac: a.fnac, grado: a.grado, sec: a.sec, tanda: a.tanda, docs: docs.map(d => ({ n: d.n, ok: d.est !== 'Pendiente' })) },
+      legal: leg, financiero: legal && legal.cedula !== tutor?.cedula ? fin : null,
+      plan: { name: p.name, n: p.n, freq: p.freq, desc: p.desc, dia: p.dia, gracia: p.gracia, mora: p.mora, total: p.total },
+      calendario: cuenta.filter(i => /^(Colegiatura|Cuota de materiales)/.test(i.con)).map(i => ({ con: i.con, vence: i.vence, monto: i.monto })),
+      servicios: data.servicios.filter(s => s.kind === 'rec').map(s => ({ n: s.name, price: s.cost })),
+    }));
   };
 
   const docNoAdeudo = () => {
@@ -113,6 +124,13 @@ function Expediente() {
     try { await api.put(`/expediente/${a.id}/documentos/${d.id}`); await reload(); toast(`${d.n} cargado · pendiente de validación`, 'info'); } catch (e) { toast(errMsg(e), 'bad'); }
   };
 
+  const sinPin = user?.rol === 'Super Admin';
+  const askBaja = () => setGuard({
+    title: `Dar de baja a ${a.code}`, label: 'Dar de baja', code: `ELIMINAR-${a.id}`, pin: !sinPin,
+    desc: `${a.nombres} ${a.apellidos} pasará a estado Retirado (baja lógica): su historial académico y financiero se conserva y puede reactivarse con Editar. Queda registrado en auditoría.`,
+    onOk: async pin => { await api.post(`/directorio/${a.id}/eliminar`, { pin, baja: true }); await reload(); toast(`${a.nombres} ${a.apellidos} dado de baja (Retirado) · registrado en auditoría`, 'warn'); },
+  });
+
   const menuBtn = 'flex h-[34px] w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] hover:bg-slate-100';
 
   return (
@@ -129,6 +147,9 @@ function Expediente() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => navigate('/directorio')} className={btn}><i className="ph ph-arrow-left" />Directorio</button>
+          {canWrite && <button onClick={() => setEditar(true)} disabled={sl} title={sl ? SL_MSG : undefined} className={`${btn} disabled:opacity-40`}><i className="ph ph-pencil-simple" />Editar</button>}
+          {canWrite && <button onClick={askBaja} disabled={sl || a.estado === 'Retirado'} title={sl ? SL_MSG : a.estado === 'Retirado' ? 'El alumno ya está Retirado' : undefined} className={`${btn} text-red-600 disabled:opacity-40`}><i className="ph ph-trash" />Eliminar</button>}
           {caja && <button onClick={() => navigate('/pos')} className={btn}><i className="ph ph-cash-register" />Abrir en caja</button>}
           <div className="relative z-30">
             <button onClick={() => setMenu(m => !m)} className={btn}><i className="ph ph-dots-three-vertical" />Acciones</button>
@@ -152,6 +173,9 @@ function Expediente() {
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={`h-[38px] whitespace-nowrap px-3.5 text-[13px] font-medium hover:text-ink ${tab === k ? 'text-ink shadow-[inset_0_-2px_0_#2563EB]' : 'text-slate-500'}`}>{l}</button>
         ))}
       </div>
+
+      {editar && <EditarAlumno alumno={a} pin={!sinPin} onClose={() => setEditar(false)} onSaved={n => { setEditar(false); void reload(); toast(n ? `Ficha actualizada · ${n} campo(s) · registrado en auditoría` : 'Sin cambios', n ? 'ok' : 'info'); }} />}
+      {guard && <SupervisorGuardModal cfg={guard} onClose={() => setGuard(null)} />}
 
       {tab === 'personal' && (
         <Grid>
@@ -219,21 +243,33 @@ function Expediente() {
             <div><div className="text-xs text-slate-500">Balance consolidado al día</div><div className={`${mono} text-[22px] font-semibold ${vencido > 0 ? 'text-red-600' : 'text-green-600'}`}>{fmt(vencido)}</div></div>
             <div><div className="text-xs text-slate-500">Tutor financiero</div><div className="mt-1 font-medium">{tutor?.nombre ?? '—'}</div></div>
             <div><div className="text-xs text-slate-500">Plan de pago</div><div className={`mt-1 font-medium ${planAct ? '' : 'text-slate-500'}`}>{planLbl}</div></div>
-            <div><div className="text-xs text-slate-500">Becas activas</div><div className={`mt-1 font-medium ${data.becasActivas.length ? '' : 'text-slate-500'}`}>{data.becasActivas.join(' · ') || 'Ninguna'}</div></div>
+            <div><div className="text-xs text-slate-500">Becas activas</div><div className={`mt-1 font-medium ${data.becasActivas.length ? '' : 'text-slate-500'}`}>{data.becasActivas.join(' · ') || 'Ninguna'}</div>{(data.becasPendientes ?? []).map(t => <div key={t} className="mt-0.5 text-xs font-medium text-amber-700">Pendiente de aprobación · {t}</div>)}</div>
           </div>
           <section className={card}>
             {cuenta.map(i => {
               const [lbl, tone] = estadoItem(i);
               return (
-                <div key={i.id} className="grid h-9 grid-cols-[minmax(0,1fr)_110px_110px_130px] items-center gap-2 border-b border-slate-100 px-3.5 text-[13px]">
-                  <span>{i.con}</span><span className={`${mono} text-xs text-slate-600`}>{i.vence}</span>
-                  <span><span className={`${pillBase.replace('font-semibold', 'font-medium')} w-[81px] ${pill[tone]}`}>{lbl}</span></span>
+                <div key={i.id} className="grid min-h-9 grid-cols-[minmax(0,1fr)_110px_130px_130px] items-center gap-2 border-b border-slate-100 px-3.5 py-1 text-[13px]">
+                  <span>{i.con}{i.nc && <span className={`block text-[11px] ${i.nc.reabierto && !i.paid ? 'font-medium text-warn-fg' : 'text-slate-500'}`}>{notaItem(i)}</span>}</span><span className={`${mono} text-xs text-slate-600`}>{i.vence}</span>
+                  <span><span className={`${pillBase.replace('font-semibold', 'font-medium')} w-[121px] ${pill[tone]}`}>{lbl}</span></span>
                   <span className={`${mono} text-right text-[13px] font-medium`}>{fmt(i.monto)}</span>
                 </div>
               );
             })}
             {cuenta.length === 0 && <div className="px-3.5 py-6 text-center text-[13px] text-slate-500">Sin movimientos en cuentas por cobrar para este alumno.</div>}
           </section>
+          {!!data.notas?.length && (
+            <section className={card}>
+              <div className="border-b border-slate-100 px-3.5 py-2 text-[13px] font-semibold">Notas de crédito y débito</div>
+              {data.notas.map(n => (
+                <div key={n.id} className="flex flex-col gap-0.5 border-b border-slate-100 px-3.5 py-2 text-[13px]">
+                  <div className="flex items-center justify-between gap-2"><span><b>{n.id}</b> · {n.ncf} · {n.fecha}{n.recibo ? ` · sobre ${n.recibo}` : ''}</span><span className={`${mono} font-medium`}>{n.clase === 'DEBITO' ? '+' : '−'}{fmt(n.monto)}</span></div>
+                  <div className="text-xs text-slate-600">{n.efecto} · {n.motivo}</div>
+                  {n.lineas.map((l, k) => <div key={k} className="flex justify-between text-xs text-slate-500"><span>{l.concepto} · {l.efecto}</span><span className={mono}>{fmt(l.monto)}</span></div>)}
+                </div>
+              ))}
+            </section>
+          )}
         </div>
       )}
 

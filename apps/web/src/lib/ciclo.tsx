@@ -10,7 +10,8 @@ import { useSession } from './session';
  *  - `lib/api.ts` envia la cabecera `X-Ciclo` en TODAS las peticiones SOLO cuando el elegido no es el activo (con el activo no cambia nada).
  *  - Un ciclo que no es el activo es SOLO LECTURA (`soloLectura`): las pantallas por ciclo deshabilitan sus acciones con `useSoloLectura()` / `<Mutating>`
  *    y el servidor lo exige igual (409 CICLO_CERRADO / CICLO_NO_ACTIVO). Los catalogos, usuarios, licencia, configuracion... NO son por ciclo y siguen editables.
- *  - Un ciclo Planificado solo es seleccionable si ya tiene datos (matriculas); sin datos no hay nada que consultar.
+ *  - Un ciclo Planificado SIEMPRE es seleccionable (pre-inscripcion): Inscripcion, Cobros (POS), Becas y Planes de Pago escriben en el (`soloLecturaFin` = solo Cerrado);
+ *    el resto de pantallas por ciclo sigue en solo lectura (`soloLectura` = no es el activo), igual que el servidor (CICLO_NO_ACTIVO).
  *  - El contenido de la pantalla se remonta con `key={cicloSeleccionado}` (AppLayout): recarga sus datos sin tocar la cabecera ni la barra lateral.
  */
 export const SL_MSG = 'Ciclo cerrado: solo lectura';
@@ -21,13 +22,15 @@ export const POR_CICLO = ['dashboard', 'notas', 'asistencia', 'horarios', 'extra
 const leer = () => { try { return localStorage.getItem(KEY) ?? ''; } catch { return ''; } };
 const guardar = (n: string) => { try { if (n) localStorage.setItem(KEY, n); else localStorage.removeItem(KEY); } catch { /* sin almacenamiento: solo en memoria */ } };
 
-export const seleccionable = (c: CfgCiclo) => c.estado !== 'Planificado' || !!c.datos;
+export const seleccionable = (_c: CfgCiclo) => true; // todos: el planificado admite trabajo anticipado
 
 interface Ctx {
   cicloSeleccionado: string; ciclos: CfgCiclo[]; cicloActivo: string;
   esActivo: boolean;
   /** Clave estable para remontar el contenido al cambiar de ciclo: 'activo' mientras se ve el activo (no cambia al cargar la lista), si no el nombre del ciclo. */
   clave: string; estado: CfgCiclo['estado'] | ''; soloLectura: boolean;
+  /** Solo lectura REAL: ciclo cerrado. Un ciclo planificado admite inscripcion, cobros, becas y planes de pago (trabajo anticipado). */
+  soloLecturaFin: boolean;
   cambiar: (n: string) => void; volverAlActivo: () => void; refrescar: () => void;
 }
 const Ctx = createContext<Ctx | null>(null);
@@ -64,7 +67,7 @@ export function CicloProvider({ children }: { children: ReactNode }) {
     const actual = ciclos.find(c => c.n === sel);
     const cicloSeleccionado = actual ? sel : activo || sel;
     const esActivo = actual ? actual.estado === 'Activo' : !sel || sel === activo || !ciclos.length && !sel;
-    return { cicloSeleccionado, ciclos, cicloActivo: activo, esActivo, clave: esActivo ? 'activo' : cicloSeleccionado, estado: actual?.estado ?? '', soloLectura: !esActivo, cambiar, volverAlActivo, refrescar: cargar };
+    return { cicloSeleccionado, ciclos, cicloActivo: activo, esActivo, clave: esActivo ? 'activo' : cicloSeleccionado, estado: actual?.estado ?? '', soloLectura: !esActivo, soloLecturaFin: actual?.estado === 'Cerrado', cambiar, volverAlActivo, refrescar: cargar };
   }, [ciclos, sel, activo, cambiar, volverAlActivo, cargar]);
   return <Ctx.Provider value={v}>{children}</Ctx.Provider>;
 }

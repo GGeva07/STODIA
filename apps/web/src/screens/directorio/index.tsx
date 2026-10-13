@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useDraft } from '../../lib/useDraft';
 import { useNavigate } from 'react-router-dom';
 import type { Alumno, DirCorte } from '@stodia/shared';
 import { api } from '../../lib/api';
@@ -7,8 +8,6 @@ import { useSession } from '../../lib/session';
 import { useToast } from '../../components/system/UiProvider';
 import { btn, btnPrimary, card, pillBase, pill, th, td, type PillTone } from '../../components/system/styles';
 import { errMsg, norm } from '../../components/finanzas/fin';
-import SideDrawer from '../../components/finanzas/SideDrawer';
-import SupervisorGuardModal, { type GuardCfg } from '../../components/finanzas/SupervisorGuardModal';
 import { cartaDoc, printCarta } from '../../components/personas/printCarta';
 import { xlsxBlob } from '../../components/finanzas/xlsx';
 import { opciones, usePersRef } from '../../components/personas/ref';
@@ -17,13 +16,8 @@ import { SL_MSG, useCiclo } from '../../lib/ciclo';
 
 const ESTADO_TONE: Record<string, PillTone> = { Activo: 'ok', Inactivo: 'warn', Retirado: 'mute', Egresado: 'info' };
 const PAGE = 50;
-const READONLY = ['Docente', 'Encargado Comedor', 'Tutor'];
-const fieldCls = 'h-9 rounded-md border px-2.5 text-[13px] text-ink outline-none focus:border-accent';
 const filterCls = 'h-[34px] rounded-md border border-slate-300 bg-white px-2 text-[13px] text-ink';
 const full = (a: Alumno) => `${a.nombres} ${a.apellidos}`;
-type Mode = 'view' | 'edit';
-const Lbl = ({ t, children }: { t: string; children: ReactNode }) => <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">{t}{children}</label>;
-interface Sheet { id: string; mode: Mode; f: Alumno; err: string }
 
 export default function Screen() {
   const { user } = useSession();
@@ -33,15 +27,12 @@ export default function Screen() {
   const { soloLectura: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: otro ciclo = solo lectura (editar / eliminar / ingreso deshabilitados)
   const cicloTxt = (cicloSeleccionado || ref.ciclo) ? ` · Ciclo ${cicloSeleccionado || ref.ciclo}` : '';
   const [rows, setRows] = useState<Alumno[] | null>(null);
-  const [q, setQ] = useState('');
-  const [fil, setFil] = useState({ grado: '', tanda: '', estado: '', cuenta: '' });
+  const [q, setQ] = useDraft('directorio:q', ''); // búsqueda y filtros se conservan al navegar
+  const [fil, setFil] = useDraft('directorio:fil', { grado: '', tanda: '', estado: '', cuenta: '' });
   const [sort, setSort] = useState(1);
   const [page, setPage] = useState(0);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState(false);
-  const [sheet, setSheet] = useState<Sheet | null>(null);
-  const [guard, setGuard] = useState<GuardCfg | null>(null);
-  const canEdit = !!user && !READONLY.includes(user.rol);
 
   const load = useCallback(async () => {
     try { setRows(await api.get<Alumno[]>('/directorio')); } catch (e) { toast(errMsg(e), 'bad'); setRows([]); }
@@ -67,10 +58,7 @@ export default function Screen() {
   const toggleAll = () => setSel(s => { const n = new Set(s); view.forEach(x => (allOn ? n.delete(x.id) : n.add(x.id))); return n; });
   const toggle = (id: string) => setSel(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
-  const open = (x: Alumno, mode: Mode) => {
-    if (mode === 'edit' && !canEdit) { toast(`El rol ${user?.rol} solo tiene lectura sobre la ficha del estudiante`, 'warn'); mode = 'view'; }
-    setSheet({ id: x.id, mode, f: { ...x }, err: '' });
-  };
+  const open = (x: Alumno) => navigate(`/expediente/${x.id}`); // Directo al expediente 360 (Editar / Eliminar viven allí, con clave de supervisor)
 
   const target = () => (selList.length ? selList : view);
   const head = ['Matrícula', 'Alumno', 'Curso', 'Tanda', 'Tutor financiero', 'Estado'];
@@ -100,35 +88,6 @@ export default function Screen() {
       })), ['Administración financiera'], 'Notificaciones de cobro', 'dirNotif', `notificaciones_cobro_${new Date().toISOString().slice(0, 10)}.pdf`);
     } catch (e) { toast(errMsg(e), 'bad'); }
   };
-
-  const askDelete = (x: Alumno) => setGuard({
-    title: `Eliminar alumno ${x.code}`, label: 'Eliminar alumno', code: `ELIMINAR-${x.id}`, pin: user?.rol !== 'Super Admin',
-    desc: `Se eliminará la ficha de ${full(x)} del directorio activo. El historial académico y financiero se conserva en el audit trail. Requiere autorización jerárquica.`,
-    onOk: async pin => {
-      await api.post(`/directorio/${x.id}/eliminar`, { pin });
-      setRows(r => (r ?? []).filter(y => y.id !== x.id));
-      setSheet(null);
-      setSel(s => { const n = new Set(s); n.delete(x.id); return n; });
-      toast(`${full(x)} eliminado del directorio · registrado en auditoría`, 'warn');
-    },
-  });
-
-  const save = async () => {
-    if (!sheet) return;
-    if (sheet.mode === 'view') { if (!canEdit) { toast(`El rol ${user?.rol} solo tiene lectura sobre la ficha del estudiante`, 'warn'); return; } setSheet({ ...sheet, mode: 'edit' }); return; }
-    const f = sheet.f;
-    if (!f.nombres.trim() || !f.apellidos.trim()) { setSheet({ ...sheet, err: 'Nombres y apellidos son obligatorios.' }); return; }
-    try {
-      const res = await api.put<{ alumno: Alumno; changed: number }>(`/directorio/${sheet.id}`, f);
-      if (res.changed) { setRows(r => (r ?? []).map(y => (y.id === sheet.id ? res.alumno : y))); toast(`Ficha actualizada · ${res.changed} campo(s) · registrado en auditoría`, 'ok'); }
-      setSheet({ id: sheet.id, mode: 'view', f: res.alumno, err: '' });
-    } catch (e) { setSheet({ ...sheet, err: errMsg(e) }); }
-  };
-
-  const cur = sheet ? list.find(x => x.id === sheet.id) : null;
-  const ro = sheet?.mode === 'view';
-  const setF = (k: keyof Alumno) => (e: { target: { value: string } }) => setSheet(s => s && { ...s, f: { ...s.f, [k]: e.target.value }, err: '' });
-  const inCls = `${fieldCls} ${ro ? 'border-slate-200 bg-slate-50' : 'border-slate-300 bg-white'}`;
 
   return (
     <div className="flex flex-col gap-3.5">
@@ -190,7 +149,7 @@ export default function Screen() {
                       <div className="flex items-center gap-2.5">
                         <span className="grid h-[30px] w-[30px] flex-none place-items-center rounded-md bg-slate-200 text-[11px] font-semibold text-slate-700">{(x.nombres[0] + x.apellidos[0]).toUpperCase()}</span>
                         <div className="flex flex-col leading-tight">
-                          <button onClick={() => open(x, 'view')} className="border-0 bg-transparent p-0 text-left text-[13px] font-medium text-ink hover:text-accent hover:underline">{full(x)}</button>
+                          <button onClick={() => open(x)} className="border-0 bg-transparent p-0 text-left text-[13px] font-medium text-ink hover:text-accent hover:underline">{full(x)}</button>
                           <span className="font-mono text-[11px] leading-[normal] text-slate-500">{x.code}</span>
                         </div>
                         {x.alg && <i className="ph-fill ph-warning text-red-600" title="Alergias registradas" />}
@@ -203,9 +162,7 @@ export default function Screen() {
                     <td className={td}><span className={`${pillBase} w-[81px] ${pill[ESTADO_TONE[x.estado] ?? 'mute']}`}>{x.estado}</span></td>
                     <td className={`${td} whitespace-nowrap text-right`}>
                       <div className="inline-flex gap-1">
-                        <button onClick={() => open(x, 'view')} title="Ver ficha" aria-label="Ver ficha" className="grid h-[30px] w-[30px] place-items-center rounded-md border border-transparent text-base text-slate-600 hover:border-slate-200 hover:bg-slate-100"><i className="ph ph-eye" /></button>
-                        <button onClick={() => open(x, 'edit')} disabled={sl} title={sl ? SL_MSG : 'Editar'} aria-label="Editar" className="grid h-[30px] w-[30px] place-items-center rounded-md border border-transparent text-base text-accent hover:border-blue-200 hover:bg-blue-50 disabled:opacity-40 disabled:hover:border-transparent disabled:hover:bg-transparent"><i className="ph ph-pencil-simple" /></button>
-                        <button onClick={() => askDelete(x)} disabled={sl} title={sl ? SL_MSG : 'Eliminar'} aria-label="Eliminar" className="grid h-[30px] w-[30px] place-items-center rounded-md border border-transparent text-base text-red-600 hover:border-red-300 hover:bg-red-100 disabled:opacity-40 disabled:hover:border-transparent disabled:hover:bg-transparent"><i className="ph ph-trash" /></button>
+                        <button onClick={() => open(x)} title="Ver expediente" aria-label="Ver expediente" className="grid h-[30px] w-[30px] place-items-center rounded-md border border-transparent text-base text-slate-600 hover:border-slate-200 hover:bg-slate-100"><i className="ph ph-eye" /></button>
                       </div>
                     </td>
                   </tr>
@@ -243,47 +200,6 @@ export default function Screen() {
         </div>
       )}
 
-      {sheet && cur && (
-        <SideDrawer width={480} onClose={() => setSheet(null)}>
-          <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-4">
-            <span className="grid h-11 w-11 flex-none place-items-center rounded-lg bg-slate-200 text-[15px] font-semibold text-slate-700">{((sheet.f.nombres[0] ?? '?') + (sheet.f.apellidos[0] ?? '')).toUpperCase()}</span>
-            <div className="min-w-0 flex-1">
-              <div className="text-[15px] font-semibold">{ro ? '' : 'Editar · '}{full(cur)}</div>
-              <div className="font-mono text-xs text-slate-500">{cur.code} · {cur.grado} {cur.sec} · {cur.tanda}</div>
-            </div>
-            <button onClick={() => setSheet(null)} aria-label="Cerrar" className="h-8 w-8 rounded-md border border-slate-300 bg-white"><i className="ph ph-x" /></button>
-          </div>
-          <div className="flex flex-1 flex-col gap-3.5 overflow-auto px-5 py-[18px]">
-            <div className="grid grid-cols-2 gap-3">
-              <Lbl t="Nombres *"><input value={sheet.f.nombres} onChange={setF('nombres')} disabled={ro} className={inCls} /></Lbl>
-              <Lbl t="Apellidos *"><input value={sheet.f.apellidos} onChange={setF('apellidos')} disabled={ro} className={inCls} /></Lbl>
-              <Lbl t="Fecha de nacimiento"><input type="date" value={sheet.f.fnac} onChange={setF('fnac')} disabled={ro} className={inCls} /></Lbl>
-              <Lbl t="Estado"><select value={sheet.f.estado} onChange={setF('estado')} disabled={ro} className={inCls}><option>Activo</option><option>Inactivo</option><option>Retirado</option></select></Lbl>
-              <Lbl t="Grado"><select value={sheet.f.grado} onChange={setF('grado')} disabled={ro} className={inCls}>{opciones(ref.grados, sheet.f.grado).map(g => <option key={g}>{g}</option>)}</select></Lbl>
-              <Lbl t="Sección"><select value={sheet.f.sec} onChange={setF('sec')} disabled={ro} className={inCls}>{opciones(ref.secciones, sheet.f.sec).map(g => <option key={g}>{g}</option>)}</select></Lbl>
-              <Lbl t="Tanda"><select value={sheet.f.tanda} onChange={setF('tanda')} disabled={ro} className={inCls}>{opciones(ref.tandas, sheet.f.tanda).map(g => <option key={g}>{g}</option>)}</select></Lbl>
-              <Lbl t="Teléfono de emergencia"><input value={sheet.f.tel} onChange={setF('tel')} disabled={ro} className={inCls} /></Lbl>
-            </div>
-            <Lbl t="Dirección de residencia"><input value={sheet.f.dir} onChange={setF('dir')} disabled={ro} className={inCls} /></Lbl>
-            <div className="flex flex-col gap-1.5 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-              <span>Tutor financiero: <b className="text-ink">{cur.tutor}</b></span>
-              <span>Cuenta: <b className={cur.cuenta === 'mora' ? 'text-bad-fg' : 'text-ok-fg'}>{cur.cuenta === 'mora' ? 'En mora' : 'Al día'}</b></span>
-              {cur.alg && <span className="font-semibold text-bad-fg">⚠ Alergias registradas: {cur.alg}</span>}
-            </div>
-            {sheet.err && <div className="text-xs font-medium text-red-600">{sheet.err}</div>}
-          </div>
-          <div className="flex flex-col gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
-            <button onClick={() => navigate(`/expediente/${cur.id}`)} className="flex h-[38px] w-full items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-white text-[13px] font-semibold text-accent hover:bg-blue-50"><i className="ph ph-identification-card" />Ver expediente completo</button>
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => askDelete(cur)} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-[38px] items-center justify-center gap-1.5 rounded-md border border-red-300 bg-white text-[13px] font-medium text-red-600 hover:bg-red-100 disabled:opacity-40"><i className="ph ph-trash" />Eliminar</button>
-              <button onClick={save} disabled={sl} title={sl ? SL_MSG : undefined} className="flex h-[38px] items-center justify-center gap-1.5 rounded-md bg-accent text-[13px] font-semibold text-white hover:bg-accent-dark disabled:opacity-40"><i className={`ph ${ro ? 'ph-pencil-simple' : 'ph-floppy-disk'}`} />{ro ? 'Editar' : 'Guardar cambios'}</button>
-            </div>
-            {!ro && <button onClick={() => setSheet({ id: sheet.id, mode: 'view', f: { ...cur }, err: '' })} className="h-8 text-xs font-medium text-slate-600 hover:underline">Cancelar edición</button>}
-          </div>
-        </SideDrawer>
-      )}
-
-      {guard && <SupervisorGuardModal cfg={guard} onClose={() => setGuard(null)} />}
     </div>
   );
 }

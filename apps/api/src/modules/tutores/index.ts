@@ -27,7 +27,7 @@ type Link = { id: string; code: string; nombres: string; apellidos: string; grad
 /** Vínculos tutor→alumno: financiero (Alumno.tutorId) y legal (Alumno.tutorLegalId). */
 async function vinculos(ciclo?: CicloRow) {
   const SECSEL = { letra: true, grado: { select: { nombre: true } }, tanda: { select: { nombre: true } } } as const;
-  let als = (await prisma.alumno.findMany({ select: { id: true, code: true, nombres: true, apellidos: true, seccion: { select: SECSEL }, estado: true, tutorId: true, tutorLegalId: true } }))
+  let als = (await prisma.alumno.findMany({ where: ciclo && !esCicloActivo(ciclo) ? undefined : { estado: { not: 'Preinscrito' } }, select: { id: true, code: true, nombres: true, apellidos: true, seccion: { select: SECSEL }, estado: true, tutorId: true, tutorLegalId: true } }))
     .map(({ seccion, ...a }) => ({ ...a, ...gst({ seccion }) }));
   if (ciclo && !esCicloActivo(ciclo)) {
     // Fase 2D: solo los alumnos MATRICULADOS en ese ciclo, con la seccion de entonces (y el estado de su matricula).

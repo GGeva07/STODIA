@@ -1,0 +1,7 @@
+dist/
+node_modules/
+*.p12
+*.pfx
+*.pem
+*.key
+.env*

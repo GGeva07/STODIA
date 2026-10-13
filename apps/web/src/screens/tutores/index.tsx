@@ -11,6 +11,7 @@ import { pill, pillBase } from '../../components/system/styles';
 import SideDrawer from '../../components/finanzas/SideDrawer';
 import { printCarta } from '../../components/personas/printCarta';
 import { hoyDMY, usePrintBusy } from '../../components/finanzas/print';
+import { AvisoBorrador, useDraft } from '../../lib/useDraft';
 
 /** Pantalla «Tutores» del prototipo (catálogo `tutores`, L2314): padres y tutores legales con datos reales de la API. */
 const PARENTESCOS = ['Padre', 'Madre', 'Tutor legal', 'Abuelo(a)', 'Otro'];
@@ -25,10 +26,11 @@ export default function Screen() {
   const { user } = useSession();
   const sl = useSoloLectura(); // Fase 2D: ciclo que no es el activo = alta / edición / eliminación deshabilitadas
   const slp = { disabled: sl, title: sl ? SL_MSG : undefined };
-  const [q, setQ] = useState('');
+  const [q, setQ] = useDraft('tutores:q', '');
   const [page, setPage] = useState(1);
   const [data, setData] = useState<TutoresResp | null>(null);
-  const [form, setForm] = useState<{ row: TutorRow | null } | null>(null);
+  // El «Nuevo tutor» abierto se reabre al volver; la edición no (sus datos viajan en la fila): se restaura al pulsar Editar.
+  const [form, setForm] = useDraft<{ row: TutorRow | null } | null>('tutores:form', null, { transformar: f => (f?.row ? null : f) });
   const [ficha, setFicha] = useState<string | null>(null);
   const [delRow, setDelRow] = useState<TutorRow | null>(null);
   const [cred, setCred] = useState<{ t: string; ced: string; r: TutorAccesoResp } | null>(null);
@@ -145,13 +147,16 @@ export default function Screen() {
 // ---------------------------------------------------------------- formulario (alta / edición)
 function TutorForm({ row, onClose, onSaved }: { row: TutorRow | null; onClose: () => void; onSaved: (t: TutorFicha) => void }) {
   const id = row?.id ?? null;
-  const [v, setV] = useState({ nombre: row?.nombre ?? '', cedula: row?.cedula ?? '', parentesco: row?.parentesco ?? '', tipo: row?.tipo ?? '', tel: row?.tel ?? '', email: row?.email ?? '', rnc: row?.rnc ?? '', estado: row?.estado ?? 'Activo' });
-  const [alumnos, setAlumnos] = useState<{ id: string; nombre: string }[]>(row?.alumnos ?? []);
+  // Criterio de borradores (ver docs/borradores-formularios.md): «×»/fondo conservan el borrador; «Cancelar» y guardar con éxito lo descartan.
+  const dk = 'tutor:' + (id ?? 'nuevo');
+  const [v, setV, limpV, meta] = useDraft(dk + ':v', { nombre: row?.nombre ?? '', cedula: row?.cedula ?? '', parentesco: row?.parentesco ?? '', tipo: row?.tipo ?? '', tel: row?.tel ?? '', email: row?.email ?? '', rnc: row?.rnc ?? '', estado: row?.estado ?? 'Activo' });
+  const [alumnos, setAlumnos, limpA] = useDraft<{ id: string; nombre: string }[]>(dk + ':alumnos', row?.alumnos ?? []);
   const [err, setErr] = useState<Record<string, string>>({});
   const [top, setTop] = useState('');
   const [busy, setBusy] = useState(false);
-  const [sq, setSq] = useState('');
+  const [sq, setSq, limpQ] = useDraft(dk + ':sq', ''); // solo el texto de búsqueda
   const [opts, setOpts] = useState<TutorAlumnoOpt[]>([]);
+  const descartar = () => { limpV(); limpA(); limpQ(); };
   const set = (k: keyof typeof v, val: string) => { setV(x => ({ ...x, [k]: val })); setErr(e => ({ ...e, [k]: '' })); setTop(''); };
 
   useEffect(() => {
@@ -173,7 +178,9 @@ function TutorForm({ row, onClose, onSaved }: { row: TutorRow | null; onClose: (
     setBusy(true);
     try {
       const body = { ...v, alumnos: alumnos.map(a => a.id) };
-      onSaved(id ? await api.put<TutorFicha>(`/tutores/${id}`, body) : await api.post<TutorFicha>('/tutores', body));
+      const r = id ? await api.put<TutorFicha>(`/tutores/${id}`, body) : await api.post<TutorFicha>('/tutores', body);
+      descartar();
+      onSaved(r);
     } catch (x) { setTop(errMsg(x)); setBusy(false); }
   };
 
@@ -203,6 +210,7 @@ function TutorForm({ row, onClose, onSaved }: { row: TutorRow | null; onClose: (
         <button onClick={onClose} aria-label="Cerrar" className="h-8 w-8 flex-none rounded-md border border-slate-300 bg-white"><i className="ph ph-x" /></button>
       </div>
       <div className="flex flex-1 flex-col gap-3.5 overflow-auto px-5 py-4">
+        <AvisoBorrador meta={{ ...meta, descartar }} />
         {field('nombre', 'Nombre completo', inp('nombre'), undefined, true)}
         {field('cedula', 'Cédula', inp('cedula', true, '001-0000000-0'), undefined, true)}
         {field('parentesco', 'Parentesco', sel('parentesco', PARENTESCOS), undefined, true)}
@@ -237,7 +245,7 @@ function TutorForm({ row, onClose, onSaved }: { row: TutorRow | null; onClose: (
         {top && <div className="flex items-center gap-1.5 text-xs font-medium text-red-600"><i className="ph ph-warning-circle" />{top}</div>}
       </div>
       <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
-        <button onClick={onClose} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">Cancelar</button>
+        <button onClick={() => { descartar(); onClose(); }} className="h-9 rounded-md border border-slate-300 bg-white px-3.5 text-[13px] font-medium">Cancelar</button>
         <button onClick={save} disabled={busy} className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white hover:bg-accent-dark disabled:opacity-60"><i className="ph ph-floppy-disk" />{id ? 'Guardar cambios' : 'Crear tutor'}</button>
       </div>
     </SideDrawer>

@@ -22,10 +22,24 @@ function validate(f: PlanForm, TANDAS: string[]): string | null {
   if (f.freq === '0' && n !== 1) return 'Un pago único debe tener 1 cuota.';
   if (f.freq !== '0' && n * Number(f.freq) > 12) return 'La frecuencia y el número de cuotas exceden el ciclo de 12 meses.';
   if (f.porTanda) {
-    const bad = TANDAS.find(t => !(parseFloat(f.tm?.[t] ?? '') > 0));
-    if (bad) return 'Define un monto mayor que cero para la tanda ' + bad + '.';
+    // Tandas sin precio permitidas (no calculan cuotas hasta definirlo); al menos una con precio y las escritas > 0.
+    const vals = TANDAS.map(t => String(f.tm?.[t] ?? ''));
+    const malo = TANDAS.find((t, i) => vals[i].trim() !== '' && !(parseFloat(vals[i]) > 0));
+    if (malo) return 'El monto de la tanda ' + malo + ' debe ser mayor que cero (o déjalo vacío).';
+    if (!vals.some(v => parseFloat(v) > 0)) return 'Define el monto de al menos una tanda.';
   } else if (!(anual > 0)) return 'El monto anual debe ser mayor que cero.';
   if (!(dia >= 1 && dia <= 28)) return 'El día de vencimiento debe estar entre 1 y 28.';
+  for (const [k, nom] of [['inscripcion', 'La cuota de inscripción'], ['materiales', 'La cuota de materiales']] as const) {
+    const raw = String(f[k] ?? '').trim(), v = raw === '' ? 0 : Number(raw);
+    if (!Number.isFinite(v) || v < 0 || v > 100_000_000) return `${nom} debe ser un monto entre 0 y 100,000,000 (RD$).`;
+  }
+  if (f.materialesOn && !(Number(f.materiales || 0) > 0)) return 'Para agregar la cuota de materiales define un monto mayor que cero (o apaga la opción).';
+  {
+    const pr = Number(f.pronto || 0), pd = Number(f.prontoDias || 0);
+    if (!(Number.isFinite(pr) && pr >= 0 && pr <= 100)) return 'El descuento por pronto pago debe estar entre 0 y 100 %.';
+    // 0 días con % > 0 se permite (plan migrado sin configurar): se guarda, pero el descuento no aplica hasta definir los días.
+    if (pr > 0 && !(Number.isInteger(pd) && pd >= 0 && pd <= 60)) return 'Los días de anticipación del pronto pago deben ser un entero entre 1 y 60.';
+  }
   return null;
 }
 

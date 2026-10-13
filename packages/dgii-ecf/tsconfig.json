@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["es2022", "dom"],
+    "types": ["node", "jest"],
+    "isolatedModules": false,
+    "baseUrl": ".",
+    "paths": { "src/*": ["*"] }
+  },
+  "include": ["src"]
+}

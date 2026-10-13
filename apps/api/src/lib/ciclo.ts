@@ -113,7 +113,7 @@ export function cicloPedido(req: Pick<FastifyRequest, 'headers' | 'query'>): str
  * inventario/kiosko, comunicaciones enviadas, PIN, documentos/folios...) NO es por ciclo e ignora la cabecera. `ESCRITURA_LIBRE` son POST que solo LEEN.
  */
 export const PREFIJOS_POR_CICLO = ['directorio', 'expediente', 'notas', 'asistencia', 'horarios', 'cobros', 'becas', 'planes', 'inscripcion', 'tutores', 'extra'];
-export const RUTAS_POR_CICLO = [/^\/movil\/lista(\/|$)/, /^\/comunica\/enviar(\/|$)/];
+export const RUTAS_POR_CICLO = [/^\/movil\/lista(\/|$)/, /^\/comunica\/enviar(\/|$)/, /^\/kiosko\/cargos(\/|$)/];
 export const ESCRITURA_LIBRE = [/^\/directorio\/saldos$/, /^\/cobros\/(recibos|notas)\/[^/]+\/(enviar|reimprimir)$/]; // reimprimir / enviar por correo un recibo no tocan contabilidad: permitidos en ciclo cerrado
 export function escrituraPorCiclo(method: string, url: string): boolean {
   if (['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) return false;
@@ -122,6 +122,16 @@ export function escrituraPorCiclo(method: string, url: string): boolean {
   const seg = path.split('/')[1] ?? '';
   return PREFIJOS_POR_CICLO.includes(seg) || RUTAS_POR_CICLO.some(r => r.test(path));
 }
+/**
+ * Trabajo ANTICIPADO en un ciclo PLANIFICADO (pre-inscripcion): ademas del activo, un ciclo Planificado admite escrituras en estos prefijos (inscripcion, cobros,
+ * becas, planes). Las demas (notas, asistencia, horarios, extra, expediente, directorio, tutores, comunica...) siguen exigiendo el ciclo activo
+ * (CICLO_NO_ACTIVO): el ciclo planificado aun no tiene horarios ni periodos en curso. Un ciclo Cerrado sigue siendo solo lectura para todo.
+ */
+export const PREFIJOS_PLANIFICADO = ['inscripcion', 'cobros', 'becas', 'planes'];
+export const escrituraEnPlanificado = (url: string) => PREFIJOS_PLANIFICADO.includes(url.split('?')[0].split('/')[1] ?? '');
+/** El ciclo permite esta escritura? Activo siempre; Planificado solo en PREFIJOS_PLANIFICADO; Cerrado nunca. */
+export const cicloAdmiteEscritura = (c: { estado: string }, url: string) => c.estado === 'Activo' || (c.estado === 'Planificado' && escrituraEnPlanificado(url));
+
 /** Error de escritura sobre un ciclo que no es el activo: Cerrado = solo lectura (CICLO_CERRADO); Planificado = aun no opera, las pantallas por ciclo solo escriben en el activo (CICLO_NO_ACTIVO). */
 export const errorCicloCerrado = (nombre: string, estado = 'Cerrado') => estado === 'Cerrado'
   ? { code: 'CICLO_CERRADO', error: `El ciclo ${nombre} está cerrado: solo lectura. Vuelve al ciclo activo para modificar.` }

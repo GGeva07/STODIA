@@ -73,15 +73,33 @@ const plugin: FastifyPluginAsync = async app => {
     return toBeca(row);
   });
 
-  app.post<{ Params: { id: string }; Body: { pin?: string } }>('/:id/aprobar', auth, async (req, reply) => {
+  app.post<{ Params: { id: string }; Body: { pin?: string; motivo?: string } }>('/:id/aprobar', auth, async (req, reply) => {
     if (!canApprove(req.user.rol) && !(await supervisorOk(req, req.body?.pin, 'beca.aprobar'))) return reply.code(403).send({ error: 'Clave de supervisor inválida' });
     const b = await prisma.finBeca.findUnique({ where: { id: req.params.id }, include: { ciclo: { select: { estado: true } } } });
     if (!b) return reply.code(404).send({ error: 'Beca no encontrada' });
+    if (b.estado !== 'Pendiente') return reply.code(409).send({ error: `Solo se aprueban solicitudes Pendientes (esta está ${b.estado})` });
     if (!cicloEditable(b.ciclo)) return reply.code(409).send({ error: 'El ciclo lectivo de la beca está cerrado (solo lectura)' });
     const quien = canApprove(req.user.rol) ? req.user.nombre : 'Supervisor';
-    const ap = await prisma.finBeca.update({ where: { id: b.id }, data: { estado: 'Aprobada', aprob: `${quien} · ${hoy()}` }, include: INC });
-    await audit(req.user, 'Update', { tabla: 'Becas', id: b.id, prev: b.estado, next: 'Aprobada', ip: req.ip });
+    const motivo = (req.body?.motivo ?? '').trim().slice(0, 300);
+    const traza = b.aprob.startsWith('Solicitada por') ? ` · ${b.aprob}` : '';
+    const ap = await prisma.finBeca.update({ where: { id: b.id }, data: { estado: 'Aprobada', aprob: `${quien} · ${hoy()}${motivo ? ` · ${motivo}` : ''}${traza}` }, include: INC });
+    // Al quedar vigente, el contrato del alumno en ese ciclo pasa a reflejar el tipo de beca (única vía que escribe Contrato.tipoBecaId).
+    await prisma.contrato.updateMany({ where: { alumnoId: b.alumnoId, cicloId: b.cicloId }, data: { tipoBecaId: b.tipoBecaId } });
+    await audit(req.user, 'Update', { tabla: 'Becas', id: b.id, prev: b.estado, next: `Aprobada${motivo ? ' · ' + motivo : ''}`, ip: req.ip });
     return toBeca(ap);
+  });
+
+  app.post<{ Params: { id: string }; Body: { pin?: string; motivo?: string } }>('/:id/rechazar', auth, async (req, reply) => {
+    if (!canApprove(req.user.rol) && !(await supervisorOk(req, req.body?.pin, 'beca.rechazar'))) return reply.code(403).send({ error: 'Clave de supervisor inválida' });
+    const b = await prisma.finBeca.findUnique({ where: { id: req.params.id }, include: { ciclo: { select: { estado: true } } } });
+    if (!b) return reply.code(404).send({ error: 'Beca no encontrada' });
+    if (b.estado !== 'Pendiente') return reply.code(409).send({ error: `Solo se rechazan solicitudes Pendientes (esta está ${b.estado})` });
+    if (!cicloEditable(b.ciclo)) return reply.code(409).send({ error: 'El ciclo lectivo de la beca está cerrado (solo lectura)' });
+    const quien = canApprove(req.user.rol) ? req.user.nombre : 'Supervisor';
+    const motivo = (req.body?.motivo ?? '').trim().slice(0, 300);
+    const rc = await prisma.finBeca.update({ where: { id: b.id }, data: { estado: 'Rechazada', aprob: `Rechazada por ${quien} · ${hoy()}${motivo ? ` · ${motivo}` : ''}` }, include: INC });
+    await audit(req.user, 'Update', { tabla: 'Becas', id: b.id, prev: b.estado, next: `Rechazada${motivo ? ' · ' + motivo : ''}`, ip: req.ip });
+    return toBeca(rc);
   });
 
   app.post<{ Params: { id: string }; Body: { pin?: string } }>('/:id/revocar', auth, async (req, reply) => {
@@ -90,6 +108,7 @@ const plugin: FastifyPluginAsync = async app => {
     if (!b) return reply.code(404).send({ error: 'Beca no encontrada' });
     if (!cicloEditable(b.ciclo)) return reply.code(409).send({ error: 'El ciclo lectivo de la beca está cerrado (solo lectura)' });
     const rv = await prisma.finBeca.update({ where: { id: b.id }, data: { estado: 'Revocada', aprob: `Revocada · ${hoy()}` }, include: INC });
+    await prisma.contrato.updateMany({ where: { alumnoId: b.alumnoId, cicloId: b.cicloId, tipoBecaId: b.tipoBecaId }, data: { tipoBecaId: null } });
     await audit(req.user, 'Update', { tabla: 'Becas', id: b.id, prev: b.estado, next: 'Revocada', ip: req.ip });
     return toBeca(rv);
   });

@@ -1,4 +1,5 @@
 import { SL_MSG, useCiclo } from '../../lib/ciclo';
+import { useDraft } from '../../lib/useDraft';
 import { useEffect, useRef, useState } from 'react';
 import type { AcadExtra, AcadExtraInput } from '@stodia/shared';
 import { api } from '../../lib/api';
@@ -19,9 +20,9 @@ export default function Screen() {
   const { soloLectura: sl, cicloSeleccionado } = useCiclo(); // Fase 2D: ciclo que no es el activo = alta / edición / baja deshabilitadas
   const slp = { disabled: sl, title: sl ? SL_MSG : undefined };
   const [list, setList] = useState<AcadExtra[]>([]);
-  const [q, setQ] = useState('');
-  const [cat, setCat] = useState('all');
-  const [kind, setKind] = useState('all');
+  const [q, setQ] = useDraft('extra:q', '');
+  const [cat, setCat] = useDraft('extra:cat', 'all');
+  const [kind, setKind] = useDraft('extra:kind', 'all');
   const [xd, setXd] = useState<{ item: AcadExtra | null; mode: Mode } | null>(null);
   const [guard, setGuard] = useState<GuardCfg | null>(null);
   const pin = useRef('');

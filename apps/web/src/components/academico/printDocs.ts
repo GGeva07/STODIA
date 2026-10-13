@@ -13,11 +13,11 @@ const slug = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/
 const f1 = (v: number | null) => (v != null ? v.toFixed(1) : '—');
 
 /** docSabana: tabla #, Estudiante, competencias, Prom, Final, Letra + promedio de sección y aprobados. */
-export function docSabana(m: { materia: string; seccion: string; nivel: string; periodoLabel: string; minimo: number; comps: { k: string }[] }, rows: NotaFila[]): PDoc {
+export function docSabana(m: { docente?: string; materia: string; seccion: string; nivel: string; periodoLabel: string; minimo: number; comps: { k: string }[] }, rows: NotaFila[]): PDoc {
   const bases = rows.map(r => r.base).filter((v): v is number => v != null);
   const n = m.comps.length;
   return {
-    kind: 'carta', name: `Sábana del grado · ${m.seccion}`, format: CARTA, sign: ['Docente', 'Dirección académica'],
+    kind: 'carta', name: `Sábana del grado · ${m.seccion}`, format: CARTA, sign: ['Docente', 'Dirección académica'], firmaDe: { Docente: m.docente },
     pages: [{
       title: 'Sábana de calificaciones', sub: `${m.materia} · ${m.seccion} · ${m.nivel} · ${m.periodoLabel}`,
       blocks: [
@@ -35,7 +35,7 @@ export function docBoletines(m: { materia: string; seccion: string; tanda?: stri
   const cc = m.comps.filter(c => c.k !== 'EX');
   const rango = cc.length > 1 ? `${cc[0].k}–${cc[cc.length - 1].k}` : cc[0]?.k ?? '';
   return {
-    kind: 'carta', name: `Boletines individuales · ${m.seccion}`, format: CARTA, sign: ['Docente', 'Firma del tutor'],
+    kind: 'carta', name: `Boletines individuales · ${m.seccion}`, format: CARTA, sign: ['Docente', 'Firma del tutor'], firmaDe: { Docente: m.docente },
     file: `boletines_${slug(m.seccion)}_${slug(m.periodoLabel.split('(')[0])}.pdf`, porAlumno: true,
     // Borrador (celdas sin capturar) = sin folio de verificación; con notas completas cada boletín recibe folio + SHA-256 + QR.
     folioTipo: borrador ? undefined : 'BOL',

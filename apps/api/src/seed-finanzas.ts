@@ -36,9 +36,9 @@ const RECIBOS: { id: string; ncf: string; tutor: string; hora: string; monto: nu
   { id: 'REC-0417', ncf: 'B0200001880', tutor: 'Yolanda Guzmán', hora: '09:20', monto: 3200, metodo: 'Transferencia', lineas: [{ con: 'Plan Comedor · Septiembre · Yuleisy', monto: 3200 }] },
 ];
 
-const base = { freq: '1', n: '10', anual: '85000', desc: '0', start: '8', dia: '1', gracia: '5', moraTipo: 'pct', moraVal: '3', pronto: '0', prontoDia: '0', estado: 'Activo' };
+const base = { freq: '1', n: '10', anual: '85000', desc: '0', start: '8', dia: '1', gracia: '5', moraTipo: 'pct', moraVal: '3', pronto: '0', prontoDias: '0', estado: 'Activo' };
 const PLANS: [string, Record<string, unknown>][] = [
-  ['PLN-001', { ...base, porTanda: true, tm: { Matutina: '85000', Vespertina: '72000', Extendida: '98000', Nocturna: '60000' }, name: 'Plan Regular 10 Cuotas', pronto: '5', prontoDia: '3' }],
+  ['PLN-001', { ...base, porTanda: true, tm: { Matutina: '85000', Vespertina: '72000', Extendida: '98000', Nocturna: '60000' }, name: 'Plan Regular 10 Cuotas', pronto: '5', prontoDias: '0' }],
   ['PLN-002', { ...base, name: 'Pago Único Anual Contado', freq: '0', n: '1', desc: '10', dia: '15', gracia: '0', moraTipo: 'none', moraVal: '0' }],
   ['PLN-003', { ...base, name: 'Plan Trimestral', freq: '3', n: '4' }],
   ['PLN-004', { ...base, name: 'Plan 11 Cuotas (Ago–Jun)', n: '11', moraTipo: 'fijo', moraVal: '25', estado: 'Inactivo' }],

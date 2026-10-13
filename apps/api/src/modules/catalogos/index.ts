@@ -42,7 +42,7 @@ const norm = (s: unknown) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g
 
 const plugin: FastifyPluginAsync = async app => {
   const rd = { onRequest: [app.authenticate] };
-  const wr = { onRequest: [app.authenticate, app.requireRole('Super Admin')] };
+  const wr = { onRequest: [app.authenticate, app.requireScreen('catalogos')] };
 
   /** Filas de un tipo con la forma histórica (secciones con su `insc` calculado: alumnos no Retirados con esa sección). */
   const list = async (tipo: string, interno = false): Promise<Row[]> => (await leerTipo(tipo as TipoTipado, { insc: tipo === 'secciones', interno })) as Row[];

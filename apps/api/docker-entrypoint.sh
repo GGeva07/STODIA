@@ -5,7 +5,7 @@ mkdir -p /data
 # una base ANTERIOR se respalda, se EXPANDE/RELLENA y solo entonces se endurece
 # con db push (expandir -> rellenar -> contraer). Si la Fase 2A, 2B o 2C encuentra datos ambiguos (codigo 3) NO se ejecuta el push y el contenedor se detiene.
 # Tambien aqui (fk-reparar --auto) se migra el MODULO FISCAL (SecuenciaFiscal / tipo de comprobante por recibo; docs/fiscal-ncf.md): aditivo e idempotente.
-# Y el modulo de NOTAS DE CREDITO/DEBITO (NotaFiscal...; docs/fiscal-ncf.md §10): tambien aditivo (codigo 11 = respaldo + expandir/rellenar + db push SIN --accept-data-loss).
+# Y el modulo de NOTAS DE CREDITO/DEBITO (NotaFiscal...; docs/fiscal-ncf.md §12): tambien aditivo (codigo 11 = respaldo + expandir/rellenar + db push SIN --accept-data-loss).
 # En una base nueva o ya migrada estos pasos no hacen nada.
 set +e; pnpm exec tsx scripts/fk-reparar.ts --detectar; rc=$?; set -e
 PUSH_FLAGS=""

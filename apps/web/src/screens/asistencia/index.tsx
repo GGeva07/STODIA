@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useDraft } from '../../lib/useDraft';
 import type { AcadAsisDia, AcadAsisGuardado, AcadMarca } from '@stodia/shared';
 import { api } from '../../lib/api';
 import AsigSelect from '../../components/academico/AsigSelect';
@@ -32,10 +33,25 @@ export default function Screen() {
   const [notify, setNotify] = useState<boolean[]>([]);
   const [busy, setBusy] = useState(false);
 
-  const [asig, setAsig] = useState('');
+  const [asig, setAsig] = useDraft('asistencia:asig', '');
+  // Marcas editadas sin registrar (solo si difieren de lo guardado en el servidor): se superponen a la lista al volver; se descartan al registrar el pase.
+  type Ed = { fecha: string; asigId: string; att: Marca[]; notify: boolean[] };
+  const [ed, setEd, limEd] = useDraft<Ed | null>('asistencia:marcas', null);
+  const base = useRef<{ att: Marca[]; notify: boolean[] } | null>(null);
+  useEffect(() => { // espeja las marcas en el borrador solo cuando difieren de la base
+    if (!d || !d.asigId || !base.current) return;
+    const b = base.current;
+    const igual = att.length === b.att.length && att.every((x, i) => x === b.att[i]) && notify.length === b.notify.length && notify.every((x, i) => x === b.notify[i]);
+    setEd(igual ? null : { fecha: d.fecha, asigId: d.asigId, att, notify });
+  }, [att, notify, d]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    api.get<AcadAsisDia>('/asistencia' + (asig ? `?asig=${encodeURIComponent(asig)}` : '')).then(r => { setD(r); setAtt(r.cards.map(c => c.estado)); setNotify(r.cards.map(c => c.notificar)); }).catch(e => toast(errMsg(e), 'bad'));
+    api.get<AcadAsisDia>('/asistencia' + (asig ? `?asig=${encodeURIComponent(asig)}` : '')).then(r => {
+      const a0 = r.cards.map(c => c.estado), n0 = r.cards.map(c => c.notificar);
+      base.current = { att: a0, notify: n0 };
+      const e = ed && ed.fecha === r.fecha && ed.asigId === r.asigId && ed.att.length === a0.length ? ed : null; // borrador válido: misma fecha, sección y nº de alumnos
+      setD(r); setAtt(e ? e.att : a0); setNotify(e ? e.notify : n0);
+    }).catch(e => toast(errMsg(e), 'bad'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asig]);
 
@@ -83,6 +99,7 @@ export default function Screen() {
     setBusy(true);
     try {
       const res = await api.post<AcadAsisGuardado>('/asistencia', { fecha: d.fecha, asig: d.asigId, items: d.cards.map((c, i) => ({ rosterId: c.rosterId, estado: att[i], notificar: notify[i] })) });
+      base.current = { att: [...att], notify: [...notify] }; limEd();
       toast('Pase de lista registrado' + (res.notificados ? ` · ${res.notificados} notificación(es) SMS/Push enviadas a tutores` : ''), 'ok');
     } catch (e) { toast(errMsg(e), 'bad'); } finally { setBusy(false); }
   };

@@ -19,7 +19,7 @@ import { MOTIVO_ANULACION, idMotivo } from './notas-motivos';
 
 /**
  * NOTAS DE CREDITO / DEBITO (Cobros). Servicio UNICO: lo usan los endpoints POST /cobros/notas/credito|debito y la anulacion de recibos (POST /cobros/recibos/:id/anular).
- * Reglas y decisiones de contabilidad documentadas en docs/fiscal-ncf.md §10. Todo efecto (NCF, nota, lineas, reembolsos, cargos reabiertos o creados, inventario, estado del
+ * Reglas y decisiones de contabilidad documentadas en docs/fiscal-ncf.md §12. Todo efecto (NCF, nota, lineas, reembolsos, cargos reabiertos o creados, inventario, estado del
  * recibo) ocurre en UNA transaccion; el NCF se asigna PRIMERO (serializa en la fila de la secuencia) y se revierte con la nota si algo falla.
  */
 type Db = typeof prisma | Prisma.TransactionClient;
@@ -34,7 +34,7 @@ const bad = (m: string) => new NotaError(400, m);
 const conflict = (m: string, code?: string) => new NotaError(409, m, code);
 
 /** 409 con enlace a Configuracion › Fiscal cuando no hay secuencia B03/B04/E33/E34 disponible. */
-export const ENLACE_FISCAL = '/config?seccion=fiscal';
+export const ENLACE_FISCAL = '/config?tab=fiscal';
 const sinSecuencia = (msg: string) => new NotaError(409, msg, 'SIN_SECUENCIA', { enlace: ENLACE_FISCAL });
 
 // ---------------------------------------------------------------- includes y DTO
@@ -524,7 +524,7 @@ export async function listarNotas(f: FiltroNotas): Promise<NotaListaRes> {
   if (f.tipo === 'credito') where.clase = 'CREDITO'; else if (f.tipo === 'debito') where.clase = 'DEBITO';
   if (f.desde || f.hasta) where.createdAt = { ...(f.desde ? { gte: f.desde } : {}), ...(f.hasta ? { lt: f.hasta } : {}) };
   if (f.cajeroId) where.cajeroId = f.cajeroId;
-  const term = (f.q ?? '').trim().slice(0, 80), qd = digits(term);
+  const term = (f.q ?? '').trim().slice(0, 80), qd = /^[\d\s-]+$/.test(term) ? digits(term) : ''; // la cedula solo se busca si el texto es numerico (un REC-0621 no debe coincidir con cedulas)
   if (term) {
     const or: Prisma.NotaFiscalWhereInput[] = [{ id: { contains: term } }, { ncf: { contains: term } }, { ncfModificado: { contains: term } }, { reciboId: { contains: term } }, { ventaId: { contains: term } }, { clienteNombre: { contains: term } }];
     if (/^\d+$/.test(term)) or.push({ reciboId: { contains: 'REC-' + term.padStart(4, '0') } });
@@ -543,7 +543,7 @@ export async function listarNotas(f: FiltroNotas): Promise<NotaListaRes> {
 export async function buscarDocumentos(q: string, cicloId: string): Promise<NotaBuscarFila[]> {
   const term = q.trim().slice(0, 80);
   if (term.length < 2) return [];
-  const tz = await zonaHoraria(), qd = digits(term);
+  const tz = await zonaHoraria(), qd = /^[\d\s-]+$/.test(term) ? digits(term) : '';
   const orR: Prisma.FinReciboWhereInput[] = [{ id: { contains: term } }, { ncf: { contains: term } }, { tutor: { contains: term } }];
   if (/^\d+$/.test(term)) orR.push({ id: { contains: 'REC-' + term.padStart(4, '0') } });
   if (qd.length >= 3) orR.push({ titular: { is: { cedula: { contains: qd } } } });

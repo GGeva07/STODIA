@@ -1,4 +1,4 @@
-import type { CfgFinanzas, CfgAssets, CfgEcfInfo, CfgModalidadFiscal, CfgNcf, CfgPerfil, ScreenId } from '@stodia/shared';
+import type { CfgFinanzas, CfgAssets, CfgEcfInfo, CfgModalidadFiscal, CfgNcf, CfgPerfil, CfgPromocion, CfgReinscripcion, ScreenId } from '@stodia/shared';
 import { prisma } from '../db';
 
 /** Valores por defecto del tenant (CFG del prototipo). La BD (SisConfig) guarda solo lo modificado. */
@@ -14,6 +14,12 @@ export const CFG_DEFAULTS = {
   ecfInfo: {} as CfgEcfInfo,
   /** Instalación nueva: todo en 0 (sin configurar) salvo el ITBIS legal; la demo siembra los valores de ejemplo. */
   finanzas: { matricula: 0, inscripcion: 0, itbis: 0.18, recargoMoraPct: 0, descuentoProntoPct: 0, diaCorte: 0, umbralConsumoIdentificado: 250000, notaPlazoDias: 30, notaCicloAnterior: 0 } as CfgFinanzas,
+  /** Papelería abierta al público: habilita Venta Rápida (kiosko). Apagada por defecto: los artículos se cargan al alumno desde su expediente. */
+  papeleriaAbierta: false as boolean,
+  /** Promoción de curso por notas (lib/promocion.ts, docs/cierre-y-promocion.md): rango seguro 70, promedio general y TODOS los períodos con nota final (si falta alguno: «Pendiente de notas»). */
+  promocion: { notaMinima: 70, criterio: 'promedio_general', maxReprobadas: 0, requiereTodosLosPeriodos: true } as CfgPromocion,
+  /** Reinscripción de alumnos existentes (lib/reinscripcion.ts, docs/cierre-y-promocion.md §6): apagada; sin pérdida de cupo (solo mora); cuota = inscripción vigente; gracia 0. */
+  reinscripcion: { activa: false, perdidaCupoPorFaltaDePago: false, modo: 'inscripcion', cuotaReinscripcion: 0, diasGracia: 0 } as CfgReinscripcion,
   /** Vacío = se usa ACCESS estático del front; se llena al editar la matriz de roles. */
   access: {} as Record<string, ScreenId[]>,
 };

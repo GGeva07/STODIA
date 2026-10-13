@@ -25,7 +25,7 @@ const ALL: ScreenId[] = ['dashboard', 'tutores', 'inventario', 'catalogos', 'com
 /** RBAC del prototipo (L2367-2374). 'licencia' no figura en ACCESS del prototipo: aquí solo Super Admin (supuesto). */
 export const ACCESS: Record<Rol, ScreenId[]> = {
   'Super Admin': [...ALL, 'licencia'],
-  'Director Académico': ['dashboard', 'tutores', 'comunica', 'auditoria', 'extra', 'directorio', 'planes', 'notas', 'asistencia', 'horarios', 'expediente', 'becas'],
+  'Director Académico': ['dashboard', 'tutores', 'comunica', 'auditoria', 'extra', 'directorio', 'planes', 'notas', 'asistencia', 'horarios', 'expediente', 'becas', 'alimentacion'],
   'Docente': ['extra', 'directorio', 'notas', 'asistencia', 'horarios', 'expediente'],
   'Cajero': ['dashboard', 'tutores', 'kiosko', 'inventario', 'extra', 'directorio', 'planes', 'alimentacion', 'pos', 'becas', 'expediente', 'comedor', 'inscripcion'],
   'Encargado Comedor': ['directorio', 'comedor', 'alimentacion', 'expediente'],
@@ -54,7 +54,15 @@ export function setAccessOverride(m: Record<string, ScreenId[]> | null | undefin
 /** Re-renderiza al cambiar la matriz: úsalo en componentes que llaman canAccess. */
 export const useAccessVersion = () => useSyncExternalStore(cb => { listeners.add(cb); return () => { listeners.delete(cb); }; }, () => version);
 
-export const canAccess = (rol: Rol, id: ScreenId) => (rol === 'Super Admin' ? ACCESS['Super Admin'] : override[rol] ?? ACCESS[rol])?.includes(id) ?? false;
+/** Papelería abierta al público (GET /config). null = aún no se sabe: no se oculta nada hasta conocerlo (la API igual rechaza la venta si está cerrada). */
+let papeleria: boolean | null = null;
+export function setPapeleriaAbierta(v: boolean | null | undefined) {
+  papeleria = v ?? null;
+  version++;
+  listeners.forEach(l => l());
+}
+
+export const canAccess = (rol: Rol, id: ScreenId) => !(id === 'kiosko' && papeleria === false) && ((rol === 'Super Admin' ? ACCESS['Super Admin'] : override[rol] ?? ACCESS[rol])?.includes(id) ?? false);
 
 export const screenTitle = (id: ScreenId) => NAV.flatMap(g => g.items).find(i => i[0] === id)?.[1] ?? id;
 

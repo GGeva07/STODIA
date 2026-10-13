@@ -28,13 +28,16 @@ export interface CfgPerfil { nombre: string; rnc: string; tel: string; dir: stri
   instruccionesPago?: string;
   /** Datos de la verificación del RNC en la DGII. Solo los escribe el instalador/servidor: PUT /config/perfil los ignora y los limpia si el RNC cambia. */
   razonSocial?: string; nombreComercial?: string; rncVerificado?: boolean; rncVerificadoAt?: string; rncEstado?: string }
+/** Resultado de POST /config/perfil/verificar-rnc (la clave de la API de RNC nunca viaja). `guardado`: se actualizó el perfil (false al verificar un RNC aún no guardado). */
+export interface ResultadoVerifRnc { estado: 'verificado' | 'inactivo' | 'no-existe' | 'sin-config' | 'no-disponible'; mensaje: string; rnc: string; razonSocial?: string; nombreComercial?: string; rncEstado?: string; guardado: boolean }
+export interface VerifRncResp { perfil: CfgPerfil; resultado: ResultadoVerifRnc }
 export interface CfgAssets { logo: boolean; fAcad: boolean; fFin: boolean }
 /** Modalidad de un comprobante fiscal: NCF impreso (serie B) o comprobante fiscal electrónico e-CF (serie E). */
 export type ModalidadFiscal = 'FISICA' | 'ELECTRONICA';
 /** Tipo LÓGICO de comprobante que el POS pide; el servidor decide el prefijo (B01/E31...) según la modalidad configurada. */
 export type TipoLogico = 'CREDITO_FISCAL' | 'CONSUMO' | 'GUBERNAMENTAL' | 'REGIMEN_ESPECIAL' | 'NOTA_DEBITO' | 'NOTA_CREDITO';
 export type EstadoSecuencia = 'Activa' | 'Agotada' | 'Vencida' | 'Inactiva';
-/** Estado del envío del e-NCF a la DGII. Este sistema NO transmite: un e-NCF queda PendienteEnvio. */
+/** Estado del envío del e-NCF a la DGII. Un e-NCF queda PendienteEnvio hasta la integración final (docs/integracion-ecf.md). */
 export type EstadoDgii = 'NoAplica' | 'PendienteEnvio' | 'Aceptado' | 'Rechazado' | 'Contingencia';
 /**
  * Secuencia fiscal (autorización DGII). Forma COMPATIBLE con la antigua `CfgNcf` (pref, tipo, desde, hasta, umbral, act) más los campos del modelo SecuenciaFiscal.
@@ -66,7 +69,9 @@ export interface CfgFinanzas { matricula: number; inscripcion: number; itbis: nu
   /** Notas de credito/debito: plazo maximo (dias desde la emision) para acreditar un recibo sin motivo escrito reforzado (por defecto 30; A VALIDAR con contador/DGII). 0 = sin plazo. */
   notaPlazoDias?: number;
   /** 1 = permite emitir notas de credito sobre recibos de un ciclo que ya no es el activo (y no esta Cerrado). Por defecto 0. */
-  notaCicloAnterior?: number }
+  notaCicloAnterior?: number;
+  /** Modalidad de la cuota de inscripcion: 'fija' (la cuota `inscripcion` para todos; por defecto) o 'plan' (la define el plan de pago elegido). */
+  inscripcionModo?: 'fija' | 'plan' }
 export interface ConfigGlobal {
   perfil: CfgPerfil;
   assets: CfgAssets;
@@ -78,6 +83,8 @@ export interface ConfigGlobal {
   ecfInfo: CfgEcfInfo;
   ciclos: CfgCiclo[];
   finanzas: CfgFinanzas;
+  /** Papelería abierta al público: si es false, Venta Rápida (kiosko) no está disponible. */
+  papeleriaAbierta: boolean;
   access: Record<string, ScreenId[]>;
   rolesBase: Rol[];
 }

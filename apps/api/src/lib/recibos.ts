@@ -14,7 +14,7 @@ export async function metodoPagoIdDe(pays: CobroPago[], db: Db = prisma): Promis
 }
 
 /** Linea de un recibo (FinReciboItem). cobroItemId = FinCobroItem que se cobro; ausente en lineas historicas sin cargo en cartera. */
-export interface LineaRecibo { con: string; monto: number; cobroItemId?: string }
+export interface LineaRecibo { con: string; monto: number; cobroItemId?: string; /** Descuento aplicado a esta linea (RD$, `monto` es el bruto) y su motivo. */ descuento?: number; descuentoMotivo?: string; /** Beca ya INCLUIDA en `monto`: monto real (bruto del plan), descuento por beca y su motivo. */ montoBruto?: number; descuentoBeca?: number; becaMotivo?: string }
 
 /** `include` de Prisma para leer un recibo completo (lineas, pagos, cajero, caja y titular): lo que necesita `reciboDto`. */
 export const RECIBO_INC = {
@@ -28,11 +28,11 @@ export const RECIBO_INC = {
   notas: { select: { id: true, clase: true, ncf: true, monto: true, createdAt: true }, orderBy: { createdAt: 'asc' as const } },
 } as const;
 type ReciboConDetalle = {
-  lineas: { concepto: string; monto: number; cobroItemId: string | null }[];
+  lineas: { concepto: string; monto: number; cobroItemId: string | null; descuento?: number; descuentoMotivo?: string | null; montoBruto?: number | null; descuentoBeca?: number; becaMotivo?: string | null }[];
   pagos: { monto: number; referencia: string; metodoPago: { nombre: string } }[];
 };
 /** Lineas con la forma de siempre: `{ con, monto }` y `cobroItemId` solo cuando existe. */
-export const itemsDe = (r: Pick<ReciboConDetalle, 'lineas'>): LineaRecibo[] => r.lineas.map(l => ({ con: l.concepto, monto: l.monto, ...(l.cobroItemId ? { cobroItemId: l.cobroItemId } : {}) }));
+export const itemsDe = (r: Pick<ReciboConDetalle, 'lineas'>): LineaRecibo[] => r.lineas.map(l => ({ con: l.concepto, monto: l.monto, ...(l.cobroItemId ? { cobroItemId: l.cobroItemId } : {}), ...(l.descuento && l.descuento > 0 ? { descuento: l.descuento, descuentoMotivo: l.descuentoMotivo ?? undefined } : {}), ...(l.descuentoBeca && l.descuentoBeca > 0 && l.montoBruto ? { montoBruto: l.montoBruto, descuentoBeca: l.descuentoBeca, becaMotivo: l.becaMotivo ?? undefined } : {}) }));
 /** Pagos con la forma de siempre: `{ m, r, amt }` (m = nombre EXACTO del medio de pago). */
 export const paysDe = (r: Pick<ReciboConDetalle, 'pagos'>): CobroPago[] => r.pagos.map(p => ({ m: p.metodoPago.nombre, r: p.referencia, amt: p.monto }));
 
@@ -44,7 +44,7 @@ type ReciboDb = Omit<ReciboConDetalle, 'lineas'> & {
   id: string; ncf: string; modalidad: string; estadoDgii: string; clienteRnc: string | null; clienteNombre: string | null; regimenEspecial: string | null;
   tipoComprobante: { codigo: string; nombre: string };
   tutor: string; hora: string; monto: number; est: string; abono: boolean; saldo: number; nc: string | null; change: number; createdAt: Date; cicloId: string;
-  lineas: { concepto: string; monto: number; cobroItemId: string | null; cobroItem?: { alumno: { nombres: string; apellidos: string }; notaDebito?: { id: string; ncf: string } | null } | null }[];
+  lineas: { concepto: string; monto: number; cobroItemId: string | null; descuento?: number; descuentoMotivo?: string | null; montoBruto?: number | null; descuentoBeca?: number; becaMotivo?: string | null; cobroItem?: { alumno: { nombres: string; apellidos: string }; notaDebito?: { id: string; ncf: string } | null } | null }[];
   notas?: { id: string; clase: string; ncf: string; monto: number; createdAt: Date }[];
   cajero?: { nombre: string } | null; caja?: { codigo: string } | null; titular?: { cedula: string; email: string | null } | null;
 };
@@ -78,7 +78,7 @@ function notasDeRecibo(r: ReciboDb, tz: string): Partial<ReciboFin> {
 }
 
 /** Filas FinReciboItem de un recibo a partir de las lineas de la API. */
-export const lineasData = (reciboId: string, lineas: LineaRecibo[]) => lineas.map((l, orden) => ({ reciboId, orden, concepto: l.con, monto: l.monto, cobroItemId: l.cobroItemId ?? null }));
+export const lineasData = (reciboId: string, lineas: LineaRecibo[]) => lineas.map((l, orden) => ({ reciboId, orden, concepto: l.con, monto: l.monto, cobroItemId: l.cobroItemId ?? null, descuento: l.descuento ?? 0, descuentoMotivo: l.descuentoMotivo ?? null, montoBruto: l.montoBruto ?? null, descuentoBeca: l.descuentoBeca ?? 0, becaMotivo: l.becaMotivo ?? null }));
 /** Filas FinReciboPago a partir de los pagos de la API (el medio se resuelve por nombre exacto). Falla si el medio no existe en el catalogo. */
 export async function pagosData(reciboId: string, pays: CobroPago[], db: Db = prisma) {
   const metodos = new Map((await db.metodoPago.findMany({ select: { id: true, nombre: true } })).map(m => [m.nombre, m.id]));
