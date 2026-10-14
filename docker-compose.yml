@@ -32,7 +32,7 @@ services:
       # Versión en marcha (la fija actualizar.sh) y canal público de actualizaciones (manifiesto JSON). Nada se instala sin aprobación del Super Admin.
       STODIA_VERSION: ${STODIA_VERSION:-}
       STODIA_UPDATE_URL: ${STODIA_UPDATE_URL:-https://stodia.vercel.app/releases/stable.json}
-      CORS_ORIGIN: ${CORS_ORIGIN:-https://stodiademo.synsetsolutions.com}
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://demo.synsetsolutions.com}
       TRUST_PROXY: ${TRUST_PROXY:-true}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -42,7 +42,7 @@ services:
     volumes:
       - stodia-data:/data
     ports:
-      - ${API_BIND:-127.0.0.1}:${API_PORT:-3107}:3000
+      - ${API_BIND:-127.0.0.1}:${API_PORT:-47831}:3000
 
   web:
     build:
@@ -52,11 +52,11 @@ services:
     depends_on:
       - api
     environment:
-      API_URL: ${API_URL:-https://stodiademo.synsetsolutions.com}
+      API_URL: ${API_URL:-/api}
       INSTITUTION_NAME: ${INSTITUTION_NAME:-}
       API_PROXY_TARGET: http://api:3000
     ports:
-      - ${WEB_PORT:-8080}:80
+      - ${WEB_PORT:-47830}:80
 
   backup:
     image: stodia-api
