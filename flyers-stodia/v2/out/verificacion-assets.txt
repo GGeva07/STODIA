@@ -1,0 +1,37 @@
+== Verificacion de archivos ==
+assets/stodia-mark.svg | OK SVG viewBox=76 38 104 190 (2591 B)
+assets/stodia-wordmark.svg | OK SVG viewBox=8.276 5.521 207.137 63.64 (14263 B)
+assets/captura-expediente-red.png | OK PNG 2880x1800 (315094 B)
+assets/captura-expediente.png | OK PNG 2880x1800 (271277 B)
+assets/captura-directorio.png | OK PNG 2880x1800 (570347 B)
+assets/captura-dashboard.png | OK PNG 2880x1800 (311623 B)
+assets/captura-comedor.png | OK PNG 2880x1800 (482741 B)
+assets/captura-portal-tutor-notas.png | OK PNG 780x1688 (83777 B)
+assets/captura-portal-tutor.png | OK PNG 780x1688 (69021 B)
+== Imagenes en slides (complete && naturalWidth>0) ==
+f1 | assets/stodia-mark.svg | OK 82x150
+f1 | assets/stodia-wordmark.svg | OK 300x92
+f1 | assets/captura-expediente-red.png | OK 2880x1800
+f2 | assets/stodia-mark.svg | OK 82x150
+f2 | assets/stodia-wordmark.svg | OK 300x92
+f2 | assets/captura-expediente.png | OK 2880x1800
+f2 | assets/captura-directorio.png | OK 2880x1800
+f2 | assets/captura-dashboard.png | OK 2880x1800
+f2 | assets/captura-comedor.png | OK 2880x1800
+f2 | assets/captura-portal-tutor-notas.png | OK 780x1688
+f3 | assets/stodia-mark.svg | OK 82x150
+f3 | assets/stodia-wordmark.svg | OK 300x92
+f3 | assets/captura-directorio.png | OK 2880x1800
+f3 | assets/captura-portal-tutor.png | OK 780x1688
+f3 | assets/captura-portal-tutor-notas.png | OK 780x1688
+== SVG parseados en navegador ==
+assets/stodia-mark.svg | OK viewBox=76 38 104 190
+assets/stodia-wordmark.svg | OK viewBox=8.276 5.521 207.137 63.64
+== Fuentes ==
+Inter | OK
+JetBrains Mono | OK
+Caveat | OK
+cargadas: Caveat, Inter, JetBrains Mono
+render f1 ok
+render f2 ok
+render f3 ok

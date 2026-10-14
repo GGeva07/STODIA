@@ -4,6 +4,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Rol, ScreenId } from '@stodia/shared';
 import { config } from '../config';
 import { cfgGet } from '../lib/sisconfig';
+import { pantallaPermitida } from '../lib/acceso-nuevas';
 
 /** Rutas permitidas al rol Tutor. */
 const TUTOR_OK = /^\/(auth\/|movil\/tutor(\/|$)|config$|licencia$)/;
@@ -32,6 +33,6 @@ export default fp(async app => {
   app.decorate('requireScreen', (screen: ScreenId) => async (req: FastifyRequest, reply: FastifyReply) => {
     if (req.user.rol === 'Super Admin') return;
     const m = (await cfgGet('access')) as Record<string, ScreenId[]>;
-    if (!m[req.user.rol]?.includes(screen)) reply.code(403).send({ error: 'Sin permiso' });
+    if (!pantallaPermitida(m, req.user.rol, screen)) reply.code(403).send({ error: 'Sin permiso' });
   });
 });

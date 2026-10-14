@@ -13,7 +13,7 @@ La promoción puede ejecutarse **antes o después** del cierre; no dependen uno 
 
 | | |
 |---|---|
-| Dónde | Configuración → **Ciclos lectivos** → «Cerrar año escolar» (ciclo activo). En ciclos cerrados: «Resumen del cierre». |
+| Dónde | Configuración → **Ciclos lectivos** → «Cerrar año escolar» (ciclo activo). En ciclos cerrados: enlace a **Informes › Informes de cierre de año** (resumen + detalle de cada cifra). |
 | API | `GET /config/ciclos/:n/cierre` (vista previa / foto guardada) · `POST /config/ciclos/:n/eoy` `{ code: 'CERRAR-2026-2027', pin? }` |
 | Permiso | `requireScreen('config')` + texto de confirmación + **clave de supervisor** (token de un solo uso de `/auth/supervisor`; el Super Admin no la necesita). Validada también en el servidor (`supervisorOk`). |
 | Código | `apps/api/src/lib/ciclo-cierre.ts` (`resumenFinancieroCiclo`, `resumenCierre`, `cerrarCiclo`) · web `apps/web/src/screens/config/CierreCiclo.tsx` |
@@ -21,7 +21,7 @@ La promoción puede ejecutarse **antes o después** del cierre; no dependen uno 
 **Qué hace** (una transacción):
 
 1. Valida que el ciclo sea el **Activo** y que exista un ciclo **Planificado** siguiente. *Decisión*: se exige el siguiente porque toda la aplicación trabaja sobre **un** ciclo activo (`UX_Ciclo_activo`, `cicloIdActivo()`); cerrar sin sucesor dejaría la instalación sin ciclo activo.
-2. Calcula el **resumen financiero** y lo guarda como foto inmutable en `CierreCiclo` (totales, fecha, usuario y deuda por alumno en JSON).
+2. Calcula el **resumen financiero** y lo guarda como foto inmutable en `CierreCiclo` (totales, fecha, usuario y deuda por alumno en JSON) **y el detalle línea por línea en `CierreCicloDetalle`** (misma transacción; ver abajo).
 3. Marca el ciclo **Cerrado** (solo lectura: el hook global de `app.ts` responde `409 CICLO_CERRADO` a toda escritura por ciclo) y activa el Planificado siguiente.
 4. **No** promueve, **no** cambia grados ni secciones y **no** crea matrículas. Las matrículas del ciclo cerrado se conservan tal cual: `Activo` = «cursó ese año» hasta que la promoción las pase a `Promovido` / `Repitente` / `Graduado`. No se crea un estado `Cursado`: el CHECK `CK_Matricula_estado` solo admite `Activo | Retirado | Promovido | Repitente | Graduado` y los reportes ya leen `Activo` de un ciclo cerrado como alumno de ese ciclo.
 5. **Coherencia al cambiar el ciclo activo** (`Alumno.seccionId` = sección del ciclo activo, ver `lib/matricula.ts`). Solo para decisiones ya tomadas:
@@ -41,6 +41,10 @@ La promoción puede ejecutarse **antes o después** del cierre; no dependen uno 
 | `descuentos` | Σ descuento de esas líneas (pronto pago, exoneraciones). |
 | `mora` / `moraPendiente` | Cargos `tipo = 'mora'` del ciclo (cobrados + pendientes) / pendientes. |
 | `deudaAlumnos` | Deuda vigente por alumno (pendiente, vencido, nº de cargos), de mayor a menor. La vista previa devuelve las 50 mayores; la foto guarda todas. |
+
+**Qué guarda el cierre ahora (Etapa 2 de Informes)**: además de `CierreCiclo` (totales + deuda por alumno), una fila por línea en `CierreCicloDetalle` (`lib/ciclo-cierre-detalle.ts`): cada **cargo** del ciclo (facturado, descuento, pendiente, estado Pagado/Pendiente/Vencido a la fecha del cierre, categoría, tutor), cada **recibo** (vigentes y anulados; método principal y desglose de pagos mixtos en `extra`), cada **nota** de crédito/débito (motivo, reembolsos por método, si reabre el cobro), cada **línea con descuento** (motivo, %) y las **ventas rápidas** del rango de fechas del ciclo (`FinVenta` no tiene ciclo; no suman a ningún total). Nombres, códigos y tutor son **instantáneas** (no cambian si luego se edita el alumno). Los totales de `CierreCiclo` y la suma de las filas cuadran (se verifica al cerrar y en el informe). Los ciclos cerrados antes de esta función **no se rellenan**: el informe muestra sus totales y deudores con el aviso «Sin detalle (cierre anterior a esta función)». Coste: el cierre inserta las filas por lotes de 1000 con `INSERT … SELECT FROM OPENJSON` en SQL Server (≈ 3 s para 16 000 filas; con `createMany` de Prisma eran ≈ 120 s).
+
+**Qué congela además el cierre (Informes etapa 3)**: (1) `CierreNota`: las notas finales del ciclo (fórmula «Final» de la Matriz) por alumno × materia × período (+ el final de la materia con período NULL), con la sección de la matrícula; ≈ 34 000 filas para 800 alumnos y 18 materias, insertadas por lotes de 1000 con `INSERT … SELECT FROM OPENJSON` (medido: ≈ 1,8 s de cálculo + ≈ 3,1 s de escritura sobre un cierre total de ≈ 11,5 s con ≈ 9 600 filas de detalle). (2) `MatriculaResultado` (fuente `cierre`): resultado, promedio y destino de las matrículas que no tienen resultado de promoción (según el estado de la matrícula: Retirado, Graduado, Promovido→Aprobado, Repitente→Reprobado, resto→Pendiente). La promoción aplicada (antes o después) escribe sus propias filas (fuente `promocion`, con promedio y destino reales) y sobrescribe las del cierre; un cierre posterior no pisa las de promoción. Ambas escrituras van en la misma transacción del cierre y son idempotentes. Ver docs/informes-analisis.md §10.
 
 **Cartera del ciclo cerrado**: sigue **cobrable**. El POS la muestra como «deuda anterior» desde el ciclo activo (`/cobros/cuenta` y `/cobros/procesar` aceptan cargos de ciclos Cerrados; el recibo se emite en el ciclo activo). Reimprimir o enviar recibos de un ciclo cerrado está permitido (`lib/ciclo.ESCRITURA_LIBRE`).
 

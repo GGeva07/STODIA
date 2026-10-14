@@ -5,6 +5,7 @@ import { audit } from '../../lib/audit';
 import { rncValido } from '../../lib/rnc';
 import { nextSeq, nowHM, round2 } from '../../fin-utils';
 import { cfgGet } from '../../lib/sisconfig';
+import { cicloActivoRow } from '../../lib/ciclo';
 import { metodoCatalogo } from '../../lib/recibos';
 import { consultarDgii, proveedorTutor, proveedorHistorial, soloDigitos, longitudRncOk } from '../../lib/rnc-lookup';
 import { FiscalError, alertaSecuencia, asignarNcf, contextoFiscal, disponibilidad, refrescarEstados, enSerie, transaccionFiscal } from '../../lib/fiscal';
@@ -71,16 +72,17 @@ const plugin: FastifyPluginAsync = async app => {
     const hora = nowHM();
     const metodo = await metodoCatalogo(pay);
     if (!metodo) return reply.code(400).send({ error: 'Medio de pago no configurado' });
+    const cicloVenta = (await cicloActivoRow())?.id ?? null; // Informes: la venta rapida pertenece al ciclo ACTIVO al vender
     // Venta, lineas y salidas de inventario en UNA transaccion; la venta se crea primero porque las lineas y movimientos la referencian por FK.
     await transaccionFiscal(async tx => {
       const asig = await asignarNcf(tx, logico, ctxFiscal);
       ncf = asig.ncf; secId = asig.secuenciaFiscalId;
-      await tx.finVenta.create({ data: { id, ncf, total, metodo: metodo.nombre, metodoPagoId: metodo.id, doc, cajeroId: req.user.sub } });
+      await tx.finVenta.create({ data: { id, ncf, total, metodo: metodo.nombre, metodoPagoId: metodo.id, doc, cajeroId: req.user.sub, cicloId: cicloVenta } });
       await tx.finVentaItem.createMany({ data: rows.map(({ p, q }) => ({ ventaId: id, productoId: p.id, nombre: p.name, cantidad: q, precio: p.price, tax: p.tax })) });
       for (const { p, q } of rows) {
         if (p.stock == null) continue;
         await tx.finProducto.update({ where: { id: p.id }, data: { stock: p.stock - q } });
-        await tx.finMovimiento.create({ data: { t: hora, tipo: 'Salida', productoId: p.id, name: p.name, q: '−' + q, ref: id, ventaId: id } });
+        await tx.finMovimiento.create({ data: { t: hora, tipo: 'Salida', productoId: p.id, name: p.name, q: '−' + q, ref: id, ventaId: id, cantidad: -q, stockResultante: p.stock - q } });
       }
     });
     const alerta = await alertaSecuencia(secId);
@@ -100,7 +102,7 @@ const plugin: FastifyPluginAsync = async app => {
     if (!(q > 0)) return reply.code(400).send({ error: 'Cantidad inválida' });
     await prisma.finProducto.update({ where: { id: p.id }, data: { stock: p.stock + q } });
     const n = await nextSeq('ent');
-    await prisma.finMovimiento.create({ data: { t: nowHM(), tipo: 'Entrada', productoId: p.id, name: p.name, q: '+' + q, ref: 'ENT-' + String(n).padStart(4, '0') } });
+    await prisma.finMovimiento.create({ data: { t: nowHM(), tipo: 'Entrada', productoId: p.id, name: p.name, q: '+' + q, ref: 'ENT-' + String(n).padStart(4, '0'), cantidad: q, stockResultante: p.stock + q } });
     await audit(req.user, 'Update', { tabla: 'Inventario', id: p.id, prev: p.stock, next: p.stock + q, ip: req.ip });
     return { ok: true };
   });

@@ -83,7 +83,7 @@ export function CierreModal({ ciclo, onClose, onDone }: { ciclo: string; onClose
         <div className="min-w-0">
           <div className="text-base font-semibold">{yaCerrado ? `Cierre del año escolar ${ciclo}` : `Cerrar el año escolar ${ciclo}`}</div>
           <div className="mt-0.5 text-[12px] leading-normal text-slate-600">
-            {hecho ? <>Cierre completado. <b>{hecho.activo}</b> es ahora el ciclo activo{hecho.alineados ? ` · ${hecho.alineados} alumnos pasan a la sección que ya tenían en ${hecho.activo}` : ''}{hecho.egresados ? ` · ${hecho.egresados} egresados (promoción ya aplicada)` : ''}.</>
+            {hecho ? <>Cierre completado. <b>{hecho.activo}</b> es ahora el ciclo activo{hecho.alineados ? ` · ${hecho.alineados} alumnos pasan a la sección que ya tenían en ${hecho.activo}` : ''}{hecho.egresados ? ` · ${hecho.egresados} egresados (promoción ya aplicada)` : ''}. El detalle línea por línea (facturados, cobrados, notas, descuentos) queda en Informes › Informes de cierre de año.</>
               : yaCerrado ? (r?.cerrado ? <>Cerrado el {new Date(r.cerrado.fecha).toLocaleString('es-DO')} por {r.cerrado.usuarioNombre || r.cerrado.usuario}. Foto contable guardada al cerrar (solo lectura).</> : <>Ciclo cerrado antes de existir el registro de cierres: totales calculados ahora con los datos del ciclo (solo lectura).</>)
               : <>Cierre <b>contable y de edición</b>: guarda este resumen, deja {ciclo} en solo lectura y activa {r?.siguiente ?? 'el ciclo siguiente'}. <b>No mueve alumnos de curso</b>: la promoción se hace aparte, por notas, en «Promoción de curso». La deuda pendiente sigue cobrable desde el ciclo activo.</>}
           </div>

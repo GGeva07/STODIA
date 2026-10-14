@@ -265,21 +265,23 @@ const plugin: FastifyPluginAsync = async app => {
     try { await prisma.$transaction(async tx => {
     await tx.servicioAlumno.create({
       data: cc.rec
-        ? { id: sid, alumnoId: a.id, kind: 'rec', ...fk, name, icon: cc.icon, spec: sp, cost: cc.price, corte: dia >= 31 ? 'Último día de cada mes' : `Día ${pad(dia)} de cada mes`, alert }
-        : { id: sid, alumnoId: a.id, kind: 'once', ...fk, name: (q > 1 ? `${q} × ` : '') + (sp ? `${cc.l} · ${sp}` : cc.l), cost: monto, fecha: venc(mes), st: cargado ? 'cargado' : 'prog', mes: MNAME[mes] },
+        ? { id: sid, alumnoId: a.id, kind: 'rec', ...fk, name, icon: cc.icon, spec: sp, cost: cc.price, corte: dia >= 31 ? 'Último día de cada mes' : `Día ${pad(dia)} de cada mes`, alert, cicloId: cal.ciclo.id, fechaAlta: cal.hoy }
+        : { id: sid, alumnoId: a.id, kind: 'once', ...fk, name: (q > 1 ? `${q} × ` : '') + (sp ? `${cc.l} · ${sp}` : cc.l), cost: monto, fecha: venc(mes), st: cargado ? 'cargado' : 'prog', mes: MNAME[mes], cicloId: cal.ciclo.id, fechaAlta: cal.hoy },
     });
     const base = 1000 + (await prisma.finCobroItem.count());
     await tx.finCobroItem.createMany({
       data: meses.map((m, i) => ({
         id: `${sid}-${m}`, alumnoId: a.id, tutorId: a.tutorId, servicioId: sid, cicloId: cal.ciclo.id!, con: `${name} · ${MNAME[m]}`, al: `${a.nombres.split(' ')[0]} · ${gst(a).grado} ${gst(a).sec}`, vence: venc(m), monto,
         est: estadoCuota({ vence: venc(m) }, cal.hoy) === 'Por vencer' ? 'Por vencer' : 'Pendiente', tipo: 'srv', orden: base + i,
+        categoria: fk.productoId ? 'articulo' : 'servicio', // articulo de tienda (ServicioAlumno.productoId) vs servicio (comedor, transporte, actividad)
       })),
     });
     if (prodId) {
       // Descuento atómico: solo si aún alcanza el stock; el movimiento queda referenciado al servicio para poder reponerlo al cancelar.
       const up = await tx.finProducto.updateMany({ where: { id: prodId, stock: { gte: q } }, data: { stock: { decrement: q } } });
       if (!up.count) throw new Error('STOCK');
-      await tx.finMovimiento.create({ data: { t: nowHM(), tipo: 'Salida', productoId: prodId, name: cc.l, q: '−' + q, ref: sid } });
+      const quedan = (await tx.finProducto.findUnique({ where: { id: prodId }, select: { stock: true } }))?.stock ?? null;
+      await tx.finMovimiento.create({ data: { t: nowHM(), tipo: 'Salida', productoId: prodId, name: cc.l, q: '−' + q, ref: sid, cantidad: -q, stockResultante: quedan } });
     }
     }); } catch (e) { if ((e as Error).message === 'STOCK') return reply.code(409).send({ error: `Stock insuficiente de ${cc.l}` }); throw e; }
     await audit(req.user, 'Insert', { tabla: 'Servicios', id: `${a.code}/${cc.k}`, prev: '—', next: `${meses.length} cargo(s) × ${cc.price}${q > 1 ? ' × ' + q + ' u.' : ''}`, ip: req.ip });
@@ -300,7 +302,7 @@ const plugin: FastifyPluginAsync = async app => {
     const s = await prisma.servicioAlumno.findFirst({ where: { id: req.params.sid, alumnoId: req.params.id, kind: 'rec' } });
     const f = req.body?.fecha ?? '';
     if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(f)) return reply.code(400).send({ error: 'Datos inválidos' });
-    await prisma.servicioAlumno.update({ where: { id: s.id }, data: { est: 'Baja · ' + f.split('-').reverse().join('/') } });
+    await prisma.servicioAlumno.update({ where: { id: s.id }, data: { est: 'Baja · ' + f.split('-').reverse().join('/'), fechaBaja: f } });
     // Solo se anulan las cuotas NO vencidas (la deuda vencida se deriva de la fecha, regla única de lib/cxc.ts).
     const hoy = hoyISO(await zonaHoraria());
     const cand = await prisma.finCobroItem.findMany({ where: { paid: false, servicioId: s.id }, select: { id: true, vence: true, est: true } });
@@ -321,7 +323,7 @@ const plugin: FastifyPluginAsync = async app => {
         const pr = await tx.finProducto.findUnique({ where: { id: m.productoId } });
         if (!pr || pr.stock == null || !q) continue;
         await tx.finProducto.update({ where: { id: pr.id }, data: { stock: pr.stock + q } });
-        await tx.finMovimiento.create({ data: { t: nowHM(), tipo: 'Devolución', productoId: pr.id, name: pr.name, q: '+' + q, ref: 'DEV-' + s.id } });
+        await tx.finMovimiento.create({ data: { t: nowHM(), tipo: 'Devolución', productoId: pr.id, name: pr.name, q: '+' + q, ref: 'DEV-' + s.id, cantidad: q, stockResultante: pr.stock + q } });
       }
       await tx.finCobroItem.deleteMany({ where: { servicioId: s.id, paid: false } });
       await tx.servicioAlumno.delete({ where: { id: s.id } });

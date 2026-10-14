@@ -126,9 +126,9 @@ function Expediente() {
 
   const sinPin = user?.rol === 'Super Admin';
   const askBaja = () => setGuard({
-    title: `Dar de baja a ${a.code}`, label: 'Dar de baja', code: `ELIMINAR-${a.id}`, pin: !sinPin,
+    title: `Dar de baja a ${a.code}`, label: 'Dar de baja', code: `ELIMINAR-${a.id}`, pin: !sinPin, motivo: { label: 'Motivo de la baja (opcional)', placeholder: 'Ej.: traslado a otro colegio, cambio de ciudad…' },
     desc: `${a.nombres} ${a.apellidos} pasará a estado Retirado (baja lógica): su historial académico y financiero se conserva y puede reactivarse con Editar. Queda registrado en auditoría.`,
-    onOk: async pin => { await api.post(`/directorio/${a.id}/eliminar`, { pin, baja: true }); await reload(); toast(`${a.nombres} ${a.apellidos} dado de baja (Retirado) · registrado en auditoría`, 'warn'); },
+    onOk: async (pin, motivo) => { await api.post(`/directorio/${a.id}/eliminar`, { pin, baja: true, ...(motivo ? { motivo } : {}) }); await reload(); toast(`${a.nombres} ${a.apellidos} dado de baja (Retirado) · registrado en auditoría`, 'warn'); },
   });
 
   const menuBtn = 'flex h-[34px] w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] hover:bg-slate-100';

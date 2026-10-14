@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { GenerandoHost } from './GenerandoModal';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { Alumno, CobroCuenta, ScreenId } from '@stodia/shared';
 import { MENU_OCULTO, NAV, canAccess, useAccessVersion } from '../../lib/access';
@@ -238,6 +239,7 @@ export function UiProvider({ children }: { children: ReactNode }) {
       {children}
       {palette && <Palette items={items} onClose={() => setPalette(false)} />}
       {guard && <Guard cfg={guard} onClose={() => setGuard(null)} />}
+      <GenerandoHost />
       <div className="pointer-events-none fixed bottom-5 right-5 z-[90] flex max-w-[400px] flex-col gap-2" aria-live="polite">
         {toasts.map(t => (
           <div key={t.id} className="pointer-events-auto animate-[toastIn_0.18s_ease-out] flex items-start gap-2.5 rounded-lg bg-ink px-3.5 py-3 text-[13px] leading-snug text-slate-100 shadow-[0_12px_28px_rgba(15,23,42,0.25)]">

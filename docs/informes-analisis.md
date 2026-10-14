@@ -305,3 +305,189 @@ Riesgos de la capa: (1) decidir una sola definición de «cobrado/facturado/neto
 10. **Agrupación:** informes 2 y 3 aparecen en «Cierre de año» y también como atajo en «Estudiantes»; ¿está bien, o prefiere duplicarlos como vistas independientes? ¿9 y 10 deben ir en «Estudiantes» o en «Facturación» (9 es de ingresos)?
 11. **Datos de prueba:** el ciclo activo es 2027–2028 con la fecha del sistema en 2026-10-12 y los ciclos 2023–25 no tienen finanzas/notas: ¿se cargará un dataset realista antes de validar los informes, o se validará solo contra 2025–26 y 2026–27?
 12. **Exportación:** ¿el PDF debe llevar firma/folio de verificación como los boletines (`DocFolio`, SHA-256) para informes oficiales (cierre, 606/607)?
+
+
+---
+
+## 8. Estado de implementación — Etapa 1 (sin cambios de BD)
+
+> Implementada el 2026-10-12. **Sin cambios de esquema**: todo es lectura (Prisma `groupBy`/`findMany`/`aggregate`). Verificado contra `stodia` con `sqlcmd -I` (solo SELECT).
+
+### 8.1 Qué existe
+| Informe | Entrada de menú (ScreenId) | `id` API | Estado |
+|---|---|---|---|
+| 1 Cuentas por cobrar | Informes CxC (`inf-cxc`) | `cxc` | **Listo** |
+| 11 Planes de pago (facturado vs cobrado) | Informes CxC (`inf-cxc`) | `planes` | **Listo** |
+| 5 Recaudación por método de pago | Informes de facturación (`inf-facturacion`) | `recaudacion` | **Listo** |
+| 6 Cobrado neto tras devoluciones | Informes de facturación (`inf-facturacion`) | `neto` | **Listo** |
+| 7 Notas de crédito/débito | Informes de facturación (`inf-facturacion`) | `notas` | **Listo** |
+| Resumen del cierre del año (movido de Configuración) | Informes de cierre de año (`inf-cierre`) | `cierre` (+ `GET /informes/cierres`, `GET /informes/cierre/:ciclo`) | **Listo** (sin detalle por cifra: etapa 2) |
+| 2, 3, 4, 8, 9, 10, 12 | cierre / facturación / estudiantes / inventario | `movimientos`, `calificaciones`, `emision`, `fiscal`, `extra-ingresos`, `extra-retencion`, `inventario-rotacion` | **En preparación en la etapa 1; los informes 2, 3, 4, 9, 10 y 12 están listos desde la etapa 3 (§10)** (se listan deshabilitados; la API responde 409 `EN_PREPARACION`) |
+
+`inf-estudiantes` e `inf-inventario` solo contienen informes «en preparación».
+
+### 8.2 Capa común
+- API: `apps/api/src/modules/informes` (montado en `/informes` por `plugins/modules.ts`) + `apps/api/src/lib/informes/{registro,comun,cxc,recaudacion,notas,planes,cierre,xlsx}.ts`. Para añadir un informe: crear `lib/informes/<x>.ts` y una línea en `registro.ts` (ruta, permiso por grupo, paginación y exportación son comunes).
+- Endpoints: `GET /informes` (catálogo filtrado por permisos), `GET /informes/catalogos` (listas de filtros), `GET /informes/:id` (`?ciclo= &desde= &hasta= &grado= &seccion= &tutor= &soloVencidos= &metodo= &cajero= &plan= &tipo= &motivo= &tabla= &page= &size=`; `size=all` = todas las filas), `GET /informes/:id/export?formato=xlsx|json` (todas las filas, varias hojas). `requireScreen(<ScreenId del grupo>)` por ruta. Los GET funcionan en ciclos Cerrados (el hook CICLO_CERRADO solo bloquea escrituras).
+- `?ciclo=` explícito manda sobre la cabecera `X-Ciclo` (el filtro de ciclo del informe puede diferir del selector global; el selector global es solo el valor por defecto).
+- Contrato tipado: `packages/shared/src/informes.ts` (`InformeMeta`, `InformeResp {titulo, filtros, resumen[], tablas[{id,titulo,columnas,filas,totales,total,page,size,detalle}], notas[]}`). Los **totales siempre son del conjunto completo**; solo se pagina la tabla pedida (`tabla=`); el detalle expandible viaja alineado con las filas.
+- Web: `apps/web/src/screens/informes/{index,Visor,TablaInforme}.tsx` (pantalla única; las 5 carpetas `screens/inf-*/index.tsx` la reexportan y App.tsx las enruta por NAV), PDF `components/finanzas/printInformes.ts` (`docInforme`, motor existente `runPrint`/`generarPdf`) y Excel con `xlsxLibro` (nuevo, varias hojas; `xlsxBlob` conserva su firma de una hoja).
+- Licencia: las pantallas `inf-*` cuelgan de funciones ya existentes en `LFEAT` (`pos` → `inf-cxc`, `inf-facturacion`; `kiosko` → `inf-inventario`; `directorio` → `inf-estudiantes`; `eoy` → `inf-cierre`) para no invalidar las claves firmadas (`license-core.ts`).
+
+### 8.3 Definiciones fijadas
+- **CxC (1)**: saldo = `FinCobroItem.paid = false` del ciclo (vencidas + por vencer; abono parcial ya descontado), estado/antigüedad derivados con `lib/cxc.estadoCuota` a HOY (zona horaria del perfil). Cubetas: por vencer (incluye lo no exigible aún), 1–30, 31–60, 61–90, +90 días vencidos. La mora (`tipo='mora'`) va incluida en el saldo y en columna aparte. Desglose por estudiante (matrícula = sección del ciclo, no el concepto «mat»), por tutor (el del cargo) y por antigüedad; detalle expandible de cargos. El «saldo de un ciclo cerrado» es el pendiente de hoy; el «saldo al cierre» es la foto de `CierreCiclo`.
+- **Recaudación (5)**: siempre `FinReciboPago` (no `FinRecibo.metodoPagoId`). Los recibos Anulados no suman y se listan aparte. Ventas rápidas (`FinVenta`, sin ciclo) = línea separada filtrada por rango de fechas (por defecto las fechas del ciclo) y **no** incluidas en «Cobrado en recibos»; se suman solo en «Total recaudado». Las inscripciones `PersInscripcion` (sin método) quedan fuera.
+- **Cobrado neto (6)**: devoluciones atribuidas al **ciclo, fecha y cajero del RECIBO de origen** (así el neto cuadra con el cobrado del ciclo; es la misma regla de `CierreCiclo.cobradoNeto`). Solo notas de crédito Emitidas con reembolso (`NotaFiscalReembolso`) sobre recibos vigentes. Si las notas emitidas en el ciclo por fecha de la nota difieren, el informe lo explica en una nota (p. ej. las 3 NC de 2026–27 anularon recibos, que ya no cuentan en el cobrado: no se restan dos veces). Ventas rápidas con sus devoluciones en tabla aparte.
+- **Notas (7)**: ciclo/rango/cajero son los de la nota; resúmenes por motivo y tipo cuentan solo notas Emitidas; «reabre cobro» = alguna línea con efecto `ReabreCargo`.
+- **Planes (11)**: plan = `Contrato(alumno, ciclo).planId`; facturado = Σ monto bruto de líneas de recibos vigentes de cargos del ciclo + pendiente; cobrado = facturado − descuentos − pendiente (misma definición del cierre; coincide con `CierreCiclo.facturado`); alumnos sin contrato del ciclo en «Sin contrato / sin plan».
+
+### 8.4 Permisos por defecto y fallback
+| Rol | inf-cierre | inf-facturacion | inf-estudiantes | inf-inventario | inf-cxc |
+|---|---|---|---|---|---|
+| Super Admin | ✔ | ✔ | ✔ | ✔ | ✔ |
+| Director Académico | ✔ | — | ✔ | — | ✔ |
+| Cajero | — | — | — | ✔ | ✔ |
+| Docente / Encargado Comedor / Tutor | — | — | — | — | — |
+
+**Fallback (trampa de la matriz guardada)**: si NINGÚN rol de la matriz guardada (`SisConfig 'access'`) incluye una pantalla `inf-*` (pantalla nueva sin asignar), valen los defaults del código; en cuanto se guarda la matriz con ella, manda lo guardado. Sin reescribir la matriz guardada. Implementado en `apps/web/src/lib/access.ts` (`canAccess`, `PANTALLAS_NUEVAS`, `conPantallasNuevas`) y `apps/api/src/lib/acceso-nuevas.ts` (`pantallaPermitida`, usado por `requireScreen` y por `GET /informes`). Configuración › Roles y permisos lista las 5 filas (salen de NAV) y las muestra con los defaults mientras no estén asignadas; al guardar cualquier cambio se persisten.
+
+### 8.5 Cierre de año → Informes
+`Configuración › Ciclos lectivos` ya no muestra «Resumen del cierre»: para ciclos Cerrados hay un enlace «Ver informe de cierre» (solo con acceso a `inf-cierre`) que abre `Informes › Cierre`. Queda en Configuración la acción «Cerrar año escolar» (vista previa de totales, código y clave de supervisor). `GET /config/ciclos/:n/cierre` sigue funcionando.
+
+### 8.6 Pendiente (etapas siguientes)
+Informes 2, 3, 4, 8, 9, 10, 12 (requieren los cambios aditivos C3–C14 de la §3 o clasificación en código); detalle por cifra del cierre (**hecho en la etapa 2, ver §9**); PDF con miles de filas es lento (~40 s para 1 250 filas, archivo ~12 MB): para CxC completo conviene Excel.
+
+
+## 9. Estado de implementación — Etapa 2 (detalle del cierre de año)
+
+> Implementada el 2026-10-12. Objetivo aprobado por el usuario: «el resumen que se genera en cada cierre de año: detallar todo lo que ahí se muestra: facturados, detalle de facturados, cobrados, detalle de cobrados…». **Cambio de esquema ADITIVO** (una tabla) y **sin backfill** (decisión del usuario: se olvidan los ciclos ya cerrados).
+
+### 9.1 Tabla nueva `CierreCicloDetalle`
+Una fila por línea del ciclo al cerrarlo, escrita en la misma transacción que `CierreCiclo` (relación inversa `CierreCiclo.detalle`). Columnas: `id` (autoincrement), `cierreId` FK→CierreCiclo (NoAction), `tipo` (`cargo`|`recibo`|`nota`|`descuento`|`venta`, con CHECK `CK_CierreCicloDetalle_tipo` en `db-indices.ts`), `refId`, `fecha` (DateTime?), `alumnoId?`/`alumnoCodigo`/`alumnoNombre`/`tutorNombre` (instantánea, sin FK), `concepto`, `categoria` (colegiatura/inscripcion/reinscripcion/materiales/servicio/articulo/mora/otro; en notas credito/debito), `metodo?`, `ncf?`, `cajero?`, `monto`, `descuento`, `pendiente`, `estado` (Pagado/Pendiente/Vencido para cargos; Emitido/Anulado para el resto), `extra` NVarChar(max) JSON. Índices `(cierreId, tipo)`, `(cierreId, tipo, fecha)`, `(cierreId, alumnoId)`.
+
+| tipo | origen | `monto` | otras columnas |
+|---|---|---|---|
+| `cargo` | cada `FinCobroItem` del ciclo | Σ líneas de recibos vigentes que lo cobraron (bruto) + su monto si sigue sin pagar = lo que aporta a «facturado» | `descuento` = Σ descuento de sus líneas; `pendiente` = monto si `paid=false`; `estado` con `cxc.estadoCuota` a la fecha del cierre; `fecha` = vencimiento; `extra`: mes, días vencido, recibos que lo cobraron |
+| `recibo` | cada `FinRecibo` del ciclo (vigentes y anulados) | total | `metodo` = método principal (el de mayor monto); `extra.pagos` + `mixto:true` si hubo varios métodos; alumno único o lista de alumnos de sus líneas |
+| `nota` | `NotaFiscal` con `cicloId` = ciclo **o** sobre un recibo del ciclo | monto | `categoria` credito/debito; `extra`: motivo, reembolsos por método, `reabre`, `enCiclo`, `sobreReciboVigente` |
+| `descuento` | cada `FinReciboItem` con `descuento>0` (recibo vigente, cargo del ciclo) | monto descontado | `concepto` = motivo (`descuentoMotivo`); `extra.pct`; alumno desde el cargo |
+| `venta` | `FinVenta` dentro de las fechas del ciclo | total | `FinVenta` **no tiene ciclo**: no suma a ninguna cifra del cierre |
+
+### 9.2 Cuadre con `CierreCiclo` (verificado en BD aislada, diferencia 0,00 en todas)
+Σ monto(cargo) = `facturado` · Σ pendiente(cargo) = `pendiente` · Σ pendiente(cargo Vencido) = `vencido` · Σ descuento(cargo) = Σ monto(descuento) = `descuentos` · Σ monto(cargo mora) = `mora` y Σ pendiente(mora) = `moraPendiente` · Σ monto(recibo Emitido) = `cobrado` · nº recibos Emitido/Anulado = `recibos`/`recibosAnulados` · notas de crédito/débito emitidas en el ciclo = `notasCredito`/`notasDebito` · cobrado − notas de crédito sobre recibos vigentes = `cobradoNeto`. `cerrarCiclo` compara las sumas del detalle con los totales y deja un `console.warn` si no cuadran (nunca aborta el cierre). El informe recalcula el cuadre y lo muestra por cifra («Cuadra» o la diferencia).
+
+### 9.3 API
+- `GET /informes/cierre/:ciclo` (`requireScreen('inf-cierre')`) → `CierreInforme` (`packages/shared/src/informes.ts`): el `CierreResumen` de siempre + `detalleDisponible` + `detalle` { `filas` por tipo, `desgloses` (tablas `InformeTabla` con totales), `cuadre`, `fechaCierre`, `notas` }. Desgloses: facturado por categoría y por mes de vencimiento; cobrado por método (con pagos mixtos repartidos) y por mes; recibos vigentes/anulados; notas por tipo y motivo; devoluciones por método; cobrado neto por método; descuentos por motivo y por tipo de cargo; pendiente y vencido por antigüedad (por vencer, 1–30, 31–60, 61–90, +90 días **a la fecha del cierre**); pendiente por categoría; mora por mes; ventas rápidas por método; cantidades. Se agregan en SQL (`groupBy`) salvo los que usan el JSON `extra` (pocas filas).
+- `GET /informes/cierre/:ciclo?tabla=cargos|recibos|notas|descuentos|ventas|deudores&page=&size=&q=&alumno=&categoria=&estado=&metodo=&orden=fecha|monto` → `InformeTabla` paginada (`size=all` = todas las filas) con **totales del conjunto filtrado completo**. `q` busca en alumno, código, tutor, NCF, recibo, concepto y cajero; `estado=SinPagar` = Pendiente + Vencido. `deudores` sale del JSON de deuda por alumno guardado en `CierreCiclo` (todos los alumnos, no solo el top).
+- `GET /informes/cierre/:ciclo/export` → .xlsx multihoja: Resumen (cifra / suma del detalle / diferencia), Facturado (cargos), Cobrado (recibos), Notas, Descuentos, Ventas rápidas, Deudores y una hoja por desglose. Todas las filas.
+- Cierre anterior a esta función (sin filas): `detalleDisponible:false` + `aviso` «Sin detalle (cierre anterior a esta función)»; se conservan totales, deudores y la exportación del resumen.
+- Código: `apps/api/src/lib/ciclo-cierre-detalle.ts` (construir/guardar), `apps/api/src/lib/informes/cierre-detalle.ts` (desgloses, listados, Excel), `apps/api/src/modules/informes/index.ts` (rutas).
+
+### 9.4 Web
+`apps/web/src/screens/informes/CierreInformeView.tsx` (abre desde la lista de años cerrados): cada cifra (Facturado, Cobrado, Notas de crédito/débito, Cobrado neto, Descuentos, Pendiente, Vencido, Mora, Cantidades y Ventas rápidas) es un **acordeón** con insignia «Cuadra»/diferencia; al abrirlo muestra sus desgloses y el botón **«Ver detalle»** con el listado paginado (25 por página), búsqueda (alumno, tutor, recibo, NCF), filtros de categoría/método/estado y el total que se compara con la cifra. «Exportar Excel» (servidor) e «Imprimir / PDF» (resumen + desgloses + las 100 líneas de mayor monto de cada listado, con nota; los listados completos solo en Excel). Un cierre sin detalle muestra aviso, totales y deudores guardados.
+
+### 9.5 Decisiones y límites
+- Facturado por cargo = lo cobrado (bruto) por recibos vigentes + lo pendiente: es exactamente la definición del cierre. Un cargo pagado sin línea de recibo (datos sembrados antiguos) aporta 0 a «facturado» (su `extra.montoCargo` conserva el monto del cargo).
+- «Por vencer» incluye lo no exigible aún (vence hoy o después), como en CxC.
+- Las ventas rápidas se guardan por rango de fechas del ciclo (no tienen ciclo) y se muestran aparte; no se mezclan con «cobrado».
+- Las notas se guardan por ciclo de la nota **o** del recibo de origen; el cuadre de «Notas de crédito/débito» usa las de ciclo = el cierre (regla de `resumenFinancieroCiclo`) y el «cobrado neto» las que recaen sobre recibos vigentes del ciclo.
+- Un recibo mixto filtrado por método aparece si ese método es el principal o uno de sus pagos; en el desglose «Cobrado por método» el monto se reparte por pago real.
+- Rendimiento: el cierre inserta el detalle por lotes de 1000 con `INSERT … SELECT FROM OPENJSON` (SQL Server; otros motores usan `createMany`). Con ~16 000 filas añade ≈ 4–5 s al cierre (6 s en total); con `createMany` de Prisma eran ≈ 120 s.
+- Posible etapa 3: drill-down desde una fila de desglose (p. ej. un mes) al listado filtrado; comparativa entre cierres de distintos años.
+
+
+## 10. Estado de implementación — Etapa 3 (informes 2, 3, 4, 9, 10 y 12)
+
+> Implementada el 2026-10-12. Quedan fuera (reservado): 606/607, ITBIS/retenciones y módulo de contabilidad; el informe 8 sigue «En preparación». Todos los cambios de esquema son ADITIVOS (columnas NULL/default, tablas e índices nuevos).
+
+### 10.1 Cambios de esquema y de flujos
+| Cambio | Detalle | Quién lo llena |
+|---|---|---|
+| `Matricula.motivoRetiro` NVarChar(300) NULL | motivo opcional de baja o inactivación | Expediente › Eliminar (campo «Motivo de la baja», `POST /directorio/:id/eliminar {baja, motivo}`) y Expediente › Editar › Estado Retirado/Inactivo (`PUT /directorio/:id {motivoRetiro}`); queda también en la auditoría («… · motivo: …»). Reactivar al alumno lo limpia (`sincronizarMatricula`). |
+| Tabla `MatriculaResultado` | promedio y destino congelados por matrícula (UNIQUE `matriculaId`): promedio, materiasReprobadas, resultado (Aprobado/Reprobado/Pendiente/Graduado/Retirado), accion, grado/sección de origen y destino, ciclo destino, fuente `promocion`/`cierre`, fecha | `aplicarPromocion` (fuente promoción) y `cerrarCiclo` (fuente cierre, solo matrículas sin promoción), idempotente (`lib/matricula-resultado.ts`) |
+| Tabla `CierreNota` | final por alumno × materia × período + final de materia (período NULL) | `cerrarCiclo`, INSERT … SELECT FROM OPENJSON por lotes (`lib/notas-finales.ts`) |
+| `FinCobroItem.categoria`, `FinReciboItem.categoria` | colegiatura, inscripcion, reinscripcion, materiales, servicio, articulo, mora, otro | de ahora en adelante al crear cada línea: extensión de Prisma en `db.ts` (cargos: create/createMany/upsert) y `lineasData` (líneas de recibo); el Expediente fija `articulo` si el servicio es un producto. Reglas en `lib/categorias.ts` (reutiliza `categoriaCargo`; `reins` → reinscripcion). Backfill en `scripts/backfill-informes.ts` sin reescribir conceptos |
+| `FinVenta.cicloId` (FK opcional) | ciclo activo al vender | `modules/kiosko` (`POST /ventas`); backfill por rango de fechas del ciclo |
+| `ServicioAlumno.cicloId` (FK), `fechaAlta`, `fechaBaja` (ISO) | ciclo y fechas del servicio | alta: Expediente (`POST /:id/servicios`) e Inscripción; baja: `POST /:id/servicios/:sid/baja` guarda la fecha efectiva (cancelar un cargo único programado sigue borrando el servicio); backfill: ciclo con más cargos, alta = vencimiento más antiguo del servicio (no hay fecha de creación), baja = «Baja · dd/mm/aaaa» |
+| `FinMovimiento.cantidad`, `stockResultante` (Int NULL) | unidades con signo (Salida < 0) y stock tras el movimiento | todos los sitios que crean movimientos: ventas rápidas, entradas, cargos del Expediente, reposición al cancelar un cargo y devoluciones por nota de crédito (`lib/notas.ts`). Backfill: parsea `q` (signo Unicode «−»; `createdAt` ya existía) y reconstruye el stock hacia atrás desde `FinProducto.stock`. **Los productos sin stock (`stock` NULL: servicios, actividades, paquetes) no generan movimientos** |
+| Índices | AcadNota(periodoId, materiaId), Matricula(cicloId, estado), FinMovimiento(productoId, createdAt), FinVenta(createdAt), FinVenta(cicloId), FinRecibo(cicloId, est, createdAt), ServicioAlumno(cicloId, extraId) | — |
+
+CHECK nuevos (`db-indices.ts`): `CK_MatriculaResultado_resultado` y `CK_MatriculaResultado_fuente`.
+
+### 10.2 Backfill (`apps/api/scripts/backfill-informes.ts`)
+Idempotente (solo rellena NULL; `--dry` cuenta sin escribir): categorías de cargos y líneas, `FinVenta.cicloId`, ServicioAlumno (ciclo/alta/baja), `FinMovimiento` (cantidad y stock resultante) y `Matricula.motivoRetiro` desde la auditoría. No toca `MatriculaResultado` (el informe 2 reconstruye marcando «Reconstruido») ni `CierreNota` (el informe 3 calcula «en vivo» los ciclos cerrados sin foto).
+
+### 10.3 Informes y definiciones
+Todos: filtros, tarjetas, tablas paginadas con detalle expandible, totales del conjunto completo, Excel multihoja y PDF (las tablas largas imprimen las primeras filas: `pdfMax`), estado vacío/error/carga y nota «Definiciones y notas» en la propia pantalla.
+- **2 Movimientos del alumnado** (`movimientos`, inf-cierre; ciclo, grado, sección, resultado). Una fila por matrícula del ciclo. Movimiento: Promovido, Repitente, Retirado, Egresado, Inactivo, Pendiente. Con `MatriculaResultado` se usa el congelado («Congelado (promoción/cierre)»); si no, se reconstruye con Matrícula N vs N+1 («Reconstruido»: grado mayor = Promovido, igual/menor = Repitente; sin siguiente se usa el estado de la matrícula). Inactivo = alumno «Inactivo» sin matrícula vigente en el ciclo siguiente (no hay fecha de inactivación). Motivo: `motivoRetiro`, respaldo motivo de liberación de cupo y auditoría. Tablas: por resultado, por grado (detalle por sección), origen → destino, detalle por alumno.
+- **3 Calificaciones consolidadas** (`calificaciones`, inf-cierre; ciclo, grado, sección, materia, período). Nota = «Final» de la Matriz; final materia = promedio de períodos; promedio alumno = promedio de materias; aprobado ≥ nota mínima de la política de promoción. Fuente «Congelado al cierre» (CierreNota) o «En vivo». Tablas: por sección (detalle por materia), sección × materia × período (detalle por alumno), matriz alumno × materia (con sección filtrada), mejores 10 y alumnos bajo la nota mínima. Excel: una hoja de matriz por cada sección (`InformeResp.anexos`).
+- **4 Emisión de facturas por concepto** (`emision`, inf-facturacion; ciclo, fechas, tipo de comprobante, categoría). Comprobantes con NCF de tres fuentes: recibos, ventas rápidas (ITBIS = total − artículos) e inscripciones sin recibo (NCF no repetido en un recibo); tipo de ventas/inscripciones por prefijo del NCF. Importe de línea = monto − descuento; diferencias con el total del comprobante van a «Sin detalle de líneas»/«ITBIS y ajustes». Anulados aparte. Cuadre automático: recibos vigentes = pagos de recibos (informe 5) = cobrado del cierre; ventas = ventas del informe 5. Diferencias esperadas documentadas en el informe.
+- **9 Extracurriculares: ingresos** (`extra-ingresos`, inf-estudiantes; ciclo, disciplina). Servicios con `extraId` del ciclo; mismas definiciones del cierre: Pendiente = cargos sin pagar; Facturado = bruto de líneas de recibos vigentes + Pendiente; Cobrado = Facturado − Descuentos − Pendiente. Por disciplina (detalle por mes), por mes y por alumno.
+- **10 Extracurriculares: retención y proyección** (`extra-retencion`, inf-estudiantes; ciclo, disciplina). Base = activos al cierre del ciclo anterior; Continúan = base ∩ inscritos del ciclo; Retención = Continúan/Base; Altas = inscritos que no estaban en la base; Bajas = servicios con baja en el ciclo; Neto = altas − bajas. Proyección = ESTIMACIÓN (activos × tasa histórica de retención de la disciplina), con la base de cálculo visible (pares de ciclos); con menos de 2 ciclos con la disciplina indica «Sin datos suficientes» en vez de inventar.
+- **12 Inventario y tienda** (`inventario-rotacion`, inf-inventario; ciclo, rango, categoría). Rotación = salidas netas / stock promedio ((inicial + final)/2, stock inicial reconstruido hacia atrás); demanda por cuartiles; rankings, productos sin movimiento, stock actual y valor a precio de venta (no hay costo). Recaudado en Uniformes/Libros/Papelería-Útiles = ventas rápidas (sin ITBIS, menos devoluciones sin ITBIS) + artículos cargados desde el Expediente ya cobrados; el ITBIS cuadra con el informe 5.
+
+### 10.4 Verificación (BD aislada `stodia_inf3_test`, eliminada al terminar)
+Esquema aplicado con `db push`; seed de desarrollo + flujos reales vía API (bajas con y sin motivo, inactivación, ventas rápidas con entradas, servicios extracurriculares y de artículos con cobro, nota de crédito con devolución de stock, promoción aplicada, cierre del ciclo, servicios en el ciclo nuevo con baja). Cuadres con SQL directo: Informe 2 (810 matrículas; 436/5/17/9/343 por movimiento; promedio 82,01), 3 (661 alumnos, 649 aprobados, 82,01, 33 992 filas de CierreNota), 4 (recibos 8 430 085 = pagos = CierreCiclo.cobrado; ventas 16 999,60; inscripciones sin recibo 14 por 210 000), 9 (facturado 51 800 = 13 000 + 38 800 pendiente), 10 (fútbol: 6 → 4 inscritos, 3 continúan, 1 baja), 12 (ventas por categoría, stock 627 u., valor 472 155). Backfill ejecutado dos veces (la segunda no cambia nada). Excel exportado y descomprimido (hojas y filas) y PDF generado con `generarPdf` para los seis. Cierre con las nuevas escrituras: ≈ 11,5 s en total (≈ 4,9 s corresponden a CierreNota + MatriculaResultado).
+
+### 10.5 Pendiente
+Informe 8 (606/607), ITBIS/retenciones y contabilidad (reservados). Los servicios recurrentes no se trasladan solos al ciclo siguiente (la retención lee los que se reinscriben). Los cuartiles de demanda son poco robustos con pocos productos.
+
+
+## 11. Etapa 4 — verificación (cuadre, Excel, PDF, modal de carga)
+
+> Hecha el 2026-10-13. Contra `stodia` solo SELECT (conteos antes/después idénticos: Matricula 2 526, Ciclo 1 Activo/4 Cerrado/1 Planificado, CierreCiclo 1, FinCobroItem 15 697 (8 032 pagados), FinRecibo 4 753, FinReciboItem 7 666, FinReciboPago 4 972, FinVenta 3, FinMovimiento 20, NotaFiscal 3, CierreCicloDetalle/CierreNota/MatriculaResultado 0, SisAudit 611). Las escrituras (cierre con detalle, cobros y notas de crédito) se hicieron en la BD aislada `stodia_ver_test` (API :3055, `DATABASE_URL` exportada en cada comando), ya eliminada junto con sus procesos.
+> Script reutilizable: `apps/api/scripts/verificar-informes.ts` (ver 11.5). Última corrida sobre `stodia`: **1 448/1 448 comprobaciones OK**; sobre la BD aislada (con cierre, detalle y notas de crédito): **933/933 OK**.
+
+### 11.1 Tabla de resultados por informe
+Tiempos = API con `size=25` (carga de pantalla) / `size=all` (Excel y PDF) en `stodia`. PDF = `generarPdf` desde la consola del navegador (panel oculto: los tiempos de PDF varían unos segundos). «Modal» = usa `conGenerando` (carga, cambio de página, Excel, PDF).
+
+| Informe | ¿Cuadra con SQL independiente? | Excel (hojas / filas de la hoja mayor) | PDF | Modal | Tiempos API |
+|---|---|---|---|---|---|
+| cierre (con detalle) | Sí, en BD aislada: 10/10 cifras «Cuadra»; Σ detalle = facturado, cobrado, pendiente, NC, neto (con NC reales) | multihoja (Facturado = todas las líneas de cargo, Cobrado = todos los recibos) | 3,0 MB / 22 s con 50 líneas por listado (antes 100: 4,0 MB / 32 s) | Sí | resumen < 1 s; export 2–3 s |
+| cierre (sin detalle, `stodia` 2026-27) | Sí (CierreCiclo = API; cobrado = Σ recibos hasta el cierre) | 2 hojas: Resumen + Deudores (750 filas) | Sí | Sí | < 0,3 s |
+| 2 movimientos | Sí (matrículas, retirados, promovidos/repitentes por grado N vs N+1) | 6 hojas / 812 filas (2026-27) | 1,1 MB, 8 págs | Sí | 0,2 / 1,8 s |
+| 3 calificaciones | Sí (recalculado desde AcadNota + rúbricas: alumnos con notas, aprobados, bajo mínimo, promedio) | 44 hojas (una matriz por sección) | 1,1 MB, 6 págs | Sí | 0,15 / 1,5 s |
+| 4 emisión | Sí (recibos + ventas + inscripciones sin recibo; por categoría; filas del detalle) | 10 hojas / 4 286 filas (2025-26) | 1,3 MB, 5 págs | Sí | 0,2 / 5,1 s (antes: **error 500** en 2025-26) |
+| 5 recaudación | Sí (total, por método, por mes, ventas, anulados; rango de fechas, método, cajero) | 6 hojas / 4 286 filas | 1,4 MB, 5 págs | Sí | 0,1 / 3,9 s (antes: **error 500** con `size=all` en 2025-26) |
+| 6 neto | Sí; con devoluciones reales en BD aislada (NC parciales Efectivo y Transferencia + NC total): neto = cobrado − reembolsos de NC sobre recibos vigentes | 5 hojas | 0,3 MB | Sí | 0,1 / 1,0 s |
+| 7 notas | Sí (n, monto, por motivo, filas) | 5 hojas | 0,3 MB | Sí | 30 ms |
+| 9 extra-ingresos | Sí (por disciplina: facturado = líneas de recibo + pendiente; cobrado = facturado − descuentos − pendiente) | 5 hojas | 0,4 MB | Sí | < 0,1 s |
+| 10 extra-retención | Sí (base, continúan, altas) | 4 hojas | 0,5 MB | Sí | < 20 ms |
+| 12 inventario | Sí (stock, valor, salidas netas con respaldo a `q` si `cantidad` es NULL, ventas por categoría) | 11 hojas | 1,1 MB, 5 págs | Sí | 0,1 s |
+| 1 cxc | Sí (saldo, cubetas de antigüedad, mora, estudiantes, tutores, top-3 por estudiante/tutor; con sección y solo vencidos) | 6 hojas / 7 642 líneas de detalle (2026-27) | **1,6 MB, 9 págs, 9,5 s** (antes 12 MB, 65 págs, 51 s) | Sí | 0,3 / 3,7 s |
+| 11 planes | Sí (por plan: facturado, pendiente, cobrado; pendiente = CxC; facturado = CierreCiclo.facturado) | 3 hojas / 758 filas | 1,0 MB, 6 págs | Sí | 0,05 / 4,0 s |
+| 8 fiscal (606/607) | n/a | n/a | n/a | n/a | API 409 `EN_PREPARACION`; aparece deshabilitado («Disponible pronto») |
+
+### 11.2 Correcciones hechas
+1. **Error 500 de Prisma («no entry found for key») en `emision` (ciclo 2025-26) y en el detalle de `recaudacion` con `size=all`**: un `findMany` anidado con miles de recibos (líneas/pagos) hace caer el motor de Prisma en SQL Server (límite de 2 100 parámetros). Las líneas y los pagos ahora se leen aparte y por lotes de 500 (`lib/informes/emision.ts`, `recaudacion.ts`). Sin este arreglo fallaban la pantalla (emisión), el Excel y el PDF de los ciclos grandes.
+2. **PDF de CxC**: `docInforme` limita por defecto cada tabla a 75 filas (`PDF_MAX_DEF`; el informe puede fijar `pdfMax`; los `pdfMax` de 100/200/300 pasaron a 75) con la nota «Excel contiene todo»; los totales y desgloses siguen completos. CxC: 51 s/12 MB → 9,5 s/1,6 MB. El PDF de cierre imprime las 50 líneas de mayor monto por listado (antes 100).
+3. `api.get` / `apiBlob` aceptan `{ signal }` (cancelación).
+No se encontraron otros bugs de cálculo: los demás informes cuadran a 0,01.
+
+### 11.3 Definiciones ambiguas y diferencias explicadas (datos de prueba)
+- **Recaudación (8 802 883) vs planes (cobrado 6 783 733) en 2026-27**: el recibo incluye 163 líneas sin cargo (2 035 100, importación histórica); planes cuenta el bruto de líneas de cargos del ciclo (6 767 783) + 15 950 pagados después del cierre con un recibo de 2027-28. 6 767 783 + 2 035 100 = 8 802 883. En 2025-26: 347 líneas sin cargo (2 336 000) y 0 cargos pagados sin línea.
+- **926 cargos `paid` sin línea de recibo (2026-27, 11 691 850)**: aportan 0 a «facturado/cobrado» (misma regla del cierre); el informe de cierre guarda su monto en `extra.montoCargo`. CierreCiclo.pendiente (51 245 332) ≠ pendiente de hoy (51 229 382): 4 cargos (15 950) se pagaron después del cierre.
+- **219 recibos sin `metodoPagoId`**: todos los informes usan `FinReciboPago`; Σ pagos = Σ recibos vigentes en todos los ciclos.
+- **Salidas netas (inventario)** = salidas − devoluciones (excluye entradas). Movimientos antiguos sin `cantidad` se leen de `q`.
+- **Neto (6)**: devoluciones atribuidas al ciclo del recibo; en `stodia` las 3 NC anularon recibos (no restan dos veces). Validado con NC parciales y total en BD aislada.
+- **Fecha de los archivos**: `informe_<id>_<ciclo>_<AAAA-MM-DD>.xlsx` usa la fecha UTC (igual en servidor y navegador; cerca de la medianoche de RD puede mostrar el día siguiente).
+- **Mora automática**: la API genera moras (al arrancar +20 s, cada 6 h y al consultar la cuenta de un tutor) en el ciclo activo; una verificación lanzada justo después de arrancar la API puede ver CxC cambiando. Repetir la corrida.
+- Matriz guardada de `stodia`: Director Académico tiene los 5 `inf-*`; Cajero ninguno (manda la matriz guardada; el fallback por defecto solo aplica si ningún rol la incluye).
+
+### 11.4 Excel (Parte B)
+Validado con lector propio (ZIP + OOXML) en todos los informes × ciclos 2023-24 a 2027-28 y varios filtros (rango de fechas, método, sección, comprobante, solo vencidos): `[Content_Types].xml`, `workbook.xml`, nombres de hoja ≤ 31 sin `\ / ? * [ ] :` y únicos, XML bien formado, cada hoja con TODAS las filas del filtro (`size=all`), encabezados y valores idénticos a la pantalla, números como número, sin mojibake, dentro de los límites de Excel (máximo 7 642 filas por hoja). Desde el navegador (clic real en «Exportar Excel» de los 11 informes, ciclo 2026-27): blob generado en el cliente, mismas hojas y filas que el export del servidor, nombre `informe_<id>_<ciclo>_<fecha>.xlsx` (mismo patrón que el del servidor). Lector independiente: SheetJS 0.18.5 abrió sin errores los libros descargados (cxc, recaudación, emisión, calificaciones, cierre…) con celdas numéricas como número y formato `#,##0.00`; el navegador (DOMParser) validó el XML generado por el cliente.
+
+### 11.5 Script `apps/api/scripts/verificar-informes.ts`
+`cd apps/api && npx tsx scripts/verificar-informes.ts [--api URL] [--ciclos a,b] [--solo cxc,planes] [--sinxlsx] [--out carpeta] [--usuario u --clave c]`. Usa la BD de `DATABASE_URL` solo con SELECT (rechaza cualquier otra sentencia). Llama a los informes, descarga y valida los xlsx, compara con SQL independiente y cruza informes; código de salida 0/1. Contra una BD aislada: exportar `DATABASE_URL` y usar `--api http://localhost:3055`.
+
+### 11.6 Modal de carga (Parte C)
+`apps/web/src/components/system/GenerandoModal.tsx`: `conGenerando({ texto, informe, cancelable }, signal => …)` y `<GenerandoHost />` (montado en `UiProvider`, z-index 130 sobre `#print-root` 120; un solo modal, nunca apilado). Aparece a los 300 ms, permanece ≥ 500 ms, muestra texto dinámico, nombre del informe y segundos, anima spinner + puntos + barra (versión estática con `prefers-reduced-motion`), `role="dialog" aria-modal`, `aria-live="polite"`, foco atrapado y devuelto, bloquea clics; en error muestra el mensaje con «Cerrar» y «Reintentar»; «Cancelar» aborta el `fetch` (AbortController). Usado en: carga y cambio de página/filtros de los informes (`Visor`), «Exportar Excel» e «Imprimir / PDF» (Visor y cierre), resumen y listados del cierre y «Descargar PDF» del visor de impresión (`print.tsx`; `runPrint` ahora devuelve una promesa). Probado en el navegador: aparece a ~330 ms, se cierra al terminar, error → Reintentar → éxito, Cancelar → mensaje en pantalla, foco dentro del diálogo. Sin `alert/confirm/prompt` en `apps/web/src` (grep).
+
+### 11.7 Regresión y permisos (Parte D)
+`tsc` limpio en api y web. Recorrido en el navegador de las 5 entradas y los informes (11 + cierre) y Configuración sin errores de consola ni alertas; Configuración › Ciclos ya no muestra «Resumen del cierre» y sí «Ver informe de cierre» y «Cerrar año escolar». Por API: Super Admin y Director ven los 12 informes + fiscal (409 en el informe, 404 en export); Cajero: catálogo vacío y 403 en todo, según la matriz guardada. El filtro de ciclo usa `?ciclo=` (manda sobre `X-Ciclo`); sin él, el ciclo del selector global.
+
+### 11.8 No verificado
+- Apertura con Microsoft Excel / openpyxl (no instalados); se usó SheetJS y un validador OOXML propio.
+- Tiempos de PDF medidos con el panel del navegador oculto (más lentos y variables que en uso normal).
+- NC sobre ventas rápidas (kiosko) y notas de débito: sin datos en `stodia`, no emitidas en la BD aislada.
+- El PDF del cierre sigue en ~22 s por la cantidad de desgloses (informe oficial); el resto de PDF queda < 10 s salvo ruido de medición.

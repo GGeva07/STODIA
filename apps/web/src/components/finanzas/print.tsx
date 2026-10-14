@@ -1,4 +1,5 @@
 import { Component, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { conGenerando } from '../system/GenerandoModal';
 import { createRoot, type Root } from 'react-dom/client';
 import { fmt, fmtDoc } from './fin';
 import { cajaSync } from './caja';
@@ -120,11 +121,11 @@ export function inicialesDe(nombre: string) {
 }
 
 /** Muestra «Generando…» 650 ms y abre la vista previa (runPrint del prototipo). */
-export function runPrint(key: string, doc: PDoc | null | undefined) {
-  if (!doc || S.st.busy) return;
+export function runPrint(key: string, doc: PDoc | null | undefined): Promise<void> {
+  if (!doc || S.st.busy) return Promise.resolve();
   ensureHost();
   set({ busy: key });
-  void Promise.all([conFirmas(doc), new Promise(r => setTimeout(r, 650))]).then(([d]) => set({ busy: null, doc: d }));
+  return Promise.all([conFirmas(doc), new Promise(r => setTimeout(r, 650))]).then(([d]) => { set({ busy: null, doc: d }); });
 }
 export const closePrint = () => set({ doc: null });
 
@@ -223,7 +224,8 @@ function PrintHost() {
   const count = doc.pages.length + (doc.pages.length === 1 ? ' página' : ' páginas');
   const bajar = async (porAlumno: boolean) => {
     setPdfBusy(porAlumno ? 'zip' : 'pdf'); setMsg(null);
-    try { setMsg({ t: 'Descargado · ' + await descargarPdf(doc, { porAlumno }), ok: true }); } catch (e) { setMsg({ t: e instanceof Error ? e.message : 'No se pudo generar el PDF', ok: false }); }
+    const r = await conGenerando({ texto: porAlumno ? 'Generando ZIP de PDF…' : 'Generando PDF…', informe: doc.name, cancelable: false }, () => descargarPdf(doc, { porAlumno }));
+    setMsg(r.ok ? { t: 'Descargado · ' + r.valor, ok: true } : { t: r.error ?? 'No se pudo generar el PDF', ok: false });
     setPdfBusy(null);
   };
   const btn = { height: 34, padding: '0 14px', borderRadius: 6, background: 'transparent', color: '#F8FAFC', border: '1px solid #475569', fontSize: 13, fontWeight: 500, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 } as const;

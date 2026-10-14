@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Flyers STODIA</title>
+<meta name="viewport" content="width=1700">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&family=Caveat:wght@600;700&display=block" rel="stylesheet">
+<style>
+:root{--canvas:#F8FAFC;--ink:#0F172A;--accent:#2563EB;--accent-d:#1D4ED8;--soft:#DBEAFE;--yellow:#FDE047;--sky:#38bdf8;--muted:#51555d;--line:#bfc7d6}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#888;font-family:Inter,sans-serif;-webkit-font-smoothing:antialiased}
+.slide{position:relative;width:1600px;height:1200px;overflow:hidden;margin:0 0 20px 0}
+.abs{position:absolute}
+.logo{position:absolute;display:flex;align-items:center;gap:16px}
+.logo img.mark{height:84px;width:auto}
+.logo img.word{height:64px;width:auto}
+.hand{font-family:Caveat,cursive;font-weight:700}
+.mono{font-family:'JetBrains Mono',monospace}
+svg.ic{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.ibox{display:flex;align-items:center;justify-content:center;border-radius:16px;flex:none}
+.ibox svg{width:56%;height:56%}
+
+/* ---------- Flyer 1 ---------- */
+#f1{background:var(--ink);color:#fff}
+#f1:before{content:"";position:absolute;inset:0;background:radial-gradient(900px 600px at 15% 70%,rgba(37,99,235,.45),transparent 70%),radial-gradient(700px 500px at 100% 0,rgba(56,189,248,.22),transparent 70%)}
+#f1 h1{position:absolute;left:80px;top:150px;font-size:102px;font-weight:900;letter-spacing:-3px;line-height:1;white-space:nowrap}
+#f1 h1 em{font-style:normal;color:var(--yellow)}
+#f1 .sub{position:absolute;left:84px;top:284px;width:1440px;font-size:31px;line-height:1.35;color:#cbd5e1;font-weight:500}
+.src{position:absolute;left:80px;top:420px;width:420px;height:608px;background:#fff;color:var(--ink);border-radius:28px;padding:30px;box-shadow:0 30px 80px rgba(0,0,0,.45)}
+.src .tag{font-size:16px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:var(--accent-d)}
+.src .who{display:flex;gap:18px;align-items:center;margin:20px 0 22px}
+.av{width:76px;height:76px;border-radius:50%;background:linear-gradient(135deg,var(--sky),var(--accent));color:#fff;font-weight:800;font-size:30px;display:flex;align-items:center;justify-content:center;flex:none}
+.src .who b{font-size:27px;display:block}.src .who span{font-size:19px;color:var(--muted)}
+.fld{border-top:1px solid #e2e8f0;padding:13px 0;display:flex;justify-content:space-between;font-size:19px}
+.fld span{color:#6c7078}.fld b{font-weight:700}
+.src .ok{position:absolute;left:30px;right:30px;bottom:26px;background:var(--soft);color:var(--accent-d);border-radius:14px;padding:14px 18px;font-weight:800;font-size:20px;display:flex;gap:10px;align-items:center}
+.note{position:absolute;left:110px;top:1036px;font-size:46px;color:var(--yellow);transform:rotate(-3deg);white-space:nowrap}
+.row{position:absolute;left:880px;width:640px;height:88px;background:rgba(255,255,255,.07);border:1.5px solid rgba(255,255,255,.18);border-radius:20px;display:flex;align-items:center;gap:22px;padding:0 24px}
+.row .ibox{width:56px;height:56px;color:#fff}
+.row b{font-size:29px;font-weight:800;display:block;white-space:nowrap}
+.row span{font-size:19px;color:#cbd5e1}
+.row .chk{margin-left:auto;width:34px;height:34px;border-radius:50%;background:var(--yellow);color:var(--ink);display:flex;align-items:center;justify-content:center;flex:none}
+.row .chk svg{width:60%;height:60%;stroke-width:3}
+#f1 .foot{position:absolute;left:80px;right:80px;bottom:44px;display:flex;justify-content:space-between;font-size:24px;color:#94a3b8;font-weight:600}
+#f1 .foot b{color:#fff}
+
+/* ---------- Flyer 2 ---------- */
+#f2{background:var(--canvas);color:var(--ink)}
+#f2:before{content:"";position:absolute;inset:0;background-image:radial-gradient(#cbd5e1 1.6px,transparent 1.6px);background-size:36px 36px;opacity:.6}
+#f2 .kick{position:absolute;left:80px;top:150px;font-size:24px;font-weight:800;letter-spacing:3px;text-transform:uppercase;color:var(--accent-d)}
+#f2 h1{position:absolute;left:80px;top:186px;width:1300px;font-size:84px;font-weight:900;letter-spacing:-2.5px;line-height:1.02}
+#f2 h1 em{font-style:normal;background:linear-gradient(transparent 62%,var(--yellow) 62%)}
+#f2 .sub{position:absolute;left:84px;top:388px;width:1440px;font-size:29px;color:var(--muted);font-weight:500;line-height:1.35}
+.hub{position:absolute;left:540px;top:490px;width:520px;height:500px;background:#fff;border-radius:30px;border:2px solid var(--accent);box-shadow:0 0 0 14px var(--soft),0 30px 70px rgba(15,23,42,.18);padding:32px}
+.hub .top{display:flex;gap:20px;align-items:center}
+.hub .av{width:92px;height:92px;font-size:36px}
+.hub .top b{font-size:32px;display:block}.hub .top span{font-size:20px;color:var(--muted)}
+.hub .badge{position:absolute;top:-24px;left:50%;transform:translateX(-50%);background:var(--accent-d);color:#fff;font-weight:800;font-size:19px;letter-spacing:1.5px;padding:10px 22px;border-radius:999px;white-space:nowrap}
+.hub .grid{margin-top:26px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.hub .cell{background:#f1f5f9;border-radius:14px;padding:12px 16px}
+.hub .cell small{display:block;font-size:14px;letter-spacing:1px;text-transform:uppercase;color:#6c7078;font-weight:700}
+.hub .cell b{font-size:21px}
+.hub .bar{margin-top:20px;font-size:19px;color:var(--muted);font-weight:600}
+.hub .bar i{display:block;height:12px;border-radius:8px;background:#e2e8f0;margin-top:8px;overflow:hidden}
+.hub .bar i s{display:block;height:100%;width:78%;background:linear-gradient(90deg,var(--sky),var(--accent))}
+.mod{position:absolute;width:380px;height:128px;background:#fff;border:1.5px solid var(--line);border-radius:22px;display:flex;align-items:center;gap:20px;padding:0 22px;box-shadow:0 10px 30px rgba(15,23,42,.08)}
+.mod .ibox{width:66px;height:66px;color:#fff;background:var(--accent)}
+.mod b{font-size:27px;font-weight:800;display:block;line-height:1.1}
+.mod span{font-size:19px;color:var(--muted);line-height:1.25;display:block;margin-top:4px}
+#f2 .band{position:absolute;left:80px;right:80px;bottom:56px;height:96px;background:var(--ink);color:#fff;border-radius:24px;display:flex;align-items:center;justify-content:center;gap:22px;font-size:31px;font-weight:700}
+#f2 .band em{font-style:normal;color:var(--yellow)}
+
+/* ---------- Flyer 3 ---------- */
+#f3{background:linear-gradient(150deg,#1D4ED8 0%,#2563EB 55%,#1e40af 100%);color:#fff}
+#f3:before{content:"";position:absolute;right:-250px;top:-250px;width:900px;height:900px;border-radius:50%;background:radial-gradient(circle,rgba(56,189,248,.5),transparent 68%)}
+#f3 h1{position:absolute;left:80px;top:180px;width:700px;font-size:94px;font-weight:900;letter-spacing:-3px;line-height:1.04}
+#f3 h1 em{font-style:normal;color:var(--yellow)}
+#f3 .sub{position:absolute;left:84px;top:610px;width:620px;font-size:30px;line-height:1.4;color:#dbeafe;font-weight:500}
+.pts{position:absolute;left:84px;top:790px;width:650px}
+.pt{display:flex;gap:18px;align-items:center;font-size:28px;font-weight:700;margin-bottom:22px}
+.pt .ibox{width:50px;height:50px;background:rgba(255,255,255,.16);color:var(--yellow);border-radius:14px}
+.cta{position:absolute;left:84px;bottom:64px;display:flex;align-items:center;gap:22px}
+.cta .btn{background:var(--yellow);color:var(--ink);font-weight:900;font-size:28px;padding:20px 34px;border-radius:999px;white-space:nowrap}
+.cta span{font-size:22px;color:#dbeafe;font-weight:600;line-height:1.35}
+.win{position:absolute;left:800px;top:130px;width:740px;height:520px;background:#fff;border-radius:22px;box-shadow:0 40px 90px rgba(7,20,70,.5);overflow:hidden;color:var(--ink)}
+.win .bar{height:48px;background:#e2e8f0;display:flex;align-items:center;gap:8px;padding:0 18px}
+.win .bar i{width:13px;height:13px;border-radius:50%;background:#94a3b8}
+.win .bar u{margin-left:16px;flex:1;height:26px;border-radius:13px;background:#fff;font-size:15px;text-decoration:none;color:#6c7078;padding:3px 14px;font-weight:600}
+.win .bd{display:flex;height:472px}
+.sb{width:190px;background:var(--ink);padding:20px 14px;color:#cbd5e1;font-size:16px;font-weight:600}
+.sb div{padding:10px 12px;border-radius:10px;margin-bottom:5px}
+.sb div.on{background:var(--accent);color:#fff}
+.mn{flex:1;background:var(--canvas);padding:22px}
+.mn h4{font-size:21px;margin-bottom:14px}
+.kp{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.kp div{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:14px;font-size:14px;color:#6c7078;font-weight:700}
+.kp div b{display:block;margin-top:6px;font-size:18px;color:var(--ink)}
+.ch{margin-top:14px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;height:196px;display:flex;align-items:flex-end;gap:12px}
+.ch i{flex:1;border-radius:8px 8px 0 0;background:linear-gradient(var(--sky),var(--accent))}
+.phone{position:absolute;left:1090px;top:400px;width:390px;height:730px;background:#0b1224;border-radius:56px;padding:14px;box-shadow:0 40px 90px rgba(7,20,70,.6);transform:rotate(3deg)}
+.phone .scr{width:100%;height:100%;background:var(--canvas);border-radius:44px;overflow:hidden;color:var(--ink);position:relative}
+.phone .hd{background:var(--accent-d);color:#fff;padding:44px 24px 24px;border-radius:0 0 28px 28px}
+.phone .hd small{font-size:15px;color:#bfdbfe;font-weight:600}.phone .hd b{display:block;font-size:26px;margin-top:2px}
+.kid{margin:18px 18px 0;background:#fff;border-radius:20px;padding:16px;display:flex;gap:14px;align-items:center;box-shadow:0 4px 14px rgba(15,23,42,.08)}
+.kid .av{width:54px;height:54px;font-size:22px}.kid b{font-size:19px;display:block}.kid span{font-size:14px;color:var(--muted)}
+.tl{margin:14px 18px 0;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.tl>div{background:#fff;border-radius:18px;padding:14px;font-size:16px;font-weight:800;box-shadow:0 4px 14px rgba(15,23,42,.06)}
+.tl>div .ibox{width:40px;height:40px;background:var(--soft);color:var(--accent-d);border-radius:12px;margin-bottom:8px}
+.tl>div span{display:block;font-size:13px;color:#6c7078;font-weight:600;margin-top:2px}
+.pay{margin:14px 18px 0;background:#dcfce7;color:#166534;border-radius:16px;padding:13px 16px;font-size:16px;font-weight:800;display:flex;justify-content:space-between}
+.chip{position:absolute;background:var(--yellow);color:var(--ink);font-weight:800;border-radius:14px;padding:12px 18px;font-size:21px;box-shadow:0 12px 30px rgba(0,0,0,.3);white-space:nowrap}
+.ex{font-size:14px;opacity:.65}
+</style></head><body>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l5 5v13H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/></symbol>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5c3-1 6-1 8 1 2-2 5-2 8-1v14c-3-1-6-1-8 1-2-2-5-2-8-1z"/><path d="M12 6v14"/></symbol>
+<symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="16" rx="3"/><path d="M8 3v4M16 3v4M3.5 10h17"/></symbol>
+<symbol id="i-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.6-1-1.7-1.5-3-1.5-1.7 0-3 .9-3 2.300 0 3.200 6 1.700 6 4.600 0 1.400-1.300 2.300-3 2.300-1.400 0-2.500-.6-3.100-1.700M12 6v1.500M12 16.500V18"/></symbol>
+<symbol id="i-food" viewBox="0 0 24 24"><path d="M7 3v8M4 3v5a3 3 0 0 0 6 0V3M7 11v10M17 21V3c-2.5 1.500-3.500 4-3.500 7v3H17"/></symbol>
+<symbol id="i-phone" viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="3"/><path d="M10.500 18.500h3"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.500l4.500 4.500L19 7"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8.500-7 10-4-1.500-7-5-7-10V6z"/><path d="M9 12l2.200 2.200L15.500 10"/></symbol>
+</defs></svg>
+
+<!-- ================= FLYER 1 ================= -->
+<section class="slide" id="f1">
+  <div class="logo" style="left:80px;top:48px"><img class="mark" src="assets/stodia-mark.svg" alt=""><img class="word" src="assets/stodia-wordmark.svg" alt="STODIA"></div>
+  <div class="abs" style="right:80px;top:76px;font-size:22px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#93c5fd">Gestión escolar para colegios</div>
+  <h1>Un dato. <em>Todos los módulos.</em></h1>
+  <p class="sub">Capturas la información del alumno una sola vez y STODIA la usa en inscripción, notas, horarios, cobros, comedor y portal de tutores.</p>
+
+  <svg class="abs" style="left:0;top:0" width="1600" height="1200" viewBox="0 0 1600 1200" fill="none">
+    <g stroke="#FDE047" stroke-width="3" stroke-dasharray="3 9" stroke-linecap="round">
+      <path d="M500 724 C 700 724, 700 464, 878 464"/>
+      <path d="M500 724 C 700 724, 700 568, 878 568"/>
+      <path d="M500 724 C 700 724, 700 672, 878 672"/>
+      <path d="M500 724 C 700 724, 700 776, 878 776"/>
+      <path d="M500 724 C 700 724, 700 880, 878 880"/>
+      <path d="M500 724 C 700 724, 700 984, 878 984"/>
+    </g>
+    <circle cx="500" cy="724" r="11" fill="#FDE047"/>
+  </svg>
+
+  <div class="src">
+    <div class="tag">Directorio único</div>
+    <div class="who"><div class="av">CR</div><div><b>Camila Rodríguez</b><span>Alumna · 5.º grado B</span></div></div>
+    <div class="fld"><span>Matrícula</span><b class="mono" style="font-size:17px">EJ-0001</b></div>
+    <div class="fld"><span>Tutor</span><b>Ana Rodríguez</b></div>
+    <div class="fld"><span>Teléfono</span><b>809-000-0000</b></div>
+    <div class="fld"><span>Correo</span><b>familia@ejemplo.do</b></div>
+    <div class="fld"><span>Datos de salud</span><b>Registrados</b></div>
+    <div class="fld"><span>Beca / plan de pago</span><b>Asignado</b></div>
+    <div class="ok"><div style="width:30px;height:30px"><svg class="ic" style="stroke-width:3"><use href="#i-check"/></svg></div>Se captura una sola vez</div>
+  </div>
+  <div class="note hand">¡y listo, en todas partes!</div>
+
+  <div class="row" style="top:420px"><div class="ibox" style="background:#2563EB"><svg class="ic"><use href="#i-file"/></svg></div><div><b>Inscripción y expediente</b><span>Ficha completa del alumno</span></div><div class="chk"><svg class="ic"><use href="#i-check"/></svg></div></div>
+  <div class="row" style="top:524px"><div class="ibox" style="background:#0ea5e9"><svg class="ic"><use href="#i-book"/></svg></div><div><b>Notas y asistencia</b><span>Boletines sin volver a escribir</span></div><div class="chk"><svg class="ic"><use href="#i-check"/></svg></div></div>
+  <div class="row" style="top:628px"><div class="ibox" style="background:#6366f1"><svg class="ic"><use href="#i-cal"/></svg></div><div><b>Horarios</b><span>Cursos, aulas y docentes</span></div><div class="chk"><svg class="ic"><use href="#i-check"/></svg></div></div>
+  <div class="row" style="top:732px"><div class="ibox" style="background:#d97706"><svg class="ic"><use href="#i-coin"/></svg></div><div><b>Finanzas</b><span>Cobros, planes de pago y becas</span></div><div class="chk"><svg class="ic"><use href="#i-check"/></svg></div></div>
+  <div class="row" style="top:836px"><div class="ibox" style="background:#16a34a"><svg class="ic"><use href="#i-food"/></svg></div><div><b>Comedor</b><span>Consumos ligados a cada alumno</span></div><div class="chk"><svg class="ic"><use href="#i-check"/></svg></div></div>
+  <div class="row" style="top:940px"><div class="ibox" style="background:#ec4899"><svg class="ic"><use href="#i-phone"/></svg></div><div><b>Portal de tutores y app móvil</b><span>Las familias ven todo al instante</span></div><div class="chk"><svg class="ic"><use href="#i-check"/></svg></div></div>
+  <div class="foot"><span><b>Tu colegio, organizado y en un solo lugar</b></span><span>stodia.vercel.app</span></div>
+</section>
+
+<!-- ================= FLYER 2 ================= -->
+<section class="slide" id="f2">
+  <div class="logo" style="right:80px;top:48px"><img class="mark" src="assets/stodia-mark.svg" alt=""><img class="word" src="assets/stodia-wordmark.svg" alt="STODIA"></div>
+  <div class="kick">Expediente 360</div>
+  <h1>Cada alumno, <em>un solo expediente</em>. Todo conectado.</h1>
+  <p class="sub">Notas, horario, cobros, comedor y contacto de la familia en un solo lugar.</p>
+
+  <svg class="abs" style="left:0;top:0" width="1600" height="1200" viewBox="0 0 1600 1200" fill="none">
+    <g stroke="#2563EB" stroke-width="3.5" stroke-linecap="round">
+      <path d="M450 554 C 500 554, 500 640, 540 640"/>
+      <path d="M450 754 L 540 754"/>
+      <path d="M450 954 C 500 954, 500 860, 540 860"/>
+      <path d="M1150 554 C 1100 554, 1100 640, 1060 640"/>
+      <path d="M1150 754 L 1060 754"/>
+      <path d="M1150 954 C 1100 954, 1100 860, 1060 860"/>
+    </g>
+    <g fill="#2563EB"><circle cx="540" cy="640" r="8"/><circle cx="540" cy="754" r="8"/><circle cx="540" cy="860" r="8"/><circle cx="1060" cy="640" r="8"/><circle cx="1060" cy="754" r="8"/><circle cx="1060" cy="860" r="8"/></g>
+  </svg>
+
+  <div class="hub">
+    <div class="badge">EXPEDIENTE DEL ALUMNO</div>
+    <div class="top"><div class="av">CR</div><div><b>Camila Rodríguez</b><span>5.º grado B · EJ-0001</span></div></div>
+    <div class="grid">
+      <div class="cell"><small>Tutor</small><b>Ana Rodríguez</b></div>
+      <div class="cell"><small>Contacto</small><b>809-000-0000</b></div>
+      <div class="cell"><small>Docente guía</small><b>Prof. Ejemplo</b></div>
+      <div class="cell"><small>Estado de pagos</small><b>Al día</b></div>
+    </div>
+    <div class="bar">Asistencia del período<i><s></s></i></div>
+    <div class="bar" style="margin-top:14px">Avance de calificaciones<i><s style="width:64%"></s></i></div>
+    <div class="abs" style="left:32px;right:32px;bottom:22px;font-size:15px;color:#6c7078;font-weight:600">Datos de ejemplo con fines ilustrativos</div>
+  </div>
+
+  <div class="mod" style="left:70px;top:490px"><div class="ibox"><svg class="ic"><use href="#i-file"/></svg></div><div><b>Inscripción</b><span>Se registra una vez, al ingresar</span></div></div>
+  <div class="mod" style="left:70px;top:690px"><div class="ibox" style="background:#0ea5e9"><svg class="ic"><use href="#i-book"/></svg></div><div><b>Notas y asistencia</b><span>Del aula directo al expediente</span></div></div>
+  <div class="mod" style="left:70px;top:890px"><div class="ibox" style="background:#6366f1"><svg class="ic"><use href="#i-cal"/></svg></div><div><b>Horarios</b><span>Cursos, aulas y docentes</span></div></div>
+  <div class="mod" style="left:1150px;top:490px"><div class="ibox" style="background:#d97706"><svg class="ic"><use href="#i-coin"/></svg></div><div><b>Finanzas</b><span>Cobros, planes de pago y becas</span></div></div>
+  <div class="mod" style="left:1150px;top:690px"><div class="ibox" style="background:#16a34a"><svg class="ic"><use href="#i-food"/></svg></div><div><b>Comedor</b><span>Consumos de cada alumno</span></div></div>
+  <div class="mod" style="left:1150px;top:890px"><div class="ibox" style="background:#ec4899"><svg class="ic"><use href="#i-phone"/></svg></div><div><b>Portal de tutores</b><span>La familia ve su propia información</span></div></div>
+
+  <div class="band"><svg class="ic" style="width:44px;height:44px;color:#FDE047;flex:none"><use href="#i-shield"/></svg><span>Un solo directorio. <em>Los datos son del colegio</em> y están siempre en orden.</span></div>
+</section>
+
+<!-- ================= FLYER 3 ================= -->
+<section class="slide" id="f3">
+  <div class="logo" style="left:80px;top:60px"><img class="mark" src="assets/stodia-mark.svg" alt=""><img class="word" src="assets/stodia-wordmark.svg" alt="STODIA"></div>
+  <h1>Tu colegio, <em>organizado</em> y en un solo lugar</h1>
+  <p class="sub">El sistema de gestión escolar pensado para colegios privados de República Dominicana.</p>
+  <div class="pts">
+    <div class="pt"><div class="ibox"><svg class="ic"><use href="#i-user"/></svg></div>Un directorio de alumnos y tutores</div>
+    <div class="pt"><div class="ibox"><svg class="ic"><use href="#i-check"/></svg></div>Cada dato se captura una sola vez</div>
+    <div class="pt"><div class="ibox"><svg class="ic"><use href="#i-phone"/></svg></div>Las familias, siempre al tanto</div>
+  </div>
+  <div class="cta"><div class="btn">Conoce STODIA</div><span>stodia.vercel.app<br>Por SynsetSolutions</span></div>
+
+  <div class="win">
+    <div class="bar"><i></i><i></i><i></i><u>stodia · panel del colegio</u></div>
+    <div class="bd">
+      <div class="sb"><div class="on">Inicio</div><div>Alumnos y tutores</div><div>Notas y asistencia</div><div>Horarios</div><div>Finanzas</div><div>Comedor</div><div>Comunicación</div></div>
+      <div class="mn">
+        <h4>Panel del colegio</h4>
+        <div class="kp"><div>ASISTENCIA<b>Hoy</b></div><div>COBROS<b>Al día</b></div><div>COMEDOR<b>Activo</b></div></div>
+        <div class="ch"><i style="height:45%"></i><i style="height:70%"></i><i style="height:55%"></i><i style="height:85%"></i><i style="height:62%"></i><i style="height:78%"></i><i style="height:92%"></i></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="phone"><div class="scr">
+    <div class="hd"><small>Portal de tutores</small><b>Hola, familia Rodríguez</b></div>
+    <div class="kid"><div class="av">CR</div><div><b>Camila Rodríguez</b><span>5.º grado B</span></div></div>
+    <div class="tl">
+      <div><div class="ibox"><svg class="ic"><use href="#i-book"/></svg></div>Notas<span>Boletín al día</span></div>
+      <div><div class="ibox"><svg class="ic"><use href="#i-check"/></svg></div>Asistencia<span>Registro diario</span></div>
+      <div><div class="ibox"><svg class="ic"><use href="#i-cal"/></svg></div>Horario<span>Semana actual</span></div>
+      <div><div class="ibox"><svg class="ic"><use href="#i-food"/></svg></div>Comedor<span>Consumos</span></div>
+    </div>
+    <div class="pay"><span>Pagos</span><span>Al día</span></div><div class="kid" style="margin-top:14px"><div class="ibox" style="width:44px;height:44px;background:#fef9c3;color:#a16207"><svg class="ic"><use href="#i-shield"/></svg></div><div><b style="font-size:16px">Aviso del colegio</b><span>Reunión de padres esta semana</span></div></div>
+    <div class="ex" style="position:absolute;left:0;right:0;bottom:20px;text-align:center">Datos de ejemplo</div>
+  </div></div>
+  <div class="chip" style="left:860px;top:735px;transform:rotate(-4deg)">Todo en tu celular</div>
+  <div class="hand abs" style="left:880px;top:810px;font-size:48px;color:#FDE047;transform:rotate(-5deg);white-space:nowrap">¡sin papeles!</div>
+</section>
+</body></html>

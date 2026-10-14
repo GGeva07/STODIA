@@ -17,17 +17,18 @@ export const NAV: NavGroup[] = [
   { g: 'ERP / CxC', items: [['pos', 'Cobros', 'ph-cash-register'], ['planes', 'Planes de Pago', 'ph-calendar-check'], ['kiosko', 'Venta Rápida', 'ph-storefront'], ['inventario', 'Inventario', 'ph-package'], ['becas', 'Becas y Acuerdos', 'ph-hand-coins']] },
   { g: 'Comedor', items: [['comedor', 'Comedor', 'ph-fork-knife'], ['alimentacion', 'Planes de Alimentación', 'ph-bowl-food']] },
   { g: 'Portales', items: [['portal', 'Portal Tutor', 'ph-device-mobile'], ['comunica', 'Comunicaciones', 'ph-megaphone']] },
+  { g: 'Informes', items: [['inf-cierre', 'Informes de cierre de año', 'ph-calendar-check'], ['inf-facturacion', 'Informes de facturación', 'ph-receipt'], ['inf-estudiantes', 'Informes de estudiantes', 'ph-graduation-cap'], ['inf-inventario', 'Informes de inventario', 'ph-package'], ['inf-cxc', 'Informes CxC', 'ph-chart-line-up']] },
   { g: 'Sistema', items: [['catalogos', 'Catálogos Maestros', 'ph-database'], ['config', 'Configuración', 'ph-gear-six'], ['auditoria', 'Auditoría', 'ph-shield-check'], ['licencia', 'Licenciamiento', 'ph-seal-check']] },
 ];
 
-const ALL: ScreenId[] = ['dashboard', 'tutores', 'inventario', 'catalogos', 'comunica', 'kiosko', 'config', 'auditoria', 'extra', 'alimentacion', 'planes', 'directorio', 'notas', 'asistencia', 'horarios', 'expediente', 'inscripcion', 'pos', 'becas', 'comedor', 'portal'];
+const ALL: ScreenId[] = ['dashboard', 'tutores', 'inventario', 'catalogos', 'comunica', 'kiosko', 'config', 'auditoria', 'extra', 'alimentacion', 'planes', 'directorio', 'notas', 'asistencia', 'horarios', 'expediente', 'inscripcion', 'pos', 'becas', 'comedor', 'portal', 'inf-cierre', 'inf-facturacion', 'inf-estudiantes', 'inf-inventario', 'inf-cxc'];
 
 /** RBAC del prototipo (L2367-2374). 'licencia' no figura en ACCESS del prototipo: aquí solo Super Admin (supuesto). */
 export const ACCESS: Record<Rol, ScreenId[]> = {
   'Super Admin': [...ALL, 'licencia'],
-  'Director Académico': ['dashboard', 'tutores', 'comunica', 'auditoria', 'extra', 'directorio', 'planes', 'notas', 'asistencia', 'horarios', 'expediente', 'becas', 'alimentacion'],
+  'Director Académico': ['dashboard', 'tutores', 'comunica', 'auditoria', 'extra', 'directorio', 'planes', 'notas', 'asistencia', 'horarios', 'expediente', 'becas', 'alimentacion', 'inf-cierre', 'inf-estudiantes', 'inf-cxc'],
   'Docente': ['extra', 'directorio', 'notas', 'asistencia', 'horarios', 'expediente'],
-  'Cajero': ['dashboard', 'tutores', 'kiosko', 'inventario', 'extra', 'directorio', 'planes', 'alimentacion', 'pos', 'becas', 'expediente', 'comedor', 'inscripcion'],
+  'Cajero': ['dashboard', 'tutores', 'kiosko', 'inventario', 'extra', 'directorio', 'planes', 'alimentacion', 'pos', 'becas', 'expediente', 'comedor', 'inscripcion', 'inf-cxc', 'inf-inventario'],
   'Encargado Comedor': ['directorio', 'comedor', 'alimentacion', 'expediente'],
   'Tutor': ['portal'],
 };
@@ -62,7 +63,26 @@ export function setPapeleriaAbierta(v: boolean | null | undefined) {
   listeners.forEach(l => l());
 }
 
-export const canAccess = (rol: Rol, id: ScreenId) => !(id === 'kiosko' && papeleria === false) && ((rol === 'Super Admin' ? ACCESS['Super Admin'] : override[rol] ?? ACCESS[rol])?.includes(id) ?? false);
+/**
+ * Pantallas NUEVAS (Informes): una matriz guardada antes de existir no las contiene. Si NINGÚN rol de la matriz guardada incluye la pantalla
+ * (nueva, sin asignar) valen los defaults del código (ACCESS); en cuanto alguien guarda la matriz con ella, manda lo guardado. Mismo criterio en el
+ * servidor (apps/api/src/lib/acceso-nuevas.ts → plugins/auth.ts requireScreen).
+ */
+export const PANTALLAS_NUEVAS: ReadonlySet<ScreenId> = new Set<ScreenId>(['inf-cierre', 'inf-facturacion', 'inf-estudiantes', 'inf-inventario', 'inf-cxc']);
+const sinAsignar = (m: Record<string, ScreenId[]>, id: ScreenId) => PANTALLAS_NUEVAS.has(id) && !Object.values(m).some(l => l?.includes(id));
+/** Matriz con los defaults de las pantallas nuevas aún sin asignar (para mostrarla y editarla en Roles y permisos). */
+export function conPantallasNuevas(m: Record<string, ScreenId[]>): Record<string, ScreenId[]> {
+  const out: Record<string, ScreenId[]> = Object.fromEntries(Object.entries(m).map(([r, l]) => [r, [...l]]));
+  for (const id of PANTALLAS_NUEVAS) if (sinAsignar(m, id)) for (const r of Object.keys(out)) if (ACCESS[r as Rol]?.includes(id) && !out[r].includes(id)) out[r].push(id);
+  if (out['Super Admin']) for (const id of PANTALLAS_NUEVAS) if (!out['Super Admin'].includes(id)) out['Super Admin'].push(id); // el Super Admin siempre conserva todo
+  return out;
+}
+const permitido = (rol: Rol, id: ScreenId) => {
+  if (rol === 'Super Admin') return ACCESS['Super Admin'].includes(id);
+  if (sinAsignar(override, id)) return ACCESS[rol]?.includes(id) ?? false;
+  return (override[rol] ?? ACCESS[rol])?.includes(id) ?? false;
+};
+export const canAccess = (rol: Rol, id: ScreenId) => !(id === 'kiosko' && papeleria === false) && permitido(rol, id);
 
 export const screenTitle = (id: ScreenId) => NAV.flatMap(g => g.items).find(i => i[0] === id)?.[1] ?? id;
 

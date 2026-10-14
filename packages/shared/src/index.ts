@@ -18,7 +18,8 @@ export type ScreenId =
   | 'directorio' | 'expediente' | 'tutores' | 'inscripcion'
   | 'pos' | 'planes' | 'kiosko' | 'inventario' | 'becas'
   | 'comedor' | 'alimentacion' | 'portal' | 'comunica'
-  | 'catalogos' | 'config' | 'auditoria' | 'licencia';
+  | 'catalogos' | 'config' | 'auditoria' | 'licencia'
+  | 'inf-cierre' | 'inf-facturacion' | 'inf-estudiantes' | 'inf-inventario' | 'inf-cxc';
 
 export interface SessionUser {
   usuario: string;
@@ -190,3 +191,4 @@ export * from './academico';
 export * from './personas';
 export * from './promocion';
 export * from './reinscripcion';
+export * from './informes';

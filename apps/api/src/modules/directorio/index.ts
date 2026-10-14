@@ -7,7 +7,7 @@ import { READONLY_ROLES, SEC_INC, dependenciasAlumno, gst, toAlumno } from '../.
 import { resolverSeccion } from '../../lib/catalogos-tipados';
 import { cuentaDerivada, saldoVencidoPorAlumno } from '../../lib/cxc';
 import { fechaCorte } from '../../lib/pers-fin';
-import { sincronizarMatricula } from '../../lib/matricula';
+import { registrarMotivoRetiro, sincronizarMatricula } from '../../lib/matricula';
 import { cicloReq, esCicloActivo } from '../../lib/ciclo';
 
 const EDITABLE = ['nombres', 'apellidos', 'fnac', 'estado', 'grado', 'sec', 'tanda', 'tel', 'dir'] as const;
@@ -39,7 +39,7 @@ const plugin: FastifyPluginAsync = async app => {
   // Fecha límite de pago de las notificaciones de cobro: próximo día de corte configurado (o hoy + plazo estándar).
   app.get('/corte', auth, async (): Promise<DirCorte> => fechaCorte());
 
-  app.put<{ Params: { id: string }; Body: Edit & { pin?: string } }>('/:id', auth, async (req, reply) => {
+  app.put<{ Params: { id: string }; Body: Edit & { pin?: string; motivoRetiro?: string } }>('/:id', auth, async (req, reply) => {
     if (READONLY_ROLES.includes(req.user.rol)) return reply.code(403).send({ error: `El rol ${req.user.rol} solo tiene lectura sobre la ficha del estudiante` });
     if (!(await supervisorOk(req, req.body?.pin, 'alumno.editar'))) return reply.code(403).send({ error: 'Clave de supervisor inválida. Intento registrado en auditoría.' });
     const prevDb = await prisma.alumno.findUnique({ where: { id: req.params.id }, include: SEC_INC });
@@ -60,12 +60,14 @@ const plugin: FastifyPluginAsync = async app => {
     }
     const row = await prisma.alumno.update({ where: { id: prev.id }, data: { ...resto, ...(seccionId ? { seccionId } : {}) }, include: { tutor: { select: { nombre: true } }, ...SEC_INC } });
     if (seccionId || (data.estado && data.estado !== prev.estado)) await sincronizarMatricula(prev.id); // Matricula del ciclo activo = seccion y estado del alumno
-    for (const k of changed) await audit(req.user, 'Update', { tabla: 'Alumnos', id: `${prev.code}/${k}`, prev: prev[k], next: data[k], ip: req.ip });
+    // Motivo (opcional) al pasar a Retirado / Inactivo: se guarda en la matricula del ciclo activo (Informe «Movimientos del alumnado»).
+    const motivo = data.estado && data.estado !== prev.estado && data.estado !== 'Activo' ? await registrarMotivoRetiro(prev.id, req.body?.motivoRetiro) : '';
+    for (const k of changed) await audit(req.user, 'Update', { tabla: 'Alumnos', id: `${prev.code}/${k}`, prev: prev[k], next: k === 'estado' && motivo ? `${data[k]} · motivo: ${motivo}` : data[k], ip: req.ip });
     return { alumno: { ...toAlumno(row), cuenta: (await cuentaDerivada())(row.id) }, changed: changed.length };
   });
 
   // Eliminación jerárquica: Super Admin directo; el resto necesita la clave de supervisor.
-  app.post<{ Params: { id: string }; Body: { pin?: string; baja?: boolean } }>('/:id/eliminar', auth, async (req, reply) => {
+  app.post<{ Params: { id: string }; Body: { pin?: string; baja?: boolean; motivo?: string } }>('/:id/eliminar', auth, async (req, reply) => {
     if (READONLY_ROLES.includes(req.user.rol)) return reply.code(403).send({ error: 'Sin permiso' });
     if (!(await supervisorOk(req, req.body?.pin, 'alumno.eliminar'))) return reply.code(403).send({ error: 'Clave de supervisor inválida. Intento registrado en auditoría.' });
     const a = await prisma.alumno.findUnique({ where: { id: req.params.id } });
@@ -75,7 +77,8 @@ const plugin: FastifyPluginAsync = async app => {
       if (a.estado === 'Retirado') return reply.code(409).send({ error: `${a.nombres} ${a.apellidos} ya está Retirado.` });
       await prisma.alumno.update({ where: { id: a.id }, data: { estado: 'Retirado' } });
       await sincronizarMatricula(a.id);
-      await audit(req.user, 'Delete', { tabla: 'Alumnos', id: `${a.code}/estado`, prev: a.estado, next: 'Retirado (baja lógica)', ip: req.ip });
+      const motivo = await registrarMotivoRetiro(a.id, req.body?.motivo); // opcional
+      await audit(req.user, 'Delete', { tabla: 'Alumnos', id: `${a.code}/estado`, prev: a.estado, next: 'Retirado (baja lógica)' + (motivo ? ` · motivo: ${motivo}` : ''), ip: req.ip });
       return { ok: true };
     }
     // Borrado LÓGICO por defecto: con historial (cobros, NCF, notas, monedero...) la FK NoAction lo impide y se responde 409 con la alternativa.

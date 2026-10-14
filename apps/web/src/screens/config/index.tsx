@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import type { CfgAssets, CfgCiclo, CfgPerfil, ConfigGlobal, ResultadoVerifRnc, ScreenId, VerifRncResp } from '@stodia/shared';
 import { btn, btnPrimary, card, input, pill, pillBase, td, th, type PillTone } from '../../components/system/styles';
 import { Modal, useToast, useUi } from '../../components/system/UiProvider';
-import { ACCESS, NAV, setAccessOverride, setPapeleriaAbierta } from '../../lib/access';
+import { ACCESS, NAV, canAccess, conPantallasNuevas, setAccessOverride, setPapeleriaAbierta, useAccessVersion } from '../../lib/access';
+import { useSession } from '../../lib/session';
 import { api } from '../../lib/api';
 import { AvisoBorrador, useDraft } from '../../lib/useDraft';
 import { rncValido } from '../../lib/rnc';
@@ -128,6 +129,9 @@ const CICLO_NOTE: Record<CfgCiclo['estado'], string> = {
 
 function Ciclos({ cfg, reload }: TabProps) {
   const { toast } = useUi();
+  const { user } = useSession();
+  useAccessVersion();
+  const verInforme = !!user && canAccess(user.rol, 'inf-cierre');
   const [modal, setModal] = useState(false);
   const [nuevo, setNuevo] = useState('');
   const [err, setErr] = useState('');
@@ -166,8 +170,8 @@ function Ciclos({ cfg, reload }: TabProps) {
             {c.estado === 'Activo' && (
               <button onClick={() => eoy(c)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#FCA5A5] bg-white px-3 text-[13px] font-medium text-[#DC2626] hover:bg-bad-bg"><i className="ph ph-lock-key" />Cerrar año escolar</button>
             )}
-            {c.estado === 'Cerrado' && c.datos && (
-              <button onClick={() => setCierre(c.n)} className={btn}><i className="ph ph-receipt" />Resumen del cierre</button>
+            {c.estado === 'Cerrado' && c.datos && verInforme && (
+              <Link to={`/inf-cierre/cierre?ciclo=${encodeURIComponent(c.n)}`} className={`${btn} no-underline`}><i className="ph ph-receipt" />Ver informe de cierre</Link>
             )}
           </div>
         ))}
@@ -203,7 +207,8 @@ function Rbac({ cfg, reload }: TabProps) {
   const toast = useToast();
   const run = useAction(reload);
   const [newRole, setNewRole] = useDraft('config:newRole', '', CFG);
-  const base: Record<string, ScreenId[]> = Object.keys(cfg.access).length ? cfg.access : Object.fromEntries(Object.entries(ACCESS).map(([k, v]) => [k, [...v]]));
+  // Pantallas nuevas sin asignar en la matriz guardada (Informes): se muestran y editan con sus permisos por defecto; al guardar manda lo guardado.
+  const base: Record<string, ScreenId[]> = conPantallasNuevas(Object.keys(cfg.access).length ? cfg.access : Object.fromEntries(Object.entries(ACCESS).map(([k, v]) => [k, [...v]])));
   const roles = Object.keys(base);
   const put = (next: Record<string, ScreenId[]>, ok: string, tone: 'ok' | 'warn' = 'ok') => run(async () => { await api.put('/config/access', { access: next, base }); setAccessOverride(next); }, ok, tone);
   const toggle = (r: string, id: ScreenId) => put({ ...base, [r]: base[r].includes(id) ? base[r].filter(x => x !== id) : [...base[r], id] }, `Permiso de ${r} actualizado`);

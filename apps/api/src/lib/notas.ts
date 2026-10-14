@@ -381,7 +381,7 @@ export async function emitirCredito(req: Peticion & Pick<FastifyRequest, 'user' 
           const p = await tx.finProducto.findUnique({ where: { id: l.productoId } });
           if (p && p.stock != null) {
             await tx.finProducto.update({ where: { id: p.id }, data: { stock: p.stock + l.cantidad } });
-            await tx.finMovimiento.create({ data: { t: hora, tipo: 'Devolución', productoId: p.id, name: p.name, q: '+' + l.cantidad, ref: id, ventaId: b.ventaId ?? null } });
+            await tx.finMovimiento.create({ data: { t: hora, tipo: 'Devolución', productoId: p.id, name: p.name, q: '+' + l.cantidad, ref: id, ventaId: b.ventaId ?? null, cantidad: l.cantidad, stockResultante: p.stock + l.cantidad } });
           }
         }
       }

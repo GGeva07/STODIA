@@ -7,6 +7,7 @@
  *  1) Valida: el ciclo es el ACTIVO y existe un ciclo Planificado siguiente (se exige: toda la app trabaja sobre UN ciclo activo —indice
  *     UX_Ciclo_activo, cicloIdActivo()— y cerrar sin sucesor dejaria la instalacion sin ciclo activo).
  *  2) Calcula el RESUMEN FINANCIERO del ciclo (resumenFinancieroCiclo) y lo guarda como foto inmutable en CierreCiclo (totales + deuda por alumno).
+ *     Y el DETALLE linea por linea (cargos, recibos, notas, descuentos, ventas rapidas) en CierreCicloDetalle, en la misma transaccion (lib/ciclo-cierre-detalle.ts).
  *  3) Marca el ciclo Cerrado (solo lectura: hook global de app.ts → 409 CICLO_CERRADO) y activa el Planificado siguiente.
  *  4) NO promueve, NO cambia grados ni crea matriculas. Las matriculas del ciclo cerrado se conservan TAL CUAL (estado 'Activo' = «curso ese año»;
  *     la promocion las pasa a Promovido / Repitente / Graduado). No se introduce un estado 'Cursado': CK_Matricula_estado (lib/db-indices.ts) solo
@@ -25,6 +26,10 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import { CicloError } from './ciclo';
 import { hoyISO, round2, saldoCuenta, zonaHoraria } from './cxc';
+import { construirDetalle, cuadreDetalle, guardarDetalle } from './ciclo-cierre-detalle';
+import { guardarResultados, resultadosDeCierre } from './matricula-resultado';
+import { filasCierreNota, finalesCiclo, guardarCierreNotas } from './notas-finales';
+import { cfgPromocion } from './promocion';
 
 type Db = typeof prisma | Prisma.TransactionClient;
 const trozos = <T>(l: T[], n = 800) => Array.from({ length: Math.ceil(l.length / n) }, (_, i) => l.slice(i * n, (i + 1) * n));
@@ -101,6 +106,18 @@ export async function cerrarCiclo(nombre: string, user: { usuario: string; nombr
   if (!next) throw new CicloError('Crea primero el ciclo siguiente para poder cerrar este');
   if (cur.cierre) throw new CicloError('Este ciclo ya tiene un cierre registrado', 409);
   const tot = await resumenFinancieroCiclo(cur.id);
+  // Detalle linea por linea (CierreCicloDetalle): foto del ciclo con las mismas definiciones que `tot` (ver lib/ciclo-cierre-detalle.ts).
+  const tz = await zonaHoraria();
+  const { filas: detalle } = await construirDetalle(cur, prisma, hoyISO(tz), tz);
+  const cu = cuadreDetalle(detalle as Parameters<typeof cuadreDetalle>[0]);
+  if (Math.abs(cu.facturado - tot.facturado) > 0.01 || Math.abs(cu.pendiente - tot.pendiente) > 0.01 || Math.abs(cu.descuentos - tot.descuentos) > 0.01 || Math.abs(cu.cobrado - tot.cobrado) > 0.01 || cu.cargos !== tot.cargos)
+    console.warn(`[cierre] el detalle de ${nombre} no cuadra con los totales`, { detalle: cu, totales: { facturado: tot.facturado, pendiente: tot.pendiente, descuentos: tot.descuentos, cobrado: tot.cobrado, cargos: tot.cargos } });
+  // Congelado de notas y resultados (Informes etapa 3): finales de la Matriz del ciclo → CierreNota; resultado por matricula sin promocion aplicada → MatriculaResultado.
+  const t0 = Date.now();
+  const finales = await finalesCiclo(cur.id);
+  const notasCierre = filasCierreNota(cur.id, finales);
+  const resultados = await resultadosDeCierre(prisma, cur.id, next.id, finales, (await cfgPromocion()).notaMinima);
+  const msCalculo = Date.now() - t0;
   // Coherencia Alumno <-> Matricula del ciclo que se activa (solo decisiones ya tomadas; ver punto 5 de la cabecera).
   const [yaNext, graduadosCur] = await Promise.all([
     prisma.matricula.findMany({ where: { cicloId: next.id, estado: { in: ['Activo', 'Reservado'] }, alumno: { estado: { in: ['Activo', 'Inactivo', 'Preinscrito'] } } }, select: { alumnoId: true, seccionId: true } }), // 'Reservado' = reinscripcion pendiente de pago (Etapa B): el alumno ya ocupa esa seccion
@@ -111,14 +128,20 @@ export async function cerrarCiclo(nombre: string, user: { usuario: string; nombr
   const porSeccion = new Map<string, string[]>();
   for (const m of yaNext) porSeccion.set(m.seccionId, [...(porSeccion.get(m.seccionId) ?? []), m.alumnoId]);
   await prisma.$transaction(async tx => {
-    await tx.cierreCiclo.create({
+    const cierre = await tx.cierreCiclo.create({
       data: {
         cicloId: cur.id, cicloSiguiente: next.nombre, usuario: user.usuario, usuarioNombre: user.nombre ?? '',
         facturado: tot.facturado, cobrado: tot.cobrado, notasCredito: tot.notasCredito, notasDebito: tot.notasDebito, cobradoNeto: tot.cobradoNeto, descuentos: tot.descuentos,
         pendiente: tot.pendiente, vencido: tot.vencido, mora: tot.mora, moraPendiente: tot.moraPendiente, recibos: tot.recibos, recibosAnulados: tot.recibosAnulados,
         cargos: tot.cargos, cargosPendientes: tot.cargosPendientes, alumnosConDeuda: tot.alumnosConDeuda, matriculas: tot.matriculas, deudaAlumnos: JSON.stringify(tot.deudaAlumnos),
       },
+      select: { id: true },
     });
+    await guardarDetalle(tx, cierre.id, detalle);
+    const t1 = Date.now();
+    await guardarCierreNotas(tx, cur.id, notasCierre);
+    await guardarResultados(tx, resultados);
+    console.info(`[cierre] ${nombre}: congelado ${notasCierre.length} notas finales y ${resultados.length} resultados de matrícula (calcular ${msCalculo} ms, guardar ${Date.now() - t1} ms)`);
     for (const [seccionId, ids] of porSeccion) for (const ch of trozos(ids)) await tx.alumno.updateMany({ where: { id: { in: ch } }, data: { seccionId } });
     for (const ch of trozos([...conNext])) await tx.alumno.updateMany({ where: { id: { in: ch }, estado: 'Preinscrito' }, data: { estado: 'Activo' } });
     for (const ch of trozos(egresan)) await tx.alumno.updateMany({ where: { id: { in: ch } }, data: { estado: 'Egresado' } });

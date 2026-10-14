@@ -3,6 +3,7 @@ import type { BecaDesglose, CobroTurno, VentaTurnoFila,CobroCuenta, CobroComprob
 import { prisma } from '../../db';
 import { audit } from '../../lib/audit';
 import { cfgGet } from '../../lib/sisconfig';
+import { categoriaCargo } from '../../lib/categorias';
 import { SEC_INC, digits, gst } from '../../lib/personas';
 import { fmtCed } from '../../lib/tutor-datos';
 import { RECIBO_INC, SUCURSAL, cajaDe, lineasData, metodoDe, metodoPagoIdDe, pagosData, reciboDto, type LineaRecibo } from '../../lib/recibos';
@@ -289,7 +290,7 @@ const plugin: FastifyPluginAsync = async app => {
           if (left <= 0.001) break;
           const take = Math.min(left, i.monto);
           const dl = descPor.get(i.id), bd = becaPor.get(i.id), bp = bd ? desglosePorcion(bd, take) : null;
-          applied.push({ con: i.con + (take < i.monto - 0.001 ? ' (abono)' : ''), monto: take, cobroItemId: i.id, ...(dl ? { descuento: round2(dl.monto * Math.min(1, take / i.monto)), descuentoMotivo: dl.motivo } : {}), ...(bp ? { montoBruto: bp.bruto, descuentoBeca: bp.descuento, becaMotivo: bp.motivo } : {}) });
+          applied.push({ con: i.con + (take < i.monto - 0.001 ? ' (abono)' : ''), monto: take, cobroItemId: i.id, categoria: i.categoria ?? categoriaCargo(i.tipo, i.con), ...(dl ? { descuento: round2(dl.monto * Math.min(1, take / i.monto)), descuentoMotivo: dl.motivo } : {}), ...(bp ? { montoBruto: bp.bruto, descuentoBeca: bp.descuento, becaMotivo: bp.motivo } : {}) });
           if (take >= i.monto - 0.001) { await tx.finCobroItem.update({ where: { id: i.id }, data: { paid: true } }); saldados.add(i.id); }
           else await tx.finCobroItem.update({ where: { id: i.id }, data: { monto: round2(i.monto - take), abono: true } });
           left -= take;
@@ -300,7 +301,7 @@ const plugin: FastifyPluginAsync = async app => {
       }
       // Reinscripcion (Etapa B): pagar por completo la «Cuota de reinscripcion» CONFIRMA la reserva (matricula Activo + contrato/cuotas del ciclo destino), en esta misma transaccion.
       await confirmarPagoReinscripcionTx(tx, sel.filter(i => i.tipo === TIPO_CARGO_REINS && saldados.has(i.id)).map(i => ({ alumnoId: i.alumnoId, cicloId: i.cicloId })), req.user.usuario);
-      const lineas: LineaRecibo[] = abono ? applied : sel.map(i => { const dl = descPor.get(i.id), bd = becaPor.get(i.id); return { con: i.con, monto: i.monto, cobroItemId: i.id, ...(dl ? { descuento: dl.monto, descuentoMotivo: dl.motivo } : {}), ...(bd ? { montoBruto: bd.bruto, descuentoBeca: bd.descuento, becaMotivo: bd.motivo } : {}) }; });
+      const lineas: LineaRecibo[] = abono ? applied : sel.map(i => { const dl = descPor.get(i.id), bd = becaPor.get(i.id); return { con: i.con, monto: i.monto, cobroItemId: i.id, categoria: i.categoria ?? categoriaCargo(i.tipo, i.con), ...(dl ? { descuento: dl.monto, descuentoMotivo: dl.motivo } : {}), ...(bd ? { montoBruto: bd.bruto, descuentoBeca: bd.descuento, becaMotivo: bd.motivo } : {}) }; });
       await tx.finRecibo.create({
         data: {
           id, ncf: fiscal.ncf, tipoComprobanteId: fiscal.codigo, secuenciaFiscalId: fiscal.secuenciaFiscalId, modalidad: fiscal.modalidad, estadoDgii: fiscal.estadoDgii,

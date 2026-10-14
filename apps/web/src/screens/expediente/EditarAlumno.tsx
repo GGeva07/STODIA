@@ -15,6 +15,7 @@ export default function EditarAlumno({ alumno, pin, onClose, onSaved }: { alumno
   // Borrador por alumno. Se descarta con «Cancelar» y al guardar; la clave de supervisor NUNCA se guarda (es un useState normal).
   const [f, setF, limpiar, meta] = useDraft<Alumno>('alumno-editar:' + alumno.id, () => ({ ...alumno }));
   const [clave, setClave] = useState('');
+  const [motivo, setMotivo] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (k: keyof Alumno) => (e: { target: { value: string } }) => { setF(s => ({ ...s, [k]: e.target.value })); setErr(''); };
@@ -25,7 +26,7 @@ export default function EditarAlumno({ alumno, pin, onClose, onSaved }: { alumno
     setBusy(true);
     try {
       const token = pin ? await autorizarSupervisor(clave, 'alumno.editar') : undefined;
-      const res = await api.put<{ alumno: Alumno; changed: number }>(`/directorio/${alumno.id}`, { ...f, pin: token });
+      const res = await api.put<{ alumno: Alumno; changed: number }>(`/directorio/${alumno.id}`, { ...f, pin: token, ...(f.estado !== alumno.estado && f.estado !== 'Activo' && motivo.trim() ? { motivoRetiro: motivo.trim() } : {}) });
       limpiar();
       onSaved(res.changed);
     } catch (e) { setErr(errMsg(e)); setBusy(false); }
@@ -51,6 +52,9 @@ export default function EditarAlumno({ alumno, pin, onClose, onSaved }: { alumno
             <Lbl t="Teléfono de emergencia"><input value={f.tel} onChange={set('tel')} className={inCls} /></Lbl>
           </div>
           <Lbl t="Dirección de residencia"><input value={f.dir} onChange={set('dir')} className={inCls} /></Lbl>
+          {f.estado !== alumno.estado && f.estado !== 'Activo' && (
+            <Lbl t={`Motivo del cambio a ${f.estado} (opcional)`}><input value={motivo} maxLength={300} onChange={e => setMotivo(e.target.value)} placeholder="Ej.: traslado a otro colegio" className={inCls} /></Lbl>
+          )}
           {pin && (
             <div className="flex flex-col gap-1.5 rounded-lg bg-warn-bg p-3">
               <label className="flex flex-col gap-1 text-xs font-medium text-amber-900">

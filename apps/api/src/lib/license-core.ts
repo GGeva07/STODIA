@@ -11,17 +11,17 @@ export const LQ: Record<LicPlan, { alumnos: string; usuarios: string; campus: st
   'Intermedio': { alumnos: '800', usuarios: '10', campus: '1' },
   'Avanzado': { alumnos: '2000', usuarios: '30', campus: '3' },
 };
-/** [id, etiqueta, categoría, tier mínimo, pantallas que habilita] — LFEAT del prototipo. */
+/** [id, etiqueta, categoría, tier mínimo, pantallas que habilita] — LFEAT del prototipo. Las pantallas de Informes (inf-*) cuelgan de funciones ya existentes (pos, kiosko, directorio, eoy) para no invalidar las claves firmadas. */
 export const LFEAT: [string, string, string, number, ScreenId[]][] = [
-  ['pos', 'Terminal de Cobros, historial de turno y recibos', 'ERP / CxC', 1, ['pos']], ['kiosko', 'Venta Rápida y kárdex básico', 'ERP / CxC', 1, ['kiosko', 'inventario']],
+  ['pos', 'Terminal de Cobros, historial de turno y recibos', 'ERP / CxC', 1, ['pos', 'inf-cxc', 'inf-facturacion']], ['kiosko', 'Venta Rápida y kárdex básico', 'ERP / CxC', 1, ['kiosko', 'inventario', 'inf-inventario']],
   ['planes', 'Planes de Pago con cuota por tanda', 'ERP / CxC', 2, ['planes']], ['becas', 'Becas y Acuerdos', 'ERP / CxC', 2, ['becas']], ['tarifario', 'Tarifario Anual oficial', 'ERP / CxC', 2, []],
   ['notas', 'Matriz de Notas y boletín básico', 'Académico', 1, ['notas']], ['asistencia', 'Pase de Lista en tableta', 'Académico', 2, ['asistencia']], ['horarios', 'Horarios con validación de choques', 'Académico', 2, ['horarios']], ['extra', 'Cursos extracurriculares', 'Académico', 2, ['extra']], ['sabana', 'Sábana de calificaciones consolidada', 'Académico', 2, []],
-  ['directorio', 'Directorio y Expediente 360', 'Estudiantes', 1, ['directorio', 'expediente']], ['inscripcion', 'Inscripción y prematrícula (wizard)', 'Estudiantes', 2, ['inscripcion']], ['tutores', 'Tutores', 'Estudiantes', 2, ['tutores']],
+  ['directorio', 'Directorio y Expediente 360', 'Estudiantes', 1, ['directorio', 'expediente', 'inf-estudiantes']], ['inscripcion', 'Inscripción y prematrícula (wizard)', 'Estudiantes', 2, ['inscripcion']], ['tutores', 'Tutores', 'Estudiantes', 2, ['tutores']],
   ['catalogos', 'Catálogos Maestros', 'Sistema', 1, ['catalogos']], ['comunica', 'Comunicaciones: circulares y avisos masivos', 'Comunicaciones', 2, ['comunica']],
   ['ncf', 'Emisión estándar de NCF (B01, B02, B04)', 'Fiscal', 2, []], ['ecf', 'Facturación electrónica e-CF (firma XML, Key Vault)', 'Fiscal', 3, []],
   ['comedor', 'Validación de Comedor con QR/NFC y alérgenos', 'Comedor y transporte', 3, ['comedor']], ['alimentacion', 'Planes de Alimentación', 'Comedor y transporte', 3, ['alimentacion']], ['transporte', 'Rutas de Transporte y choferes', 'Comedor y transporte', 3, []],
   ['portal', 'Portal del Tutor (PWA) con pasarela y monedero', 'Portales', 3, ['portal']],
-  ['auditoria', 'Auditoría Global (logs inmutables)', 'Control y seguridad', 3, ['auditoria']], ['rbac', 'Editor dinámico de roles (RBAC)', 'Control y seguridad', 3, []], ['eoy', 'Cierre de año (EOY) automatizado', 'Control y seguridad', 3, []],
+  ['auditoria', 'Auditoría Global (logs inmutables)', 'Control y seguridad', 3, ['auditoria']], ['rbac', 'Editor dinámico de roles (RBAC)', 'Control y seguridad', 3, []], ['eoy', 'Cierre de año (EOY) automatizado', 'Control y seguridad', 3, ['inf-cierre']],
 ];
 export const FEATURE_IDS = LFEAT.map(f => f[0]);
 

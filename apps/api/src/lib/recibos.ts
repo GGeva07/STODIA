@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import type { CobroPago, EstadoDgii, ModalidadFiscal, NotaResumen, ReciboFin } from '@stodia/shared';
 import { prisma } from '../db';
+import { categoriaPorConcepto } from './categorias';
 import { partesEnZona } from './cxc';
 import { fmtCed } from './tutor-datos';
 
@@ -14,7 +15,7 @@ export async function metodoPagoIdDe(pays: CobroPago[], db: Db = prisma): Promis
 }
 
 /** Linea de un recibo (FinReciboItem). cobroItemId = FinCobroItem que se cobro; ausente en lineas historicas sin cargo en cartera. */
-export interface LineaRecibo { con: string; monto: number; cobroItemId?: string; /** Descuento aplicado a esta linea (RD$, `monto` es el bruto) y su motivo. */ descuento?: number; descuentoMotivo?: string; /** Beca ya INCLUIDA en `monto`: monto real (bruto del plan), descuento por beca y su motivo. */ montoBruto?: number; descuentoBeca?: number; becaMotivo?: string }
+export interface LineaRecibo { con: string; monto: number; cobroItemId?: string; /** Descuento aplicado a esta linea (RD$, `monto` es el bruto) y su motivo. */ descuento?: number; descuentoMotivo?: string; /** Beca ya INCLUIDA en `monto`: monto real (bruto del plan), descuento por beca y su motivo. */ montoBruto?: number; descuentoBeca?: number; becaMotivo?: string; /** Categoria de la linea (colegiatura, inscripcion, ...); sin ella se deduce del concepto. */ categoria?: string }
 
 /** `include` de Prisma para leer un recibo completo (lineas, pagos, cajero, caja y titular): lo que necesita `reciboDto`. */
 export const RECIBO_INC = {
@@ -78,7 +79,7 @@ function notasDeRecibo(r: ReciboDb, tz: string): Partial<ReciboFin> {
 }
 
 /** Filas FinReciboItem de un recibo a partir de las lineas de la API. */
-export const lineasData = (reciboId: string, lineas: LineaRecibo[]) => lineas.map((l, orden) => ({ reciboId, orden, concepto: l.con, monto: l.monto, cobroItemId: l.cobroItemId ?? null, descuento: l.descuento ?? 0, descuentoMotivo: l.descuentoMotivo ?? null, montoBruto: l.montoBruto ?? null, descuentoBeca: l.descuentoBeca ?? 0, becaMotivo: l.becaMotivo ?? null }));
+export const lineasData = (reciboId: string, lineas: LineaRecibo[]) => lineas.map((l, orden) => ({ reciboId, orden, concepto: l.con, monto: l.monto, cobroItemId: l.cobroItemId ?? null, descuento: l.descuento ?? 0, descuentoMotivo: l.descuentoMotivo ?? null, montoBruto: l.montoBruto ?? null, descuentoBeca: l.descuentoBeca ?? 0, becaMotivo: l.becaMotivo ?? null, categoria: l.categoria ?? categoriaPorConcepto(l.con) }));
 /** Filas FinReciboPago a partir de los pagos de la API (el medio se resuelve por nombre exacto). Falla si el medio no existe en el catalogo. */
 export async function pagosData(reciboId: string, pays: CobroPago[], db: Db = prisma) {
   const metodos = new Map((await db.metodoPago.findMany({ select: { id: true, nombre: true } })).map(m => [m.nombre, m.id]));

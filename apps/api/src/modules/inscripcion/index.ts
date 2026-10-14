@@ -273,7 +273,7 @@ const plugin: FastifyPluginAsync = async app => {
         data: DOCS.map((t, i) => ({ id: `pdoc-${id}-${i}`, alumnoId: id, tipoId: t.id, f: b.docs?.[i] ? 'recibido_' + slug(t.nombre) + '.pdf' : 'Sin archivo', est: b.docs?.[i] ? 'En revisión' : 'Pendiente', orden: i })),
       }),
       tx.servicioAlumno.createMany({
-        data: svc.map(s => ({ id: svcId(s.k), alumnoId: id, kind: 'rec', ...fkDeCatKey(s.k)!, name: sname(s.l), icon: s.icon, spec: s.spec, cost: s.price, corte: `Día ${String(dia).padStart(2, '0')} de cada mes` })),
+        data: svc.map(s => ({ id: svcId(s.k), alumnoId: id, kind: 'rec', ...fkDeCatKey(s.k)!, name: sname(s.l), icon: s.icon, spec: s.spec, cost: s.price, corte: `Día ${String(dia).padStart(2, '0')} de cada mes`, cicloId: ciclo.id!, fechaAlta: hoyIso })),
       }),
       tx.finCobroItem.createMany({
         data: [

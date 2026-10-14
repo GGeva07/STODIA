@@ -8,14 +8,17 @@ export interface GuardCfg {
   code?: string;
   /** Pide clave de supervisor (no se muestra a Super Admin). */
   pin?: boolean;
-  /** Recibe el token de supervisor de un solo uso (el servidor valida la clave); si lanza, se muestra el error y el modal sigue abierto. */
-  onOk: (pin: string) => Promise<void> | void;
+  /** Campo de texto opcional (p. ej. motivo de la baja): se muestra en el modal y su valor llega como 2.º argumento de onOk. */
+  motivo?: { label: string; placeholder?: string; max?: number };
+  /** Recibe el token de supervisor de un solo uso (el servidor valida la clave) y el texto del campo opcional; si lanza, se muestra el error y el modal sigue abierto. */
+  onOk: (pin: string, motivo?: string) => Promise<void> | void;
 }
 
 /** Modal-Guard del prototipo (L1778): confirmación destructiva con texto exacto y/o clave de supervisor. */
 export default function SupervisorGuardModal({ cfg, onClose }: { cfg: GuardCfg; onClose: () => void }) {
   const [text, setText] = useState('');
   const [pin, setPin] = useState('');
+  const [motivo, setMotivo] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const ready = (!cfg.code || text === cfg.code) && (!cfg.pin || pin.length >= 4) && !busy;
@@ -24,7 +27,7 @@ export default function SupervisorGuardModal({ cfg, onClose }: { cfg: GuardCfg; 
     if (!ready) return;
     setBusy(true);
     try {
-      await cfg.onOk(cfg.pin ? await autorizarSupervisor(pin) : pin);
+      await cfg.onOk(cfg.pin ? await autorizarSupervisor(pin) : pin, cfg.motivo ? motivo.trim() : undefined);
       onClose();
     } catch (e) {
       setErr(errMsg(e));
@@ -51,6 +54,12 @@ export default function SupervisorGuardModal({ cfg, onClose }: { cfg: GuardCfg; 
                 onChange={e => { setText(e.target.value.toUpperCase()); setErr(''); }}
                 className={`h-[38px] rounded-md border px-2.5 font-mono text-sm outline-none ${text && text !== cfg.code ? 'border-red-300' : 'border-slate-300'}`}
               />
+            </label>
+          )}
+          {cfg.motivo && (
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+              {cfg.motivo.label}
+              <textarea value={motivo} maxLength={cfg.motivo.max ?? 300} rows={2} placeholder={cfg.motivo.placeholder} onChange={e => setMotivo(e.target.value)} className="resize-none rounded-md border border-slate-300 px-2.5 py-2 text-sm font-normal outline-none focus:border-accent" />
             </label>
           )}
           {cfg.pin && (

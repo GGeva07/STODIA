@@ -14,6 +14,9 @@ import { prisma } from '../db';
 import { cicloActivoRow } from './ciclo';
 import { hoyISO, zonaHoraria } from './cxc';
 
+/** Motivo del retiro / inactivacion: texto recortado a 300 caracteres (Matricula.motivoRetiro); vacio = sin motivo. */
+export const limpiarMotivo = (m: unknown) => (typeof m === 'string' ? m.trim().replace(/\s+/g, ' ').slice(0, 300) : '');
+
 type Db = typeof prisma | Prisma.TransactionClient;
 export const ESTADOS_MATRICULA = ['Activo', 'Retirado', 'Promovido', 'Repitente', 'Graduado', 'Reservado', 'Liberada'] as const;
 export const idMatricula = (alumnoId: string, cicloId: string) => `mat-${cicloId.slice(4)}-${alumnoId}`;
@@ -36,6 +39,8 @@ export async function sincronizarMatricula(alumnoId: string, db: Db = prisma): P
   if (!estado) return;
   const hoy = hoyISO(await zonaHoraria());
   const cur = await db.matricula.findUnique({ where: { alumnoId_cicloId: { alumnoId, cicloId: c.id } } });
+  // Un alumno que vuelve a estar Activo ya no tiene motivo de retiro / inactivacion vigente.
+  const sinMotivo = a.estado === 'Activo' && !!cur?.motivoRetiro;
   if (!cur) {
     await db.matricula.create({ data: { id: idMatricula(alumnoId, c.id), alumnoId, cicloId: c.id, seccionId: a.seccionId, estado, fechaIngreso: ingresoDe(hoy, c), fechaRetiro: estado === 'Retirado' ? hoy : null } });
     return;
@@ -44,9 +49,18 @@ export async function sincronizarMatricula(alumnoId: string, db: Db = prisma): P
   // Promovido / Repitente / Graduado (promocion aplicada antes del cierre) se conservan mientras el alumno siga vigente.
   // Reservado / Liberada (reinscripcion, Etapa B) tambien se conservan: solo el pago o el Director los cambian.
   const final = estado === 'Activo' && ['Promovido', 'Repitente', 'Graduado', 'Reservado', 'Liberada'].includes(cur.estado) ? cur.estado : estado;
-  if (cur.seccionId !== a.seccionId || cur.estado !== final || cur.fechaRetiro !== fechaRetiro) {
-    await db.matricula.update({ where: { id: cur.id }, data: { seccionId: a.seccionId, estado: final, fechaRetiro } });
+  if (cur.seccionId !== a.seccionId || cur.estado !== final || cur.fechaRetiro !== fechaRetiro || sinMotivo) {
+    await db.matricula.update({ where: { id: cur.id }, data: { seccionId: a.seccionId, estado: final, fechaRetiro, ...(sinMotivo ? { motivoRetiro: null } : {}) } });
   }
+}
+
+/** Guarda el motivo (opcional) de la baja / inactivacion en la Matricula del ciclo ACTIVO del alumno. Sin motivo no toca nada. Llamar DESPUES de sincronizarMatricula. */
+export async function registrarMotivoRetiro(alumnoId: string, motivo: unknown, db: Db = prisma): Promise<string> {
+  const m = limpiarMotivo(motivo);
+  if (!m) return '';
+  const c = await cicloActivoRow(db);
+  if (c) await db.matricula.updateMany({ where: { alumnoId, cicloId: c.id }, data: { motivoRetiro: m } });
+  return m;
 }
 
 /** Crea la Matricula del ciclo activo de todo alumno que no la tenga (menos Egresados). Devuelve cuantas creo. */

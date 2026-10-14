@@ -2,6 +2,7 @@
  * PROMOCION / AVANCE DE CURSO basado en la MATRIZ DE NOTAS (proceso SEPARADO del cierre contable del año: lib/ciclo-cierre.ts).
  * Decision de negocio: «pasaran de curso los estudiantes que se encuentren dentro del RANGO SEGURO, configurable por el director (70 por ejemplo)».
  * Documentacion completa: docs/cierre-y-promocion.md.
+ * Al APLICAR tambien congela el resultado de cada alumno en MatriculaResultado (fuente 'promocion': promedio, reprobadas, resultado, origen y destino; Informe «Movimientos del alumnado»).
  *
  * CALCULO (con los datos reales de la Matriz de Notas: AcadNota = roster × materia × PeriodoAcademico, columnas c1..c4 + ex, pesos de la rubrica):
  *  1) Nota FINAL de una materia en un PERIODO = la misma formula que la columna «Final» de la Matriz (apps/web/src/screens/notas → calc):
@@ -41,6 +42,7 @@ import { prisma } from '../db';
 import { rubricaDe, type RubInfo } from './academico';
 import { CicloError, type CicloRow } from './ciclo';
 import { idMatricula } from './matricula';
+import { guardarResultados, type FilaResultado } from './matricula-resultado';
 import { liberarReservaTx } from './reinscripcion';
 import { CFG_DEFAULTS, cfgGet } from './sisconfig';
 
@@ -112,7 +114,7 @@ async function resolverCiclos(origenPedido?: string) {
 }
 
 // ---------------------------------------------------------------- Notas
-async function rubricas(): Promise<{ rubricaDeMateria: Map<string, RubInfo> }> {
+export async function rubricas(): Promise<{ rubricaDeMateria: Map<string, RubInfo> }> {
   const rubs = await prisma.rubrica.findMany({ where: { estado: 'Activo' }, include: { criterios: { orderBy: { orden: 'asc' } }, materias: { select: { id: true } } } });
   const rubricaDeMateria = new Map<string, RubInfo>();
   for (const r of rubs) for (const m of r.materias) rubricaDeMateria.set(m.id, { nombre: r.nombre, minimo: r.minimo, criterios: r.criterios.map(c => ({ nombre: c.nombre, peso: c.peso, clave: c.clave })) });
@@ -334,6 +336,16 @@ export async function aplicarPromocion(origenPedido: string | undefined, usuario
     const reactivar = planes.filter(p => p.fila.accion !== 'Graduado' && p.alumnoEstado === 'Egresado'); // corregido tras una promocion anterior
     const seccionActiva = destinoActivo ? planes.filter(p => p.fila.destinoId && p.fila.accion !== 'Pendiente') : [];
     const fechaIngreso = destino.fechaInicio;
+    const gradoDe = new Map((await prisma.seccion.findMany({ select: { id: true, gradoId: true } })).map(x => [x.id, x.gradoId]));
+    // Resultado congelado por matricula (MatriculaResultado): promedio y destino reales de esta aplicacion.
+    const resultados: FilaResultado[] = planes.map(p => {
+      const f = p.fila, sinDestino = f.accion === 'Graduado' || f.accion === 'SinCupo' || f.accion === 'Pendiente', ds = sinDestino ? null : f.destinoId;
+      return {
+        matriculaId: p.origenMatId, alumnoId: f.alumnoId, cicloId: origen.id, promedio: f.promedio, materiasReprobadas: f.reprobadas,
+        resultado: f.accion === 'Graduado' ? 'Graduado' : f.resultado === 'Aprobado' ? 'Aprobado' : f.resultado === 'Reprobado' ? 'Reprobado' : 'Pendiente', accion: f.accion,
+        gradoOrigenId: gradoDe.get(f.seccionId)!, seccionOrigenId: f.seccionId, gradoDestinoId: ds ? gradoDe.get(ds) ?? null : null, seccionDestinoId: ds, cicloDestinoId: ds ? destino.id : null, fuente: 'promocion' as const,
+      };
+    });
     const id = await prisma.$transaction(async tx => {
       for (const ch of trozos(crear, 400)) await tx.matricula.createMany({ data: ch.map(p => ({ id: idMatricula(p.fila.alumnoId, destino.id), alumnoId: p.fila.alumnoId, cicloId: destino.id, seccionId: p.fila.destinoId!, estado: 'Activo', fechaIngreso, fechaRetiro: null })) });
       for (const p of mover) await tx.matricula.update({ where: { id: p.destMat!.id }, data: { seccionId: p.fila.destinoId! } }); // una reserva conserva su estado (Reservado / Activo): solo cambia de seccion
@@ -362,6 +374,7 @@ export async function aplicarPromocion(origenPedido: string | undefined, usuario
           accion: accionDe(p), matricula: p.op === 'crear' ? 'Creada' : p.op === 'mover' ? 'Ajustada' : p.op === 'borrar' || p.op === 'liberar' ? 'Retirada' : 'SinCambios', nota: p.fila.nota.slice(0, 400),
         })),
       });
+      await guardarResultados(tx, resultados);
       return reg.id;
     }, { timeout: 300_000, maxWait: 60_000 });
     return { id, conteos: preview.conteos, creadas: crear.length, ajustadas: mover.length, sinCambios: planes.length - crear.length - mover.length };

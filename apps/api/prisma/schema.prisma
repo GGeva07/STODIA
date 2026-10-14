@@ -143,6 +143,9 @@ model Alumno {
   /// Historial de reinscripcion del alumno.
   reinscripciones ReinscripcionEvento[]
   reservas ReinscripcionReserva[]
+  /// Resultado congelado del alumno en cada ciclo (MatriculaResultado) y notas finales congeladas al cierre (CierreNota). Informes etapa 3.
+  resultados MatriculaResultado[]
+  cierreNotas CierreNota[]
 
   @@index([tutorId])
   @@index([tutorLegalId])
@@ -357,6 +360,8 @@ model FinCobroItem {
   paid     Boolean @default(false)
   abono    Boolean @default(false)
   orden    Int     @default(0)
+  /// Categoria del cargo (colegiatura | inscripcion | reinscripcion | materiales | servicio | articulo | mora | otro), calculada al crear la linea (lib/ciclo-cierre-detalle.categoriaCargo; extension de db.ts). NULL = anterior a esta columna (backfill: scripts/backfill-informes.ts).
+  categoria String? @db.NVarChar(30)
   /// Nota de debito que origino este cargo (intereses por mora, recargo, ajuste...). NULL = cargo normal. Se cobra como cualquier otro y su recibo la referencia.
   notaDebitoId String? @db.NVarChar(100)
   notaDebito   NotaFiscal? @relation("NotaDebitoCargos", fields: [notaDebitoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -425,6 +430,7 @@ model FinRecibo {
 
   @@index([tutorId])
   @@index([cicloId])
+  @@index([cicloId, est, createdAt])
   @@index([cajeroId])
   @@index([cajaId])
   @@index([metodoPagoId])
@@ -450,6 +456,8 @@ model FinReciboItem {
   montoBruto      Float?
   descuentoBeca   Float   @default(0)
   becaMotivo      String? @db.NVarChar(200)
+  /// Categoria de la linea (mismos valores que FinCobroItem.categoria); NULL = anterior a esta columna (backfill).
+  categoria       String? @db.NVarChar(30)
   notaLineas  NotaFiscalLinea[]
 
   @@unique([reciboId, orden])
@@ -741,8 +749,13 @@ model FinMovimiento {
   ventaId    String?  @db.NVarChar(100)
   venta      FinVenta? @relation(fields: [ventaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   createdAt  DateTime @default(now())
+  /// Unidades con signo (Salida < 0; Entrada y Devolucion > 0) y stock del producto DESPUES del movimiento. NULL = anterior a estas columnas (el backfill parsea `q`).
+  /// Solo los productos con stock (FinProducto.stock no nulo) generan movimientos.
+  cantidad        Int?
+  stockResultante Int?
 
   @@index([productoId])
+  @@index([productoId, createdAt])
   @@index([ventaId])
 }
 
@@ -759,6 +772,9 @@ model FinVenta {
   cajeroId  String? @db.NVarChar(100)
   cajero    User?   @relation(fields: [cajeroId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   createdAt DateTime @default(now())
+  /// Ciclo ACTIVO al vender (NULL = ventas anteriores a esta columna; el backfill lo deduce por el rango de fechas del ciclo).
+  cicloId   String? @db.NVarChar(100)
+  ciclo     Ciclo?  @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   movimientos FinMovimiento[]
   lineas      FinVentaItem[]
   /// Notas de credito que devuelven productos de esta venta.
@@ -766,6 +782,8 @@ model FinVenta {
 
   @@index([metodoPagoId])
   @@index([cajeroId, createdAt])
+  @@index([createdAt])
+  @@index([cicloId])
 }
 
 // Lineas de una venta del kiosko (producto, cantidad y precio al momento de vender).
@@ -844,6 +862,12 @@ model Ciclo {
   reinscripciones ReinscripcionEvento[]
   reinscripcionCfg CicloReinscripcion?
   reservas ReinscripcionReserva[]
+  /// Informes etapa 3: ventas rapidas del ciclo, servicios contratados en el ciclo, resultados congelados (origen y destino) y notas finales congeladas al cierre.
+  ventas FinVenta[]
+  servicios ServicioAlumno[]
+  resultados MatriculaResultado[] @relation("ResultadoCiclo")
+  resultadosDestino MatriculaResultado[] @relation("ResultadoCicloDestino")
+  cierreNotas CierreNota[]
 }
 
 /// Periodo de calificacion dentro de un ciclo (por defecto 4: Ago–Oct, Nov–Ene, Feb–Abr, May–Jul). `orden` 1..4 es la clave '1'..'4' que usa la API.
@@ -857,6 +881,7 @@ model PeriodoAcademico {
   fechaFin    String @db.NVarChar(10)
   notas       AcadNota[]
   asistencias AsistenciaResumen[]
+  cierreNotas CierreNota[]
 
   @@unique([cicloId, orden])
 }
@@ -874,12 +899,17 @@ model Matricula {
   estado       String  @default("Activo") @db.NVarChar(20)
   fechaIngreso String  @db.NVarChar(10)
   fechaRetiro  String? @db.NVarChar(10)
+  /// Motivo (opcional) de la baja (Retirado) o de la inactivacion del alumno, capturado en el Expediente/Directorio. NULL = sin motivo registrado.
+  motivoRetiro String? @db.NVarChar(300)
   asistencias  AsistenciaResumen[]
   /// Marca de que es una RESERVA por reinscripcion (la promocion no la trata como copia automatica). Tabla aparte: no cambia las columnas de Matricula.
   reinscripcion ReinscripcionReserva?
+  /// Resultado congelado de esta matricula (promedio, resultado, origen y destino). 0..1.
+  resultado MatriculaResultado?
 
   @@unique([alumnoId, cicloId])
   @@index([cicloId])
+  @@index([cicloId, estado])
   @@index([seccionId])
 }
 
@@ -940,6 +970,8 @@ model Grado {
   secciones Seccion[]
   materias  MateriaGrado[]
   extras    AcadExtraGrado[]
+  resultadosOrigen  MatriculaResultado[] @relation("ResultadoGradoOrigen")
+  resultadosDestino MatriculaResultado[] @relation("ResultadoGradoDestino")
 
   @@unique([nivelId, nombre])
   @@unique([orden])
@@ -988,6 +1020,9 @@ model Seccion {
   plan         SeccionMateria[]
   docentes     DocenteSeccion[]
   matriculas   Matricula[]
+  resultadosOrigen  MatriculaResultado[] @relation("ResultadoSeccionOrigen")
+  resultadosDestino MatriculaResultado[] @relation("ResultadoSeccionDestino")
+  cierreNotas       CierreNota[]
 
   @@unique([gradoId, letra, tandaId])
   @@index([tandaId])
@@ -1033,6 +1068,7 @@ model Materia {
   horarios     AcadHorario[]
   notas        AcadNota[]
   notasMov     MobNota[]
+  cierreNotas  CierreNota[]
 
   @@index([rubricaId])
 }
@@ -1162,6 +1198,7 @@ model AcadNota {
   @@unique([rosterId, materiaId, periodoId])
   @@index([materiaId])
   @@index([periodoId])
+  @@index([periodoId, materiaId])
 }
 
 model AcadAsistencia {
@@ -1331,8 +1368,14 @@ model ServicioAlumno {
   reciboId String? @db.NVarChar(100)
   recibo   FinRecibo? @relation(fields: [reciboId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   cargos   FinCobroItem[]
+  /// Ciclo en el que se contrato el servicio y fechas ISO (aaaa-mm-dd) de alta y de baja (Informes de extracurriculares: retencion, altas y bajas). NULL = anterior a estas columnas (backfill).
+  cicloId   String? @db.NVarChar(100)
+  ciclo     Ciclo?  @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fechaAlta String? @db.NVarChar(10)
+  fechaBaja String? @db.NVarChar(10)
 
   @@index([alumnoId])
+  @@index([cicloId, extraId])
   @@index([reciboId])
   @@index([rutaId])
   @@index([aliPlanId])
@@ -1588,6 +1631,48 @@ model CierreCiclo {
   matriculas       Int
   /// JSON: deuda vigente por alumno al cerrar [{ alumnoId, code, nombre, seccion, pendiente, vencido, cargos }] (solo lectura, foto del cierre).
   deudaAlumnos     String   @db.NVarChar(Max)
+  /// Foto linea por linea del ciclo al cerrar (CierreCicloDetalle). Vacio en cierres anteriores a esta funcion (sin backfill).
+  detalle          CierreCicloDetalle[]
+}
+
+/// Detalle del cierre (Informes › Cierre de año, etapa 2): UNA FILA POR LINEA del ciclo al momento de cerrarlo, con instantaneas (nombres, codigos) para que no
+/// cambie aunque despues se edite el alumno / tutor / cargo. Se escribe en la misma transaccion que CierreCiclo (lib/ciclo-cierre-detalle.ts) y es de SOLO LECTURA.
+/// tipo: cargo (cada FinCobroItem del ciclo) | recibo (FinRecibo del ciclo, vigentes y anulados) | nota (NotaFiscal credito/debito) | descuento (linea de recibo con descuento)
+///       | venta (venta rapida FinVenta del rango de fechas del ciclo; FinVenta no tiene ciclo). Sin FK al alumno: alumnoId/Codigo/Nombre son instantanea.
+/// Cuadre con CierreCiclo: Σ monto (cargo) = facturado · Σ pendiente (cargo) = pendiente · Σ descuento (cargo) = Σ monto (descuento) = descuentos · Σ monto (recibo Emitido) = cobrado.
+model CierreCicloDetalle {
+  id            Int         @id @default(autoincrement())
+  cierreId      Int
+  cierre        CierreCiclo @relation(fields: [cierreId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// cargo | recibo | nota | descuento | venta
+  tipo          String      @db.NVarChar(20)
+  /// Id original: FinCobroItem.id / FinRecibo.id / NotaFiscal.id / FinVenta.id; en 'descuento', el id de la linea de recibo (FinReciboItem.id).
+  refId         String      @db.NVarChar(100)
+  /// Fecha de la linea: vencimiento del cargo; fecha de emision del recibo / nota / venta (NULL si el vencimiento no se pudo interpretar).
+  fecha         DateTime?
+  alumnoId      String?     @db.NVarChar(100)
+  alumnoCodigo  String      @default("") @db.NVarChar(100)
+  alumnoNombre  String      @default("") @db.NVarChar(300)
+  tutorNombre   String      @default("") @db.NVarChar(300)
+  concepto      String      @default("") @db.NVarChar(500)
+  /// colegiatura | inscripcion | reinscripcion | materiales | servicio | articulo | mora | otro (cargos y descuentos; en notas: credito | debito; en ventas: articulo).
+  categoria     String      @default("") @db.NVarChar(40)
+  /// Metodo de pago (el principal si el recibo se pago con varios; el desglose esta en extra.pagos).
+  metodo        String?     @db.NVarChar(100)
+  ncf           String?     @db.NVarChar(100)
+  cajero        String?     @db.NVarChar(200)
+  /// RD$ de la linea (cargo: facturado de ese cargo; recibo: total; nota: monto; descuento: monto descontado; venta: total).
+  monto         Float
+  descuento     Float       @default(0)
+  pendiente     Float       @default(0)
+  /// Pagado | Pendiente | Vencido (cargos, a la fecha del cierre) · Emitido | Anulado (recibos, notas, ventas, descuentos).
+  estado        String      @db.NVarChar(20)
+  /// JSON con el detalle que no es columna (motivo y reembolsos de la nota, % de descuento, pagos de un recibo mixto, mes, recibos que cobraron un cargo...).
+  extra         String?     @db.NVarChar(Max)
+
+  @@index([cierreId, tipo])
+  @@index([cierreId, tipo, fecha])
+  @@index([cierreId, alumnoId])
 }
 
 model PromocionCiclo {
@@ -1678,4 +1763,64 @@ model ReinscripcionReserva {
 
   @@unique([alumnoId, cicloId])
   @@index([cicloId])
+}
+
+// =====================================================================================================================
+// INFORMES · ETAPA 3 (docs/informes-analisis.md §10). Tablas ADITIVAS que congelan lo que los informes 2 y 3 necesitan para no depender de la rubrica/estado de hoy.
+// =====================================================================================================================
+
+/// Resultado CONGELADO de un alumno en un ciclo (Informe 2 · Movimientos del alumnado). Una fila por matricula (UNIQUE matriculaId = upsert idempotente).
+/// Se escribe al APLICAR la promocion (fuente 'promocion', con el promedio y el destino reales) y en cerrarCiclo para las matriculas sin promocion aplicada
+/// (fuente 'cierre', resultado segun el estado de la matricula, sin promedio). Una promocion posterior sobrescribe la fila del cierre.
+/// resultado: Aprobado | Reprobado | Pendiente | Graduado | Retirado.  accion (solo promocion): Promovido | Repitente | Graduado | Pendiente | SinCupo | Respetada | Retirado.
+model MatriculaResultado {
+  id                 Int       @id @default(autoincrement())
+  matriculaId        String    @unique @db.NVarChar(100)
+  matricula          Matricula @relation(fields: [matriculaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  alumnoId           String    @db.NVarChar(100)
+  alumno             Alumno    @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cicloId            String    @db.NVarChar(100)
+  ciclo              Ciclo     @relation("ResultadoCiclo", fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  promedio           Float?
+  materiasReprobadas Int       @default(0)
+  resultado          String    @db.NVarChar(20)
+  accion             String?   @db.NVarChar(30)
+  gradoOrigenId      String    @db.NVarChar(100)
+  gradoOrigen        Grado     @relation("ResultadoGradoOrigen", fields: [gradoOrigenId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  seccionOrigenId    String    @db.NVarChar(100)
+  seccionOrigen      Seccion   @relation("ResultadoSeccionOrigen", fields: [seccionOrigenId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  gradoDestinoId     String?   @db.NVarChar(100)
+  gradoDestino       Grado?    @relation("ResultadoGradoDestino", fields: [gradoDestinoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  seccionDestinoId   String?   @db.NVarChar(100)
+  seccionDestino     Seccion?  @relation("ResultadoSeccionDestino", fields: [seccionDestinoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cicloDestinoId     String?   @db.NVarChar(100)
+  cicloDestino       Ciclo?    @relation("ResultadoCicloDestino", fields: [cicloDestinoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// promocion | cierre
+  fuente             String    @db.NVarChar(20)
+  fecha              DateTime  @default(now())
+
+  @@index([cicloId, resultado])
+  @@index([alumnoId])
+}
+
+/// Nota final CONGELADA al cerrar el ciclo (Informe 3 · Calificaciones consolidadas). Una fila por alumno × materia × periodo con nota final completa
+/// (formula de la columna «Final» de la Matriz: lib/promocion.finalPeriodo) y una fila con periodoId NULL = final de la materia (promedio de los periodos, 1 decimal).
+/// seccionId = seccion de la MATRICULA del ciclo. Se inserta dentro de cerrarCiclo por lotes (INSERT ... SELECT FROM OPENJSON). Solo lectura.
+model CierreNota {
+  id        Int               @id @default(autoincrement())
+  cicloId   String            @db.NVarChar(100)
+  ciclo     Ciclo             @relation(fields: [cicloId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  alumnoId  String            @db.NVarChar(100)
+  alumno    Alumno            @relation(fields: [alumnoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  seccionId String            @db.NVarChar(100)
+  seccion   Seccion           @relation(fields: [seccionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  materiaId String            @db.NVarChar(100)
+  materia   Materia           @relation(fields: [materiaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  periodoId String?           @db.NVarChar(100)
+  periodo   PeriodoAcademico? @relation(fields: [periodoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  final     Float
+  fecha     DateTime          @default(now())
+
+  @@index([cicloId, seccionId, materiaId])
+  @@index([cicloId, alumnoId])
 }

@@ -45,6 +45,9 @@ export const CHECKS: { nombre: string; tabla: string; columnas: string[]; expr: 
   { nombre: 'CK_NotaFiscal_clase', tabla: 'NotaFiscal', columnas: ['clase', 'monto'], expr: "clase IN ('CREDITO', 'DEBITO') AND monto > 0", msg: 'Clase de nota invalida o monto no positivo' },
   { nombre: 'CK_NotaFiscalLinea_efecto', tabla: 'NotaFiscalLinea', columnas: ['efecto'], expr: "efecto IN ('ReabreCargo', 'Devolucion', 'Ajuste', 'NuevoCargo')", msg: 'Efecto de linea de nota invalido' },
   { nombre: 'CK_NotaFiscalReembolso_monto', tabla: 'NotaFiscalReembolso', columnas: ['monto'], expr: 'monto > 0', msg: 'El reembolso debe ser mayor que cero' },
+  { nombre: 'CK_CierreCicloDetalle_tipo', tabla: 'CierreCicloDetalle', columnas: ['tipo'], expr: "tipo IN ('cargo', 'recibo', 'nota', 'descuento', 'venta')", msg: 'Tipo de detalle de cierre invalido' },
+  { nombre: 'CK_MatriculaResultado_resultado', tabla: 'MatriculaResultado', columnas: ['resultado'], expr: "resultado IN ('Aprobado', 'Reprobado', 'Pendiente', 'Graduado', 'Retirado')", msg: 'Resultado de matricula invalido' },
+  { nombre: 'CK_MatriculaResultado_fuente', tabla: 'MatriculaResultado', columnas: ['fuente'], expr: "fuente IN ('promocion', 'cierre')", msg: 'Fuente de resultado invalida' },
   { nombre: 'CK_FinReciboPago_monto', tabla: 'FinReciboPago', columnas: ['monto'], expr: 'monto >= 0', msg: 'El monto del pago no puede ser negativo' },
 ];
 

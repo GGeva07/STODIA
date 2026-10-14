@@ -99,7 +99,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (config.licenseKey) headers['X-License-Key'] = config.licenseKey;
@@ -111,6 +111,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
   const text = await res.text();
   const data = text ? JSON.parse(text) : undefined;
@@ -122,8 +123,25 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>('GET', path),
+  get: <T>(path: string, opts?: { signal?: AbortSignal }) => request<T>('GET', path, undefined, opts?.signal),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body ?? {}),
   del: <T>(path: string, body?: unknown) => request<T>('DELETE', path, body),
 };
+
+/** Descarga un recurso binario autenticado (p. ej. un .xlsx generado en el servidor). */
+export async function apiBlob(path: string, opts?: { signal?: AbortSignal }): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  if (config.licenseKey) headers['X-License-Key'] = config.licenseKey;
+  if (cicloHeader) headers['X-Ciclo'] = cicloHeader;
+  const token = tokenStore.get();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(config.apiUrl.replace(/\/$/, '') + path, { headers, signal: opts?.signal });
+  if (!res.ok) {
+    if (res.status === 401 && token) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    let msg = res.statusText;
+    try { msg = (await res.json())?.error ?? msg; } catch { /* sin cuerpo JSON */ }
+    throw new ApiError(res.status, msg);
+  }
+  return res.blob();
+}

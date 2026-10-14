@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>STODIA · flyers v2 (capturas reales)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&family=Caveat:wght@600;700&display=block" rel="stylesheet">
+<style>
+:root{--navy:#0f172a;--navy2:#1e293b;--blue:#1d4ed8;--sky:#38bdf8;--bg:#f8fafc;--bg2:#edeef0;--ink:#0f172a;--mute:#51555d;--gold:#f59e0b;--ok:#16a34a}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#555;font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.slide{position:relative;width:1600px;height:1200px;overflow:hidden;margin:0 0 40px 0}
+img{display:block}
+.mono{font-family:'JetBrains Mono',monospace}
+.hand{font-family:Caveat,cursive;font-weight:700}
+
+/* marcos */
+.browser{background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 40px 90px -20px rgba(2,6,23,.55),0 0 0 1px rgba(15,23,42,.18)}
+.browser .bar{height:42px;background:#e2e8f0;display:flex;align-items:center;gap:8px;padding:0 16px}
+.browser .bar i{width:12px;height:12px;border-radius:50%;background:#cbd5e1;display:block}
+.browser .bar i:nth-child(1){background:#f87171}.browser .bar i:nth-child(2){background:#fbbf24}.browser .bar i:nth-child(3){background:#4ade80}
+.browser .bar span{margin-left:14px;flex:1;height:24px;border-radius:12px;background:#f8fafc;color:#64748b;font-size:13px;display:flex;align-items:center;padding:0 14px}
+.browser .shot{overflow:hidden;position:relative}
+.browser .shot img{width:100%;height:auto}
+.phone{background:#0b1120;border-radius:56px;padding:14px;box-shadow:0 40px 80px -20px rgba(2,6,23,.6),0 0 0 2px #334155 inset}
+.phone .scr{border-radius:44px;overflow:hidden;aspect-ratio:390/844;background:#f8fafc;position:relative}
+.phone .scr img{width:100%;height:100%;object-fit:cover;object-position:top}
+.phone .scr:before{display:none;content:"";position:absolute;z-index:2;top:12px;left:50%;transform:translateX(-50%);width:92px;height:24px;border-radius:14px;background:#0b1120}
+
+.logo{display:flex;align-items:center;gap:14px}
+.logo .mk{height:64px;width:35px}
+.logo .wm{height:44px;width:143px}
+.chip{display:inline-flex;align-items:center;gap:12px;font-weight:600}
+.dot{width:14px;height:14px;border-radius:50%;flex:none}
+.tag{font-family:'JetBrains Mono',monospace;font-weight:700;letter-spacing:.12em;text-transform:uppercase;font-size:17px}
+.demo{position:absolute;font-size:13px;opacity:.7}
+
+/* ===== F1 ===== */
+#f1{background:radial-gradient(1200px 700px at 85% 10%,#1e3a8a 0%,transparent 60%),linear-gradient(160deg,#0f172a 0%,#0b1226 100%);color:#fff}
+#f1 .logo{position:absolute;left:80px;top:64px}
+#f1 h1{position:absolute;left:80px;top:170px;font-size:104px;line-height:.98;font-weight:800;letter-spacing:-.035em}
+#f1 h1 em{font-style:normal;color:var(--sky)}
+#f1 .sub{position:absolute;left:84px;top:500px;width:560px;font-size:27px;line-height:1.4;color:#cbd5e1}
+#f1 .hand.note{position:absolute;left:84px;top:650px;font-size:44px;color:var(--gold);transform:rotate(-3deg)}
+#f1 .main{position:absolute;left:80px;top:730px;width:930px}
+#f1 .mods{position:absolute;left:1090px;top:150px;width:440px;display:flex;flex-direction:column;gap:20px}
+#f1 .mod{display:flex;align-items:center;gap:16px;background:rgba(255,255,255,.07);border:1px solid rgba(148,163,184,.35);border-radius:18px;padding:22px 24px;font-size:28px;font-weight:600}
+#f1 .mod small{display:block;font-size:17px;font-weight:400;color:#94a3b8;margin-top:3px}
+#f1 svg.links{position:absolute;inset:0;pointer-events:none}
+#f1 .foot{position:absolute;left:1090px;top:1085px;font-size:22px;color:#cbd5e1;width:440px;line-height:1.4}
+#f1 .demo{left:80px;top:1165px;color:#94a3b8}
+
+/* ===== F2 ===== */
+#f2{background:var(--bg);color:var(--ink)}
+#f2:before{content:"";position:absolute;inset:0;background:radial-gradient(900px 600px at 50% 52%,#dbeafe 0%,transparent 70%)}
+#f2 .head{position:absolute;left:0;right:0;top:64px;text-align:center}
+#f2 .head .logo{justify-content:center;margin-bottom:26px}
+#f2 .head h1{font-size:76px;font-weight:800;letter-spacing:-.03em;line-height:1.02}
+#f2 .head h1 em{font-style:normal;color:var(--blue)}
+#f2 .head p{font-size:26px;color:var(--mute);margin-top:16px}
+#f2 .hub{position:absolute;left:400px;top:450px;width:800px}
+#f2 .hub .shot{aspect-ratio:2000/600}
+#f2 .hub .shot img{position:absolute;left:0;top:0}
+#f2 svg.links{position:absolute;inset:0;pointer-events:none}
+#f2 .node{position:absolute;width:300px;background:#fff;border-radius:18px;box-shadow:0 18px 44px -14px rgba(15,23,42,.35),0 0 0 1px rgba(15,23,42,.1);overflow:hidden}
+#f2 .node .cap{height:150px;overflow:hidden;position:relative;border-bottom:1px solid #e2e8f0}
+#f2 .node .cap img{width:122%;height:auto;position:absolute;left:-22%;top:-20%}
+#f2 .node .cap.dir img{top:-20%}
+#f2 .node .cap.com img{top:-28%}
+#f2 .node .cap.dash img{top:-27%}
+#f2 .node .t{padding:14px 18px 16px;font-weight:700;font-size:23px;display:flex;align-items:center;gap:10px}
+#f2 .node .t small{display:block;font-weight:400;font-size:15px;color:var(--mute)}
+#f2 .pill{position:absolute;background:var(--navy);color:#fff;border-radius:999px;padding:12px 24px;font-weight:600;font-size:23px;box-shadow:0 12px 28px -10px rgba(15,23,42,.5)}
+#f2 .pill .dot{display:inline-block;margin-right:10px;vertical-align:-1px}
+#f2 .foot{position:absolute;left:0;right:0;bottom:44px;text-align:center;font-size:30px}
+#f2 .foot .hand{color:var(--blue);font-size:46px}
+#f2 .demo{left:80px;bottom:18px;color:#64748b}
+
+/* ===== F3 ===== */
+#f3{background:linear-gradient(135deg,#1d4ed8 0%,#1e40af 45%,#0f172a 100%);color:#fff}
+#f3:after{content:"";position:absolute;right:-200px;top:-200px;width:800px;height:800px;border-radius:50%;background:radial-gradient(circle,rgba(56,189,248,.45),transparent 65%)}
+#f3 .logo{position:absolute;left:80px;top:64px;z-index:3}
+#f3 h1{position:absolute;left:80px;top:170px;width:760px;font-size:92px;line-height:1.02;font-weight:800;letter-spacing:-.035em;z-index:3}
+#f3 h1 em{font-style:normal;color:#7dd3fc}
+#f3 .sub{position:absolute;left:84px;top:490px;width:620px;font-size:28px;line-height:1.42;color:#dbeafe;z-index:3}
+#f3 ul{position:absolute;left:84px;top:665px;list-style:none;font-size:27px;font-weight:600;z-index:3;display:grid;gap:18px}
+#f3 li{display:flex;align-items:center;gap:16px}
+#f3 .desk{position:absolute;left:80px;top:890px;width:740px;z-index:2}
+#f3 .p1{position:absolute;left:1110px;top:110px;width:380px;z-index:3;transform:rotate(3deg)}
+#f3 .p2{position:absolute;left:810px;top:420px;width:340px;z-index:4;transform:rotate(-4deg)}
+#f3 .hand.note{position:absolute;left:1190px;top:1030px;font-size:52px;color:#fde047;transform:rotate(-4deg);z-index:5}
+#f3 .demo{right:60px;bottom:22px;color:#bfdbfe}
+</style>
+</head>
+<body>
+
+<!-- ============ F1 ============ -->
+<section class="slide" id="f1">
+  <svg class="links" width="1600" height="1200" viewBox="0 0 1600 1200">
+    <g fill="none" stroke="#38bdf8" stroke-width="3" stroke-dasharray="3 9" stroke-linecap="round" opacity=".85">
+      <path d="M1010 915 C1050 915 1040 215 1090 215"/>
+      <path d="M1010 915 C1050 915 1040 340 1090 340"/>
+      <path d="M1010 915 C1050 915 1040 470 1090 470"/>
+      <path d="M1010 915 C1050 915 1040 600 1090 600"/>
+      <path d="M1010 915 C1050 915 1040 730 1090 730"/>
+      <path d="M1010 915 C1050 915 1040 860 1090 860"/>
+    </g>
+    <circle cx="1010" cy="915" r="9" fill="#38bdf8"/>
+  </svg>
+  <div class="logo"><img class="mk" src="assets/stodia-mark.svg" alt="STODIA"><img class="wm" src="assets/stodia-wordmark.svg" alt="STODIA"></div>
+  <h1>Un dato.<br><em>Todos los<br>módulos.</em></h1>
+  <p class="sub">Captura al alumno y a su familia una sola vez. El mismo registro alimenta cada módulo de tu colegio.</p>
+  <div class="hand note">una ficha, cero copias</div>
+  <div class="browser main">
+    <div class="bar"><i></i><i></i><i></i><span>STODIA · Expediente 360 · Red familiar</span></div>
+    <div class="shot" style="aspect-ratio:2000/700"><img src="assets/captura-expediente-red.png" alt="Expediente real del alumno: tutores y hermanos" style="position:absolute;left:-22%;top:-17%;width:122%"></div>
+  </div>
+  <div class="mods">
+    <div class="mod"><span class="dot" style="background:#38bdf8"></span><div>Inscripción y expediente<small>El registro maestro</small></div></div>
+    <div class="mod"><span class="dot" style="background:#a78bfa"></span><div>Notas y asistencia<small>Por alumno y sección</small></div></div>
+    <div class="mod"><span class="dot" style="background:#34d399"></span><div>Horarios<small>Grupo y docentes</small></div></div>
+    <div class="mod"><span class="dot" style="background:#fbbf24"></span><div>Finanzas<small>Cargos, cobros y estado de cuenta</small></div></div>
+    <div class="mod"><span class="dot" style="background:#fb7185"></span><div>Comedor<small>Plan activo y restricciones</small></div></div>
+    <div class="mod"><span class="dot" style="background:#60a5fa"></span><div>Portal de tutores<small>La familia ve lo suyo</small></div></div>
+  </div>
+  <div class="foot">Un directorio único de alumnos y tutores.</div>
+  <div class="demo">Capturas de la aplicación real con datos de demostración.</div>
+</section>
+
+<!-- ============ F2 ============ -->
+<section class="slide" id="f2">
+  <div class="head">
+    <div class="logo"><img class="mk" src="assets/stodia-mark.svg" alt="STODIA"><img class="wm" src="assets/stodia-wordmark.svg" alt="STODIA" style="filter:brightness(.7) saturate(1.3)"></div>
+    <h1>El expediente es el <em>centro</em><br>de todo el sistema</h1>
+    <p>Directorio, notas, finanzas, comedor y portal leen de la misma ficha.</p>
+  </div>
+  <svg class="links" width="1600" height="1200" viewBox="0 0 1600 1200">
+    <g fill="none" stroke="#1d4ed8" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="2 10">
+      <path d="M400 540 C320 540 240 600 240 635"/>
+      <path d="M400 640 C320 640 220 700 200 770"/>
+      <path d="M1200 540 C1280 540 1360 600 1360 635"/>
+      <path d="M1200 640 C1280 640 1380 700 1385 770"/>
+      <path d="M800 720 L800 790"/>
+    </g>
+  </svg>
+  <div class="browser hub">
+    <div class="bar"><i></i><i></i><i></i><span>STODIA · Expediente 360 · Datos personales</span></div>
+    <div class="shot"><img src="assets/captura-expediente.png" alt="Expediente 360 real" style="position:absolute;left:-22%;top:-20%;width:122%"></div>
+  </div>
+  <div class="node" style="left:80px;top:410px"><div class="cap dir"><img src="assets/captura-directorio.png" alt="Directorio"></div><div class="t"><span class="dot" style="background:#38bdf8"></span><div>Directorio<small>Alumnos y tutor financiero</small></div></div></div>
+  <div class="node" style="left:1220px;top:410px"><div class="cap dash"><img src="assets/captura-dashboard.png" alt="Finanzas"></div><div class="t"><span class="dot" style="background:#fbbf24"></span><div>Finanzas<small>Cobros y cartera</small></div></div></div>
+  <div class="node" style="left:80px;top:770px"><div class="cap com"><img src="assets/captura-comedor.png" alt="Comedor"></div><div class="t"><span class="dot" style="background:#fb7185"></span><div>Comedor<small>Plan y restricciones</small></div></div></div>
+  <div class="node" style="left:1230px;top:770px;width:290px"><div class="cap" style="background:#f8fafc"><img src="assets/captura-portal-tutor-notas.png" alt="Portal" style="width:70%;left:15%;top:-2%"></div><div class="t"><span class="dot" style="background:#60a5fa"></span><div>Portal de tutores<small>Notas y estado de cuenta</small></div></div></div>
+  <div class="pill" style="left:662px;top:790px"><span class="dot" style="background:#a78bfa"></span>Notas y asistencia</div>
+  <div class="pill" style="left:880px;top:880px;background:var(--blue)"><span class="dot" style="background:#34d399"></span>Horarios</div>
+  <div class="pill" style="left:520px;top:880px;background:var(--blue)"><span class="dot" style="background:#fff"></span>Inscripción</div>
+  <div class="foot"><span class="hand">Se captura una vez. Se usa en todas partes.</span></div>
+  <div class="demo">Capturas de la aplicación real con datos de demostración.</div>
+</section>
+
+<!-- ============ F3 ============ -->
+<section class="slide" id="f3">
+  <div class="logo"><img class="mk" src="assets/stodia-mark.svg" alt="STODIA"><img class="wm" src="assets/stodia-wordmark.svg" alt="STODIA"></div>
+  <h1>Tu colegio, organizado y <em>en un solo lugar</em></h1>
+  <p class="sub">El equipo administra desde el escritorio; las familias consultan desde su teléfono. Los dos ven la misma información.</p>
+  <ul>
+    <li><span class="dot" style="background:#7dd3fc"></span>Directorio único de alumnos y tutores</li>
+    <li><span class="dot" style="background:#fde047"></span>Inscripción, notas, cobros y comedor</li>
+    <li><span class="dot" style="background:#86efac"></span>Portal para cada tutor</li>
+  </ul>
+  <div class="browser desk">
+    <div class="bar"><i></i><i></i><i></i><span>STODIA · Directorio de Alumnos</span></div>
+    <div class="shot" style="aspect-ratio:2000/560"><img src="assets/captura-directorio.png" alt="Directorio real" style="position:absolute;left:-22%;top:-20%;width:122%"></div>
+  </div>
+  <div class="phone p1"><div class="scr"><img src="assets/captura-portal-tutor.png" alt="Portal del tutor: inicio"></div></div>
+  <div class="phone p2"><div class="scr"><img src="assets/captura-portal-tutor-notas.png" alt="Portal del tutor: notas"></div></div>
+  <div class="hand note">las familias, al día</div>
+  <div class="demo">Capturas de la aplicación real con datos de demostración.</div>
+</section>
+
+</body>
+</html>
