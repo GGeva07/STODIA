@@ -24,15 +24,16 @@ export async function setApiUrl(url: string) {
   config = { ...config, apiUrl: url };
 }
 
-/** Valida un servidor con GET /health y devuelve el nombre de la institución si lo informa. */
-export async function probeServer(url: string): Promise<{ name?: string }> {
+/** Valida un servidor con GET /health y devuelve el nombre de la institución si lo informa (y si ya está activado). */
+export async function probeServer(url: string): Promise<{ name?: string; estado?: 'pendiente' | 'activa'; version?: string }> {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 8000);
   try {
     const res = await fetch(url.replace(/\/$/, '') + '/health', { signal: ctl.signal, cache: 'no-store' });
     if (!res.ok) throw new ApiError(res.status, 'El servidor respondió con error ' + res.status);
     const d = await res.json().catch(() => ({}));
-    return { name: d?.institutionName ?? d?.institution ?? d?.name };
+    if (d?.status !== 'ok') throw new ApiError(502, 'Esa dirección responde, pero no es un servidor STODIA.');
+    return { name: d?.institucion ?? d?.institutionName ?? d?.name, estado: d?.estado, version: d?.version };
   } catch (e) {
     if (e instanceof ApiError) throw e;
     throw new Error('No se pudo conectar. Revisa la dirección y que estés en la misma red.');

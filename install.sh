@@ -1,7 +1,11 @@
 #!/bin/sh
-# Instalador STODIA (Linux/macOS). Lo ejecuta el proveedor en el equipo del cliente.
+# Instalador STODIA (Linux/macOS). Lo ejecuta el proveedor en el SERVIDOR (del colegio o nuestro).
 #   sh ./install.sh                         interactivo
 #   sh ./install.sh --config respuestas.env desatendido (ver .env.example para las claves)
+# Dos modos:
+#   - PENDIENTE (recomendado; MODO_SERVIDOR=pendiente): solo puertos/URL. El servidor arranca sin datos del colegio y muestra un
+#     CÓDIGO DE ACTIVACIÓN; los datos se ponen desde la primera PC con install-cliente.sh / install-cliente.ps1 (modo "nueva").
+#   - COMPLETO (MODO_SERVIDOR=completo): pregunta aquí todos los datos del colegio, como siempre.
 # Mismo flujo que install.ps1.
 set -e
 cd "$(dirname "$0")"
@@ -269,8 +273,14 @@ rnc_flow() {
   done
 }
 
-echo "== Instalación de STODIA =="
-get API_URL          "URL pública de la API (o /api para servirla tras el proxy de la web)" "http://localhost:3000" v_url "Debe empezar con http:// o https://, o ser /api"
+echo "== Instalación de STODIA (servidor) =="
+v_modo() { [ "$1" = pendiente ] || [ "$1" = completo ]; }
+get MODO_SERVIDOR    "Modo: 'pendiente' (los datos del colegio se ponen desde la primera PC) o 'completo' (se ponen aquí)" "pendiente" v_modo "Escribe pendiente o completo"
+get API_URL          "URL pública de la API (o /api para servirla tras el proxy de la web)" "/api" v_url "Debe empezar con http:// o https://, o ser /api"
+GEN_PWD=""; GEN_PIN=""
+INSTITUTION_NAME=""; TAX_ID=""; ADDRESS=""; CITY=""; PHONE=""; CONTACT_EMAIL=""; ADMIN_NAME=""; ADMIN_USER="admin"; ADMIN_PASSWORD=""; SUPERVISOR_PIN=""
+RNC_VERIFICADO=""; RNC_RAZON_SOCIAL=""; RNC_NOMBRE_COMERCIAL=""; RNC_ESTADO=""; RNC_VERIFICADO_AT=""
+if [ "$MODO_SERVIDOR" = completo ]; then
 get INSTITUTION_NAME "Nombre de la institución" "" v_text "Obligatorio (sin comilla simple)"
 get TAX_ID           "RNC / ID fiscal (9 dígitos empresa u 11 persona física)" "" v_rnc "El RNC debe tener 9 dígitos (empresa) u 11 (persona física/cédula)"
 # Valida el RNC contra la DGII ANTES de pedir el resto y de crear nada (puede ajustar TAX_ID/INSTITUTION_NAME).
@@ -292,6 +302,10 @@ GEN_PIN=""
 if [ -z "$SUPERVISOR_PIN" ]; then SUPERVISOR_PIN=$(digits6); GEN_PIN=$SUPERVISOR_PIN; fi
 
 get LICENSE_KEY  "Clave de licencia (STODIA1.…, la entrega STODIA; incluye el plan)" "" v_lic "Clave inválida: debe ser STODIA1.<datos>.<firma>, vigente y emitida por STODIA"
+else
+v_lic_opt() { [ -z "$1" ] || v_lic "$1"; }
+get LICENSE_KEY  "Clave de licencia (opcional: vacío = se pega en la activación desde la PC)" "" v_lic_opt "Clave inválida: debe ser STODIA1.<datos>.<firma>, vigente y emitida por STODIA"
+fi
 get WEB_PORT     "Puerto web" "8080" v_port "Puerto entre 1 y 65535"
 get API_PORT     "Puerto de la API en este equipo" "3000" v_port "Puerto entre 1 y 65535"
 [ "$WEB_PORT" != "$API_PORT" ] || die "WEB_PORT y API_PORT no pueden ser iguales."
@@ -408,6 +422,16 @@ API_SHOWN=$API_URL
 [ "$API_URL" != "/api" ] || API_SHOWN="$WEB_SHOWN/api"
 echo
 echo "=========== STODIA instalado ==========="
+if [ "$MODO_SERVIDOR" = pendiente ]; then
+CODIGO=$(docker compose exec -T api sh -c 'head -n 1 /data/codigo-activacion.txt 2>/dev/null' 2>/dev/null | tr -d '\r' || true)
+echo "Estado      : PENDIENTE DE ACTIVACIÓN"
+echo "Código      : ${CODIGO:-(aún no disponible: docker compose logs api | grep Código)}   (vence en 72 h; un solo uso)"
+echo "Web         : http://localhost:$WEB_PORT   (pública: ${CORS_ORIGIN%%,*})"
+echo "Siguiente   : en la primera PC ejecuta install-cliente (modo nueva) con la dirección pública y este código."
+echo "Actualizar  : programa 'sh ./actualizar.sh' cada 5 min (cron); solo aplica versiones que el colegio apruebe en la app."
+echo "========================================"
+exit 0
+fi
 echo "Institución : $INSTITUTION_NAME"
 if [ "$RNC_VERIFICADO" = true ]; then echo "RNC         : $TAX_ID (verificado en la DGII)"; else echo "RNC         : $TAX_ID (NO verificado: confírmalo luego en Configuración)"; fi
 echo "Web         : http://localhost:$WEB_PORT   (pública: $WEB_SHOWN)"

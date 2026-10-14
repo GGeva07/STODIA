@@ -118,6 +118,29 @@ docker compose up -d --build
 
 ## Instalación en un cliente
 
+### Modelo recomendado: servidor pendiente + activación desde la primera PC
+
+1. **Servidor** (del colegio o nuestro VPS): `sh install.sh` / `install.ps1` con `MODO_SERVIDOR=pendiente` (por defecto). Solo pide URL, puertos y CORS;
+   la licencia es opcional. La API arranca **sin datos del colegio** y muestra un **código de activación** de un solo uso (`XXXX-XXXX`, vence en 72 h),
+   también guardado en `/data/codigo-activacion.txt`. Mientras está pendiente, `GET /health` responde `estado: "pendiente"`.
+2. **Primera PC**: `install-cliente.ps1` (Windows) o `sh install-cliente.sh` (Linux). Pide la dirección del servidor y pregunta si es una
+   **instalación nueva**: con el código y los datos del colegio (RNC, admin, PIN, licencia) llama a `POST /instalacion/activar`.
+   El servidor verifica el RNC por su cuenta, crea el Super Admin y queda `activa`; la ruta responde 409 desde entonces.
+3. **Demás PCs**: el mismo script en modo **extensión**: dirección del servidor + usuario/contraseña existentes (solo se validan con `/auth/login`).
+4. Ambos modos guardan `stodia.json` (`{ url }`) en la carpeta de la app (`%APPDATA%\STODIA`, `~/.config/STODIA`) y ofrecen instalar
+   `STODIA-Setup-*.exe` / `STODIA-*.AppImage` si están junto al script. La app de escritorio también tiene su pantalla «Conectar con el servidor»
+   (Ctrl+Shift+S). Instalador de escritorio: `pnpm --filter @stodia/desktop dist:win` (sin firma de código: Windows muestra un aviso).
+
+### Actualizaciones aprobadas por el cliente
+
+- La API lee el manifiesto público `STODIA_UPDATE_URL` (por defecto `https://stodia.vercel.app/releases/stable.json`, en `landing-site/public/releases/`).
+  Publicar una versión = crear el tag `vX.Y.Z` y subir ese JSON con la versión y las notas.
+- El Super Admin ve el aviso en la app y la **aprueba** (`POST /actualizacion/aprobar`). Nada se instala sin aprobación.
+- `actualizar.sh` en el servidor (cron cada 5 min) aplica solo lo aprobado: respaldo → `git checkout vX.Y.Z` → `docker compose up -d --build`
+  → espera `/health` con la versión nueva; si falla, vuelve al commit anterior y **restaura el respaldo**. El resultado se ve en la app.
+
+### Modo completo (como antes)
+
 Requisitos: Docker con Compose v2 (opcional: Node 20 para validar la firma de la licencia antes de instalar).
 El proveedor ejecuta `install.ps1` (Windows) o `sh install.sh` (Linux/macOS) en el equipo del cliente, desde la raíz del repo.
 

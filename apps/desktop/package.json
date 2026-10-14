@@ -1,13 +1,51 @@
 {
   "name": "@stodia/desktop",
+  "productName": "STODIA",
   "version": "0.1.0",
   "private": true,
-  "description": "Shell Electron mínimo para STODIA (sin empaquetado todavía).",
+  "description": "Aplicación de escritorio STODIA: conecta con el servidor del colegio y carga la web.",
+  "author": "STODIA",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis",
+    "dist:linux": "electron-builder --linux AppImage",
+    "dist:dir": "electron-builder --dir"
   },
   "devDependencies": {
-    "electron": "^33.2.0"
+    "electron": "^33.2.0",
+    "electron-builder": "^25"
+  },
+  "build": {
+    "appId": "do.stodia.desktop",
+    "productName": "STODIA",
+    "executableName": "stodia",
+    "files": [
+      "main.js",
+      "preload.js",
+      "setup.html",
+      "setup.js",
+      "build/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis"
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "build/icon.png"
+    }
   }
 }

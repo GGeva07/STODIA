@@ -91,3 +91,11 @@ export interface ConfigGlobal {
 
 export interface AuditoriaRow { id: string; t: string; usr: string; a: 'Insert' | 'Update' | 'Delete'; tabla: string; registro: string; prev: string; next: string; ip: string }
 export interface AuditoriaList { rows: AuditoriaRow[]; total: number; count: number; users: string[] }
+
+/** GET /health: datos públicos mínimos para que un cliente sepa a qué servidor se conecta. */
+export interface HealthInfo { status: 'ok'; time: string; version: string; estado: 'pendiente' | 'activa'; minClientVersion: string; institucion?: string }
+/** Actualizaciones aprobadas por el cliente (GET /actualizacion, solo Super Admin). */
+export interface ActManifiesto { version: string; fecha?: string; notas?: string[]; minClientVersion?: string }
+export interface ActSolicitud { version: string; aprobadaPor: string; aprobadaEn: string }
+export interface ActEstado { estado: 'aplicando' | 'ok' | 'error' | 'revertida'; version: string; mensaje?: string; en: string }
+export interface ActResumen { actual: string; disponible: ActManifiesto | null; solicitud: ActSolicitud | null; ultimo: ActEstado | null; canal: boolean; error?: string }

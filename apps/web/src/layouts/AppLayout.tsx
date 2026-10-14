@@ -2,6 +2,7 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { LicenseProvider, useLicense } from '../components/system/License';
 import { UiProvider, useUi } from '../components/system/UiProvider';
+import { UpdateBanner } from '../components/system/UpdateBanner';
 import type { CfgCiclo, ConfigGlobal } from '@stodia/shared';
 import { CicloProvider, POR_CICLO, seleccionable, useCiclo } from '../lib/ciclo';
 import { MENU_OCULTO, NAV, canAccess, setAccessOverride, setPapeleriaAbierta, useAccessVersion } from '../lib/access';
@@ -244,6 +245,7 @@ function Shell() {
         )}
 
         <main ref={main} className="no-scrollbar relative min-w-0 flex-1 overflow-auto px-6 pb-16 pt-3.5">
+          <UpdateBanner />
           {porCiclo && !esActivo && <CicloBanner />}
           {grp && title && (
             <div className="mb-2.5 flex items-center gap-1.5 text-xs text-slate-500">

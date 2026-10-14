@@ -8,7 +8,7 @@ import { getEval, licUsable } from '../lib/license';
 export default fp(async app => {
   app.addHook('onRequest', async (req, reply) => {
     if (req.method === 'OPTIONS' || req.url.startsWith('/health') || /^\/verificar(\/|\?|$)/.test(req.url)) return;
-    if (/^\/(licencia|auth)(\/|\?|$)/.test(req.url)) return;
+    if (/^\/(licencia|auth|instalacion)(\/|\?|$)/.test(req.url)) return; // instalacion: servidor vacío aún sin licencia (la trae la activación)
     const e = await getEval();
     if (!licUsable(e)) return reply.code(402).send({ error: e.estado === 'vencida' ? 'Licencia vencida: renueva el servicio' : e.estado === 'invalida' ? 'Licencia inválida' : 'Sin licencia: activa una clave en Licenciamiento' });
   });

@@ -18,6 +18,7 @@ export default function ServerSetup() {
       const clean = url.trim().replace(/\/+$/, '');
       if (!/^https?:\/\/.+/i.test(clean)) throw new Error('Escribe una dirección que empiece con http:// o https://');
       const info = await probeServer(clean);
+      if (info.estado === 'pendiente') throw new Error('Este servidor todavía no está activado. Pide al proveedor que haga la configuración inicial.');
       await setApiUrl(clean);
       if (info.name) getConfig().institutionName = info.name;
       nav('/login', { replace: true });

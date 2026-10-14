@@ -305,8 +305,14 @@ function Resolve-Rnc([string]$taxId, [string]$inst, [string]$mode, [bool]$unatte
 }
 # <<< RNC
 
-Write-Host '== Instalación de STODIA ==' -ForegroundColor Cyan
-$apiUrl    = (Get-Answer 'API_URL' 'URL pública de la API (o /api para servirla tras el proxy de la web)' 'http://localhost:3000' $Val.url 'Debe empezar con http:// o https://, o ser /api').TrimEnd('/')
+Write-Host '== Instalación de STODIA (servidor) ==' -ForegroundColor Cyan
+# Modo 'pendiente' (recomendado): el servidor arranca sin datos del colegio y muestra un CÓDIGO DE ACTIVACIÓN; los datos se ponen
+# desde la primera PC con install-cliente.ps1 (modo nueva). Modo 'completo': se preguntan aquí, como siempre.
+$modo = Get-Answer 'MODO_SERVIDOR' "Modo: 'pendiente' (los datos del colegio se ponen desde la primera PC) o 'completo' (se ponen aquí)" 'pendiente' { param($v) $v -eq 'pendiente' -or $v -eq 'completo' } 'Escribe pendiente o completo'
+$apiUrl    = (Get-Answer 'API_URL' 'URL pública de la API (o /api para servirla tras el proxy de la web)' '/api' $Val.url 'Debe empezar con http:// o https://, o ser /api').TrimEnd('/')
+$inst = ''; $taxId = ''; $address = ''; $city = ''; $phone = ''; $email = ''; $adminName = ''; $adminUser = 'admin'; $adminPwd = ''; $pin = ''; $genPwd = ''; $genPin = ''
+$rnc = [pscustomobject]@{ Verificado = ''; Razon = ''; Comercial = ''; Estado = ''; At = ''; TaxId = ''; Inst = ''; Abort = $false }
+if ($modo -eq 'completo') {
 $inst      = Get-Answer 'INSTITUTION_NAME' 'Nombre de la institución' '' $Val.text 'Obligatorio (sin comilla simple)'
 $taxId     = (Get-Answer 'TAX_ID' 'RNC / ID fiscal (9 dígitos empresa u 11 persona física)' '' $Val.rnc 'El RNC debe tener 9 dígitos (empresa) u 11 (persona física/cédula)') -replace '\D', ''
 # Valida el RNC contra la DGII ANTES de pedir el resto y de crear nada (puede ajustar $taxId/$inst).
@@ -332,6 +338,9 @@ $genPin = ''
 if ($pin -eq '') { $pin = RandomDigits6; $genPin = $pin }
 
 $license  = Get-Answer 'LICENSE_KEY' 'Clave de licencia (STODIA1.…, la entrega STODIA; incluye el plan)' '' $Val.lic 'Clave inválida: debe ser STODIA1.<datos>.<firma>, vigente y emitida por STODIA'
+} else {
+$license  = Get-Answer 'LICENSE_KEY' 'Clave de licencia (opcional: vacío = se pega en la activación desde la PC)' '' { param($v) $v -eq '' -or (& $Val.lic $v) } 'Clave inválida: debe ser STODIA1.<datos>.<firma>, vigente y emitida por STODIA'
+}
 $webPort  = Get-Answer 'WEB_PORT' 'Puerto web' '8080' $Val.port 'Puerto entre 1 y 65535'
 $apiPort  = Get-Answer 'API_PORT' 'Puerto de la API en este equipo' '3000' $Val.port 'Puerto entre 1 y 65535'
 if ($webPort -eq $apiPort) { Die 'WEB_PORT y API_PORT no pueden ser iguales.' }
@@ -449,6 +458,16 @@ $apiShown = $apiUrl
 if ($apiUrl -eq '/api') { $apiShown = "$webShown/api" }
 Write-Host ''
 Write-Host '=========== STODIA instalado ===========' -ForegroundColor Green
+if ($modo -eq 'pendiente') {
+    $codigo = ''
+    try { $codigo = ((& docker compose exec -T api sh -c 'head -n 1 /data/codigo-activacion.txt 2>/dev/null') | Select-Object -First 1).Trim() } catch { }
+    Write-Host 'Estado      : PENDIENTE DE ACTIVACIÓN' -ForegroundColor Yellow
+    if ($codigo) { Write-Host "Código      : $codigo   (vence en 72 h; un solo uso)" -ForegroundColor Yellow } else { Write-Host 'Código      : aún no disponible (docker compose logs api | findstr Código)' }
+    Write-Host "Web         : http://localhost:$webPort   (pública: $webShown)"
+    Write-Host 'Siguiente   : en la primera PC ejecuta install-cliente.ps1 (modo nueva) con la dirección pública y este código.'
+    Write-Host '========================================'
+    exit 0
+}
 Write-Host "Institución : $inst"
 if ($rnc.Verificado -eq 'true') { Write-Host "RNC         : $taxId (verificado en la DGII)" } else { Write-Host "RNC         : $taxId (NO verificado: confírmalo luego en Configuración)" -ForegroundColor Yellow }
 Write-Host "Web         : http://localhost:$webPort   (pública: $webShown)"

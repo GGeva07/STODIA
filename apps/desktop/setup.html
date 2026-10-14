@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>STODIA · Conectar con el servidor</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: #0B1B4A;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #0B1B4A;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #ffffff;
+      width: 100%;
+      max-width: 440px;
+      border-radius: 14px;
+      padding: 32px 30px 26px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+    }
+    .marca { font-weight: 800; letter-spacing: 0.12em; font-size: 14px; color: #1D4ED8; margin: 0 0 6px; }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    p.ayuda { font-size: 14px; color: #475569; margin: 0 0 20px; line-height: 1.45; }
+    label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+    input {
+      width: 100%;
+      padding: 11px 12px;
+      font-size: 15px;
+      border: 1px solid #CBD5E1;
+      border-radius: 8px;
+      outline: none;
+    }
+    input:focus { border-color: #1D4ED8; box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.18); }
+    button {
+      margin-top: 16px;
+      width: 100%;
+      padding: 12px;
+      font-size: 15px;
+      font-weight: 700;
+      color: #ffffff;
+      background: #1D4ED8;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button:hover { background: #1E40AF; }
+    button:disabled { background: #94A3B8; cursor: default; }
+    .aviso {
+      display: none;
+      margin-top: 16px;
+      padding: 11px 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    .aviso.visible { display: block; }
+    .aviso.error { background: #FEE2E2; color: #991B1B; }
+    .aviso.pendiente { background: #FEF3C7; color: #78350F; }
+    .aviso.ok { background: #DCFCE7; color: #14532D; }
+    .info { margin-top: 14px; font-size: 13px; color: #475569; }
+    .info strong { color: #0B1B4A; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <p class="marca">STODIA</p>
+    <h1>Conectar con el servidor</h1>
+    <p class="ayuda">Escribe la dirección de la web de tu colegio, por ejemplo <strong>https://colegio.ejemplo.com</strong>.</p>
+
+    <form id="form" autocomplete="off">
+      <label for="url">Dirección del servidor</label>
+      <input id="url" name="url" type="url" placeholder="https://colegio.ejemplo.com" required />
+      <button id="enviar" type="submit">Conectar</button>
+    </form>
+
+    <div id="aviso" class="aviso" role="status" aria-live="polite"></div>
+    <div id="info" class="info"></div>
+  </main>
+  <script src="setup.js"></script>
+</body>
+</html>

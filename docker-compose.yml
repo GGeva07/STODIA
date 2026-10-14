@@ -29,6 +29,9 @@ services:
       TIMEZONE: ${TIMEZONE:-America/Santo_Domingo}
       TZ: ${TIMEZONE:-America/Santo_Domingo}
       LICENSE_KEY: ${LICENSE_KEY:-}
+      # Versión en marcha (la fija actualizar.sh) y canal público de actualizaciones (manifiesto JSON). Nada se instala sin aprobación del Super Admin.
+      STODIA_VERSION: ${STODIA_VERSION:-}
+      STODIA_UPDATE_URL: ${STODIA_UPDATE_URL:-https://stodia.vercel.app/releases/stable.json}
       CORS_ORIGIN: ${CORS_ORIGIN:-https://stodiademo.synsetsolutions.com}
       TRUST_PROXY: ${TRUST_PROXY:-true}
       SMTP_HOST: ${SMTP_HOST:-}

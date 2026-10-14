@@ -1,0 +1,8 @@
+{
+  "version": "0.1.0",
+  "fecha": "2026-10-14",
+  "notas": [
+    "Primera versión con instalación por código de activación y actualizaciones aprobadas desde la app."
+  ],
+  "minClientVersion": "0.1.0"
+}
