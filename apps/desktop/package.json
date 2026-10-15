@@ -3,14 +3,15 @@
   "productName": "STODIA",
   "version": "0.1.0",
   "private": true,
-  "description": "Aplicación de escritorio STODIA: conecta con el servidor del colegio y carga la web.",
+  "description": "Aplicación de escritorio STODIA: lleva la interfaz y se conecta a la API del colegio.",
   "author": "STODIA",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist:win": "electron-builder --win nsis",
-    "dist:linux": "electron-builder --linux AppImage",
-    "dist:dir": "electron-builder --dir"
+    "build:web": "pnpm --filter @stodia/web build",
+    "dist:win": "pnpm run build:web && electron-builder --win nsis",
+    "dist:linux": "pnpm run build:web && electron-builder --linux AppImage",
+    "dist:dir": "pnpm run build:web && electron-builder --dir"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -33,19 +34,29 @@
           "target": "nsis"
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "artifactName": "STODIA-Setup-${version}.${ext}",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "shortcutName": "STODIA"
     },
     "linux": {
       "target": [
         "AppImage"
       ],
-      "icon": "build/icon.png"
-    }
+      "icon": "build/icon.png",
+      "artifactName": "STODIA-${version}.${ext}"
+    },
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web"
+      }
+    ]
   }
 }

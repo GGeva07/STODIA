@@ -10,8 +10,8 @@ function jwtSecret(): string {
   return s || 'dev-only-secret-change-me';
 }
 
-/** Orígenes que usa la app móvil (Capacitor Android/iOS); siempre permitidos si hay lista explícita. */
-const MOBILE_ORIGINS = ['https://localhost', 'capacitor://localhost', 'http://localhost'];
+/** Orígenes que usa la app móvil (Capacitor Android/iOS) y la app de escritorio (Electron, interfaz empaquetada en app://stodia); siempre permitidos. */
+const MOBILE_ORIGINS = ['https://localhost', 'capacitor://localhost', 'http://localhost', 'app://stodia'];
 
 /**
  * CORS: dev = cualquier origen. Producción = solo CORS_ORIGIN (lista separada por comas) + orígenes de la app móvil.
