@@ -100,7 +100,11 @@ export async function seedInstalacion() {
   // Instancia activada desde la PC (POST /instalacion/activar): la clave ya vive en la BD y el .env puede no traerla.
   const clave = env('LICENSE_KEY');
   const ev = clave ? evalKey(clave) : await getEval();
-  if (!ev.payload) throw new Error('LICENSE_KEY inválida o ausente (' + (ev.detalle ?? 'sin clave') + '): pide una clave al proveedor');
+  if (!ev.payload) {
+    // Instancia que YA existe (volumen con datos) pero sin licencia válida: no se tumba la API (reinicio en bucle); el gate responde 402 y la clave se pega en Licenciamiento.
+    if (hayAdmin && !clave) { console.warn('AVISO: esta instancia no tiene licencia válida (' + (ev.detalle ?? 'sin clave') + '). Pega una clave STODIA1.* en Licenciamiento o define LICENSE_KEY.'); await marcarActiva('instalador'); return; }
+    throw new Error('LICENSE_KEY inválida o ausente (' + (ev.detalle ?? 'sin clave') + '): pide una clave al proveedor');
+  }
   if (clave && !(await prisma.sisConfig.findUnique({ where: { clave: 'licenciaClave' } }))) await setClave(clave);
   if (!hayPerfil && !perfil) await prisma.sisConfig.create({ data: { clave: 'perfil', valor: JSON.stringify({ nombre: ev.payload.cliente, rnc: fmtRnc(ev.payload.rnc ?? ''), tel: '', dir: '' } satisfies CfgPerfil) } });
   await marcarActiva('instalador');
