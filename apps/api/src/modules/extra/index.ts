@@ -34,7 +34,7 @@ const plugin: FastifyPluginAsync = async app => {
       : !Number.isFinite(costo) || costo < 0 ? 'Costo inválido.' : !CATS.includes(b.cat) || !['act', 'curso'].includes(b.kind) ? 'Categoría o tipo inválido.' : null;
     if (err) return { err, data: undefined };
     const gradoIds = await gradosDeRango(prisma, b.grados ?? '');
-    if (!gradoIds) return { err: 'Grados inválidos: usa un rango como «4to – 6to» o «1ro – 3ro Sec.».', data: undefined };
+    if (!gradoIds) return { err: 'Grados inválidos: elige un grado o un rango de grados del mismo nivel (por ejemplo «4to – 6to» o «1ro – 3ro Sec.»).', data: undefined };
     const refs = await resolverRefs(prisma, instructor, b.lugar ?? '');
     const curso = b.kind === 'curso';
     return {

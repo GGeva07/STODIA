@@ -49,7 +49,11 @@ export default function CatalogoForm({ k, row, cat, roles, L, onClose, onSave }:
     def.uniq.forEach(combo => {
       if (combo.some(c => e[c] || out[c] === '')) return;
       const dup = cat[k].find(r => r.id !== id && combo.every(c => norm(String(r[c] ?? '')) === norm(String(out[c] ?? ''))));
-      if (dup) e[combo[combo.length - 1]] = 'Ya existe: ' + def.label(dup, L);
+      if (!dup) return;
+      // Grados: el mismo nombre puede repetirse en niveles distintos (1ro Inicial, 1ro Primaria, 1ro Secundaria); solo nivel + grado iguales choca.
+      if (k === 'grados' && combo.length === 2) e.grado = `Este curso ya existe para este nivel (${String(out.nivel)})`;
+      else if (k === 'grados' && combo[0] === 'orden') e.orden = `Ese orden de promoción ya lo usa «${def.label(dup, L)}»: elige otro número`;
+      else e[combo[combo.length - 1]] = 'Ya existe: ' + def.label(dup, L);
     });
     if (k === 'secciones' && !e.cap) {
       const cap = Number(out.cap), aula = cat.aulas.find(a => a.id === out.aula);

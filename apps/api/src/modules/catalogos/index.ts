@@ -93,7 +93,11 @@ const plugin: FastifyPluginAsync = async app => {
     }
     for (const combo of def.uniq) {
       const dup = cat[tipo].find(r => r.id !== id && combo.every(c => norm(r[c]) === norm(v[c])));
-      if (dup) return { err: `Ya existe un registro con ese ${combo[combo.length - 1]}` };
+      if (dup) {
+        if (tipo === 'grados' && combo.length === 2) return { err: `Este curso ya existe para este nivel (${String(v.nivel)})` };
+        if (tipo === 'grados' && combo[0] === 'orden') return { err: `Ese orden de promoción ya lo usa otro grado («${String(dup.nivel)} · ${String(dup.grado)}»): elige otro número` };
+        return { err: `Ya existe un registro con ese ${combo[combo.length - 1]}` };
+      }
     }
     // Docentes y empleados comparten la tabla de usuarios: el usuario debe ser único entre ambos (y entre sus cuentas ya creadas).
     if (def.user) {

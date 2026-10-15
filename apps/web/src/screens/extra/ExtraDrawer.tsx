@@ -1,13 +1,33 @@
 import { SL_MSG, useSoloLectura } from '../../lib/ciclo';
 import { AvisoBorrador, useDraft } from '../../lib/useDraft';
-import { useState } from 'react';
-import type { AcadExtra, AcadExtraInput } from '@stodia/shared';
+import { useEffect, useState } from 'react';
+import type { AcadCatalogos, AcadExtra, AcadExtraInput } from '@stodia/shared';
+import { api } from '../../lib/api';
 import SideDrawer from '../../components/finanzas/SideDrawer';
 import { errMsg, fmt } from '../../components/finanzas/fin';
 
 export const CATS = ['Deportes', 'Danza', 'Arte', 'Música', 'Académico'];
 export type Mode = 'create' | 'view' | 'edit';
 const BLANK: AcadExtra = { id: '', name: '', cat: 'Deportes', kind: 'act', instructor: '', lugar: '', dias: 'Lun y Mié', hora: '3:00 – 4:30 PM', grados: '4to – 6to', cupo: 20, inscritos: 0, costo: 1500, ini: '', sem: 0, estado: 'Abierta' };
+interface GradoCat { nivel: string; grado: string; orden: number }
+/** «4to – 6to» / «1ro – 3ro Sec.» / «Pre-primario» -> nivel + desde + hasta (mismo formato que valida la API: apps/api/src/lib/extras.ts). */
+function leerGrados(txt: string, gs: GradoCat[]): { nivel: string; desde: string; hasta: string } | null {
+  const t = (txt ?? '').trim();
+  // Un solo grado primero: «Pre-primario» tiene guion y se leería como rango «Pre – primario».
+  const base = t.replace(/\s+(sec|ini)\.?$/i, '');
+  const nivSolo = /\s+sec\.?$/i.test(t) ? 'Secundaria' : /\s+ini\.?$/i.test(t) ? 'Inicial' : 'Primaria';
+  const unico = gs.filter(g => g.grado === base);
+  const g1 = unico.find(g => g.nivel === nivSolo) ?? (unico.length === 1 ? unico[0] : undefined);
+  if (g1) return { nivel: g1.nivel, desde: g1.grado, hasta: g1.grado };
+  const m = /^([^\s–-]+)\s*[–-]\s*([^\s–-]+)(\s+(?:sec|ini)\.?)?$/i.exec(t);
+  if (!m) return null;
+  const nivel = m[3] ? (/ini/i.test(m[3]) ? 'Inicial' : 'Secundaria') : 'Primaria';
+  return gs.some(g => g.nivel === nivel && g.grado === m[1]) && gs.some(g => g.nivel === nivel && g.grado === m[2]) ? { nivel, desde: m[1], hasta: m[2] } : null;
+}
+function etiquetaGrados(nivel: string, desde: string, hasta: string): string {
+  if (desde === hasta) return desde + (nivel === 'Secundaria' ? ' Sec.' : '');
+  return desde + ' – ' + hasta + (nivel === 'Secundaria' ? ' Sec.' : nivel === 'Inicial' ? ' Ini.' : '');
+}
 const lbl = 'flex flex-col gap-1 text-xs font-medium text-slate-600';
 const mono = 'font-mono text-right';
 
@@ -28,7 +48,22 @@ export default function ExtraDrawer({ item, mode, onClose, onEdit, onDelete, onS
   const [f, setF, limpiar, meta] = useDraft<AcadExtra>('extra:' + (item?.id ?? 'nueva'), item ?? BLANK, { pausado: mode === 'view' });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  // Grados REALES de la institución (Catálogos › Grados): el selector ya no trae rangos escritos a mano.
+  const [gs, setGs] = useState<GradoCat[]>([]);
+  useEffect(() => {
+    let vivo = true;
+    api.get<AcadCatalogos>('/catalogos').then(cat => {
+      if (vivo) setGs((cat['grados'] ?? []).filter(r => r.estado === 'Activo').map(r => ({ nivel: String(r.nivel), grado: String(r.grado), orden: Number(r.orden) || 0 })).sort((a, b) => a.orden - b.orden));
+    }).catch(() => undefined);
+    return () => { vivo = false; };
+  }, []);
   const ro = mode === 'view', curso = f.kind === 'curso';
+  // Si el valor guardado no corresponde a los grados reales, el selector muestra (y aquí se fija) el primer nivel completo: nada se envía en blanco.
+  useEffect(() => {
+    if (ro || !gs.length || leerGrados(f.grados, gs)) return;
+    const n = gs[0].nivel, l = gs.filter(g => g.nivel === n);
+    setF(x => ({ ...x, grados: etiquetaGrados(n, l[0].grado, l[l.length - 1].grado) }));
+  }, [gs, f.grados, ro]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = <K extends keyof AcadExtra>(k: K, v: AcadExtra[K]) => { setF(x => ({ ...x, [k]: v })); setErr(''); };
   const field = `h-9 w-full rounded-md border px-2.5 text-[13px] text-ink outline-none focus:border-accent disabled:text-ink ${ro ? 'border-slate-200 bg-slate-50' : 'border-slate-300 bg-white'}`;
   const sel = `h-9 w-full rounded-md border px-2 text-[13px] text-ink ${ro ? 'border-slate-200 bg-slate-50' : 'border-slate-300 bg-white'}`;
@@ -62,7 +97,26 @@ export default function ExtraDrawer({ item, mode, onClose, onEdit, onDelete, onS
           <label className={lbl}>Lugar<input value={f.lugar} onChange={e => set('lugar', e.target.value)} disabled={ro} className={field} /></label>
           <label className={lbl}>Días<select value={f.dias} onChange={e => set('dias', e.target.value)} disabled={ro} className={sel}>{['Lun y Mié', 'Mar y Jue', 'Viernes', 'Sábado', 'Lun, Mié y Vie', ...(['Lun y Mié', 'Mar y Jue', 'Viernes', 'Sábado', 'Lun, Mié y Vie'].includes(f.dias) ? [] : [f.dias])].map(d => <option key={d}>{d}</option>)}</select></label>
           <label className={lbl}>Horario<input value={f.hora} onChange={e => set('hora', e.target.value)} disabled={ro} className={field} /></label>
-          <label className={lbl}>Grados<select value={f.grados} onChange={e => set('grados', e.target.value)} disabled={ro} className={sel}>{['1ro – 3ro', '4to – 6to', '1ro – 6to'].map(g => <option key={g}>{g}</option>)}</select></label>
+          {(() => {
+            // Nivel + Desde + Hasta con los grados reales del catálogo. Si el valor guardado no se puede leer (o es de otro catálogo), se
+            // muestra y se guarda el primer rango válido: lo que ves es lo que se envía.
+            const niveles = [...new Set(gs.map(g => g.nivel))];
+            const cur = leerGrados(f.grados, gs) ?? (niveles.length ? { nivel: niveles[0], desde: gs.find(g => g.nivel === niveles[0])!.grado, hasta: [...gs].reverse().find(g => g.nivel === niveles[0])!.grado } : null);
+            if (!cur) return <label className={lbl}>Grados<input value={f.grados} onChange={e => set('grados', e.target.value)} disabled={ro} className={field} placeholder="Cargando grados…" /></label>;
+            const delNivel = gs.filter(g => g.nivel === cur.nivel);
+            const idx = (n: string) => delNivel.findIndex(g => g.grado === n);
+            const aplicar = (nivel: string, desde: string, hasta: string) => set('grados', etiquetaGrados(nivel, desde, hasta));
+            const cambiaNivel = (n: string) => { const l = gs.filter(g => g.nivel === n); aplicar(n, l[0].grado, l[l.length - 1].grado); };
+            const cambiaDesde = (d: string) => aplicar(cur.nivel, d, idx(cur.hasta) < idx(d) ? d : cur.hasta);
+            const cambiaHasta = (h: string) => aplicar(cur.nivel, idx(cur.desde) > idx(h) ? h : cur.desde, h);
+            return (
+              <div className="col-span-2 grid grid-cols-3 gap-2.5">
+                <label className={lbl}>Nivel<select value={cur.nivel} onChange={e => cambiaNivel(e.target.value)} disabled={ro} className={sel}>{niveles.map(n => <option key={n}>{n}</option>)}</select></label>
+                <label className={lbl}>Grado desde<select value={cur.desde} onChange={e => cambiaDesde(e.target.value)} disabled={ro} className={sel}>{delNivel.map(g => <option key={g.grado}>{g.grado}</option>)}</select></label>
+                <label className={lbl}>Grado hasta<select value={cur.hasta} onChange={e => cambiaHasta(e.target.value)} disabled={ro} className={sel}>{delNivel.map(g => <option key={g.grado}>{g.grado}</option>)}</select></label>
+              </div>
+            );
+          })()}
           <label className={lbl}>Cupo máximo *<input value={f.cupo || ''} onChange={e => set('cupo', Number(e.target.value.replace(/\D/g, '')))} disabled={ro} className={`${field} ${mono}`} /></label>
           <label className={lbl}>Costo (RD$)<input value={f.costo || ''} onChange={e => set('costo', Number(e.target.value.replace(/[^\d.]/g, '')) || 0)} disabled={ro} className={`${field} ${mono}`} /></label>
           <label className={lbl}>Estado<select value={f.estado} onChange={e => set('estado', e.target.value as AcadExtra['estado'])} disabled={ro} className={sel}><option>Abierta</option><option>Cupo lleno</option><option>Cerrada</option></select></label>
