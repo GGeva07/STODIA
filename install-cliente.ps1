@@ -285,26 +285,48 @@ $cfg = [ordered]@{ url = $web; configuradoEn = (Get-Date).ToUniversalTime().ToSt
 [System.IO.File]::WriteAllText((Join-Path $cfgDir 'stodia.json'), (($cfg | ConvertTo-Json) + "`n"), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "Configuración guardada en: $cfgDir\stodia.json" -ForegroundColor Green
 
-# ---- 5. Instalar la app de escritorio si el instalador está junto a este script
-$setup = Get-ChildItem -Path $PSScriptRoot -Filter 'STODIA-Setup-*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $setup) {
-    Write-Host ''
-    Write-Host "No se encontró STODIA-Setup-*.exe junto a este script."
-    Write-Host "Copia el instalador de STODIA a: $PSScriptRoot"
-    Write-Host 'y vuelve a ejecutar este script para instalarla (la configuración ya quedó guardada).'
-} else {
-    $instalar = if ($Config) { $true } else { Get-YesNo "¿Instalar STODIA ($($setup.Name)) y crear acceso directo? (s/n)" }
-    if ($instalar) {
-        # NSIS: instalación por usuario (sin admin); crea acceso directo en el escritorio.
-        # En modo desatendido se usa /S (silencioso).
-        $args = if ($Config) { @('/S') } else { @() }
-        Write-Host 'Ejecutando el instalador de STODIA...'
-        $p = Start-Process -FilePath $setup.FullName -ArgumentList $args -Wait -PassThru
-        if ($p.ExitCode -eq 0) { Write-Host 'STODIA instalado. Usa el acceso directo del escritorio.' -ForegroundColor Green }
-        else { Write-Host "El instalador terminó con código $($p.ExitCode)." -ForegroundColor Yellow }
-    } else {
-        Write-Host 'Instalación de la app omitida. Ejecuta de nuevo el instalador para instalarla.'
+# ---- 5. Instalar la app de escritorio (portátil): se descarga del Release de GitHub, o se usa el .zip que esté junto a este script
+$appUrl  = if ($env:STODIA_APP_URL) { $env:STODIA_APP_URL } else { 'https://github.com/GGeva07/STODIA/releases/download/desktop-v0.1.0/STODIA-Windows-portable-0.1.0.zip' }
+$appDir  = Join-Path $env:LOCALAPPDATA 'STODIA'
+$appExe  = Join-Path $appDir 'stodia.exe'
+$zipLocal = Get-ChildItem -Path $PSScriptRoot -Filter 'STODIA-Windows-portable-*.zip' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+$instalar = $true
+if (-not $Config) { $instalar = Get-YesNo "¿Descargar e instalar la aplicación STODIA en esta PC (con acceso directo en el escritorio)? (s/n)" }
+if ($instalar) {
+    $tmp = Join-Path $env:TEMP ('stodia-app-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    try {
+        $zip = Join-Path $tmp 'app.zip'
+        if ($zipLocal) { Write-Host "Usando $($zipLocal.Name) (junto al script)..."; Copy-Item -LiteralPath $zipLocal.FullName -Destination $zip }
+        else {
+            Write-Host 'Descargando la aplicación STODIA (unos 120 MB)...'
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $oldPp = $ProgressPreference; $ProgressPreference = 'SilentlyContinue' # la barra de PowerShell 5.1 hace la descarga mucho más lenta
+            try { Invoke-WebRequest -Uri $appUrl -OutFile $zip -UseBasicParsing } finally { $ProgressPreference = $oldPp }
+        }
+        if ((Get-Item $zip).Length -lt 50MB) { throw 'La descarga está incompleta o dañada.' }
+        Write-Host 'Instalando...'
+        Get-Process -Name stodia -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        if (Test-Path $appDir) { Remove-Item -Recurse -Force $appDir }
+        Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
+        $origen = Join-Path $tmp 'STODIA'
+        if (-not (Test-Path (Join-Path $origen 'stodia.exe'))) { throw 'El paquete no contiene stodia.exe.' }
+        Move-Item -LiteralPath $origen -Destination $appDir
+        # Acceso directo en el escritorio y en el menú Inicio
+        $ws = New-Object -ComObject WScript.Shell
+        foreach ($dir in @([Environment]::GetFolderPath('Desktop'), (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'))) {
+            $lnk = $ws.CreateShortcut((Join-Path $dir 'STODIA.lnk'))
+            $lnk.TargetPath = $appExe; $lnk.WorkingDirectory = $appDir; $lnk.Description = 'STODIA'; $lnk.Save()
+        }
+        Write-Host "STODIA instalada en $appDir. Usa el acceso directo del escritorio." -ForegroundColor Green
+    } catch {
+        Write-Host "No se pudo instalar la aplicación: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "La configuración ya quedó guardada. Descarga el .zip de $appUrl y vuelve a ejecutar este script." -ForegroundColor Yellow
+    } finally {
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
     }
+} else {
+    Write-Host 'Instalación de la app omitida. Ejecuta de nuevo el instalador para instalarla.'
 }
 
 Write-Host ''
