@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.stodia.app',
+  appId: 'com.synsetsolutions.stodia',
   appName: 'STODIA',
   webDir: 'dist',
   server: {

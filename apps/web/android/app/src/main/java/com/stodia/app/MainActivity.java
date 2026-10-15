@@ -1,4 +1,4 @@
-package com.stodia.app;
+package com.synsetsolutions.stodia;
 
 import com.getcapacitor.BridgeActivity;
 
